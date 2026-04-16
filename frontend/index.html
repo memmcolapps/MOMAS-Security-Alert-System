@@ -1,0 +1,1365 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MOMAS Security Alert System</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+    <style>
+      *,
+      *::before,
+      *::after {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: #0a0a0a;
+        color: #e0e0e0;
+        overflow: hidden;
+      }
+      #map {
+        width: 100vw;
+        height: 100vh;
+      }
+
+      :root {
+        --red: #ff1a1a;
+        --orange: #ff6600;
+        --yellow: #ffcc00;
+        --blue: #3399ff;
+        --glass: rgba(0, 0, 0, 0.88);
+        --border: rgba(255, 68, 68, 0.4);
+      }
+
+      /* ── Header ── */
+      .header {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        z-index: 1000;
+        background: var(--glass);
+        padding: 14px 20px;
+        border-radius: 8px;
+        max-width: 380px;
+        backdrop-filter: blur(12px);
+        border: 1px solid var(--border);
+      }
+      .header h1 {
+        font-size: 18px;
+        color: #ff4444;
+        font-weight: 700;
+        margin-bottom: 3px;
+      }
+      .header p {
+        font-size: 11px;
+        color: #888;
+        line-height: 1.4;
+      }
+      .live-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        background: rgba(255, 26, 26, 0.15);
+        border: 1px solid var(--red);
+        color: var(--red);
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        padding: 2px 7px;
+        border-radius: 3px;
+        margin-top: 6px;
+      }
+      .live-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--red);
+        animation: pulse-dot 1.5s infinite;
+      }
+      @keyframes pulse-dot {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.2;
+        }
+      }
+
+      /* ── Legend ── */
+      .legend {
+        position: absolute;
+        top: 20px;
+        right: 400px;
+        z-index: 1000;
+        background: var(--glass);
+        padding: 13px;
+        border-radius: 8px;
+        backdrop-filter: blur(12px);
+        border: 1px solid var(--border);
+        max-width: 200px;
+        transition: right 0.3s;
+      }
+      .legend.panel-closed {
+        right: 20px;
+      }
+      .legend h3 {
+        font-size: 12px;
+        color: #ff4444;
+        margin-bottom: 8px;
+      }
+      .legend-section {
+        margin: 7px 0;
+      }
+      .legend-section-title {
+        font-size: 9px;
+        color: #666;
+        text-transform: uppercase;
+        margin-bottom: 4px;
+        letter-spacing: 0.5px;
+      }
+      .legend-item {
+        display: flex;
+        align-items: center;
+        margin: 4px 0;
+        font-size: 10px;
+        color: #aaa;
+      }
+      .legend-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        margin-right: 8px;
+        flex-shrink: 0;
+      }
+      .legend-icon-sm {
+        width: 16px;
+        margin-right: 8px;
+        text-align: center;
+        font-size: 11px;
+      }
+      .sev-pill {
+        display: inline-block;
+        padding: 1px 5px;
+        border-radius: 3px;
+        font-size: 9px;
+        font-weight: 700;
+        margin-right: 5px;
+      }
+      .sev-RED {
+        background: var(--red);
+        color: #fff;
+      }
+      .sev-ORANGE {
+        background: var(--orange);
+        color: #fff;
+      }
+      .sev-YELLOW {
+        background: var(--yellow);
+        color: #000;
+      }
+      .sev-BLUE {
+        background: var(--blue);
+        color: #fff;
+      }
+
+      /* ── Alerts panel ── */
+      .alerts-panel {
+        position: absolute;
+        right: 0;
+        top: 0;
+        height: 100vh;
+        width: 380px;
+        background: var(--glass);
+        border-left: 1px solid var(--border);
+        z-index: 1000;
+        backdrop-filter: blur(12px);
+        display: flex;
+        flex-direction: column;
+        transform: translateX(0);
+        transition: transform 0.3s ease;
+      }
+      .alerts-panel.collapsed {
+        transform: translateX(100%);
+      }
+
+      .panel-header {
+        padding: 12px 14px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        flex-shrink: 0;
+      }
+      .panel-header-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 8px;
+      }
+      .panel-title {
+        font-size: 12px;
+        font-weight: 700;
+        color: #ff4444;
+      }
+      .panel-close {
+        background: none;
+        border: none;
+        color: #666;
+        cursor: pointer;
+        font-size: 15px;
+        padding: 2px 5px;
+        border-radius: 3px;
+        transition: color 0.2s;
+      }
+      .panel-close:hover {
+        color: #fff;
+      }
+
+      .panel-filters {
+        display: flex;
+        gap: 5px;
+        flex-wrap: wrap;
+      }
+      .filter-select {
+        flex: 1;
+        min-width: 85px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: #e0e0e0;
+        font-size: 10px;
+        padding: 5px 7px;
+        border-radius: 4px;
+        appearance: none;
+        cursor: pointer;
+      }
+      .filter-select:focus {
+        outline: none;
+        border-color: #ff4444;
+      }
+
+      .panel-meta {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 7px;
+      }
+      .panel-count {
+        font-size: 10px;
+        color: #777;
+      }
+      .last-updated {
+        font-size: 9px;
+        color: #444;
+      }
+
+      /* ── Alert list ── */
+      .alerts-list {
+        flex: 1;
+        overflow-y: auto;
+      }
+      .alerts-list::-webkit-scrollbar {
+        width: 3px;
+      }
+      .alerts-list::-webkit-scrollbar-thumb {
+        background: rgba(255, 68, 68, 0.3);
+        border-radius: 2px;
+      }
+
+      .alert-item {
+        padding: 10px 14px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .alert-item:hover {
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .alert-item.no-geo {
+        cursor: default;
+      }
+
+      .alert-row1 {
+        display: flex;
+        align-items: flex-start;
+        gap: 7px;
+        margin-bottom: 3px;
+      }
+      .alert-icon {
+        font-size: 12px;
+        flex-shrink: 0;
+        margin-top: 1px;
+      }
+      .alert-title {
+        font-size: 11px;
+        font-weight: 600;
+        color: #ddd;
+        flex: 1;
+        line-height: 1.4;
+      }
+      .alert-row2 {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        flex-wrap: wrap;
+      }
+      .alert-location {
+        font-size: 10px;
+        color: #777;
+      }
+      .alert-date {
+        font-size: 10px;
+        color: #444;
+        margin-left: auto;
+      }
+      .alert-desc {
+        font-size: 10px;
+        color: #555;
+        margin-top: 3px;
+        line-height: 1.4;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .alert-stats {
+        display: flex;
+        gap: 8px;
+        margin-top: 4px;
+      }
+      .alert-stat {
+        font-size: 9px;
+        color: #777;
+      }
+      .alert-stat span {
+        color: #bbb;
+        font-weight: 600;
+      }
+      .source-badge {
+        font-size: 8px;
+        color: #444;
+        background: rgba(255, 255, 255, 0.04);
+        border-radius: 2px;
+        padding: 1px 3px;
+      }
+      .verified-badge {
+        font-size: 8px;
+        color: #00cc66;
+        background: rgba(0, 204, 102, 0.08);
+        border-radius: 2px;
+        padding: 1px 3px;
+      }
+
+      .empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 220px;
+        color: #444;
+        font-size: 12px;
+        gap: 8px;
+        text-align: center;
+        padding: 0 24px;
+      }
+      .empty-state i {
+        font-size: 26px;
+        margin-bottom: 4px;
+      }
+      .empty-state a {
+        color: #ff4444;
+        cursor: pointer;
+        text-decoration: underline;
+        font-size: 11px;
+      }
+      .loading-spinner {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100px;
+        gap: 8px;
+        color: #555;
+        font-size: 11px;
+      }
+      .spinner {
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(255, 68, 68, 0.15);
+        border-top-color: #ff4444;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .panel-footer {
+        padding: 8px 14px;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        flex-shrink: 0;
+      }
+      .scrape-btn {
+        width: 100%;
+        background: rgba(255, 68, 68, 0.1);
+        border: 1px solid rgba(255, 68, 68, 0.35);
+        color: #ff4444;
+        padding: 7px;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 10px;
+        font-weight: 600;
+        transition: all 0.2s;
+      }
+      .scrape-btn:hover {
+        background: rgba(255, 68, 68, 0.25);
+      }
+      .scrape-btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+
+      /* ── Panel toggle ── */
+      .panel-toggle {
+        position: absolute;
+        right: 380px;
+        top: 50%;
+        transform: translateY(-50%);
+        z-index: 1001;
+        background: var(--glass);
+        border: 1px solid var(--border);
+        color: #ff4444;
+        width: 26px;
+        height: 50px;
+        border-radius: 6px 0 0 6px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition:
+          right 0.3s,
+          background 0.2s;
+        font-size: 11px;
+      }
+      .panel-toggle:hover {
+        background: rgba(255, 68, 68, 0.2);
+      }
+      .panel-toggle.closed {
+        right: 0;
+      }
+
+      /* ── Stats + Timeline bar ── */
+      .stats-bar {
+        position: absolute;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(calc(-50% - 190px));
+        z-index: 1000;
+        background: var(--glass);
+        padding: 12px 20px 10px;
+        border-radius: 10px;
+        min-width: 700px;
+        backdrop-filter: blur(12px);
+        border: 1px solid var(--border);
+        transition: transform 0.3s;
+      }
+      .stats-bar.panel-closed {
+        transform: translateX(-50%);
+      }
+
+      .stats-top {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        margin-bottom: 8px;
+      }
+      .stats-title {
+        font-size: 13px;
+        font-weight: 700;
+        color: #ff4444;
+      }
+      .stats-date-range {
+        font-size: 10px;
+        color: #555;
+      }
+
+      .stats-grid {
+        display: flex;
+        justify-content: space-around;
+        padding-bottom: 10px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      }
+      .stat {
+        text-align: center;
+      }
+      .stat-value {
+        font-size: 20px;
+        font-weight: 700;
+        color: #ff4444;
+      }
+      .stat-label {
+        font-size: 9px;
+        color: #777;
+        margin-top: 2px;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+      }
+
+      /* ── Timeline ── */
+      .timeline {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        flex-wrap: wrap;
+      }
+      .timeline-label {
+        font-size: 9px;
+        color: #555;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        flex-shrink: 0;
+      }
+
+      .year-btns {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+      }
+      .year-btn {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: #888;
+        padding: 3px 8px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 10px;
+        font-weight: 600;
+        transition: all 0.2s;
+      }
+      .year-btn:hover {
+        border-color: #ff4444;
+        color: #ff4444;
+      }
+      .year-btn.active {
+        background: #ff4444;
+        border-color: #ff4444;
+        color: #000;
+      }
+
+      .date-sep {
+        color: #444;
+        font-size: 11px;
+      }
+      .date-input {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: #ccc;
+        padding: 3px 7px;
+        border-radius: 4px;
+        font-size: 10px;
+        cursor: pointer;
+        transition: border-color 0.2s;
+      }
+      .date-input:focus {
+        outline: none;
+        border-color: #ff4444;
+      }
+      .date-input::-webkit-calendar-picker-indicator {
+        filter: invert(0.5);
+        cursor: pointer;
+      }
+
+      /* ── Layer controls ── */
+      .layer-controls {
+        display: flex;
+        justify-content: center;
+        gap: 6px;
+        margin-top: 8px;
+      }
+      .toggle-btn {
+        background: rgba(255, 68, 68, 0.12);
+        border: 1px solid #ff4444;
+        color: #ff4444;
+        padding: 4px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 9px;
+        font-weight: 600;
+        letter-spacing: 0.3px;
+        transition: all 0.2s;
+      }
+      .toggle-btn:hover {
+        background: rgba(255, 68, 68, 0.25);
+      }
+      .toggle-btn.active {
+        background: #ff4444;
+        color: #000;
+      }
+
+      /* ── Popups ── */
+      .leaflet-popup-content-wrapper {
+        background: rgba(0, 0, 0, 0.95);
+        color: #e0e0e0;
+        border: 1px solid rgba(255, 68, 68, 0.5);
+        border-radius: 8px;
+      }
+      .leaflet-popup-content {
+        margin: 13px;
+        font-size: 12px;
+        line-height: 1.6;
+        max-width: 290px;
+      }
+      .leaflet-popup-tip {
+        background: rgba(0, 0, 0, 0.95);
+      }
+      .popup-title {
+        font-size: 13px;
+        font-weight: 700;
+        color: #ff4444;
+        margin-bottom: 5px;
+      }
+      .popup-detail {
+        margin: 3px 0;
+        color: #ccc;
+        font-size: 11px;
+      }
+      .popup-detail strong {
+        color: #fff;
+      }
+      .popup-foot {
+        margin-top: 7px;
+        padding-top: 7px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      /* ── Live pulsing markers ── */
+      .live-marker {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        position: relative;
+      }
+      .live-marker::before {
+        content: "";
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        animation: ripple 2s ease-out infinite;
+      }
+      .live-marker.sev-RED {
+        background: var(--red);
+      }
+      .live-marker.sev-RED::before {
+        background: var(--red);
+      }
+      .live-marker.sev-ORANGE {
+        background: var(--orange);
+      }
+      .live-marker.sev-ORANGE::before {
+        background: var(--orange);
+      }
+      .live-marker.sev-YELLOW {
+        background: var(--yellow);
+      }
+      .live-marker.sev-YELLOW::before {
+        background: var(--yellow);
+      }
+      .live-marker.sev-BLUE {
+        background: var(--blue);
+      }
+      .live-marker.sev-BLUE::before {
+        background: var(--blue);
+      }
+      @keyframes ripple {
+        0% {
+          transform: scale(1);
+          opacity: 0.7;
+        }
+        100% {
+          transform: scale(3.5);
+          opacity: 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- ── Header ── -->
+    <div class="header">
+      <h1>MOMAS Security Alert System</h1>
+      <p>Live intelligence feed — RSS sources, HAPI conflict data &amp; ReliefWeb reports</p>
+      <div class="live-badge">
+        <div class="live-dot"></div>
+        LIVE MONITORING
+      </div>
+    </div>
+
+    <!-- ── Legend ── -->
+    <div class="legend" id="legend">
+      <h3>Alert Key</h3>
+      <div class="legend-section">
+        <div class="legend-section-title">Severity</div>
+        <div class="legend-item">
+          <div class="legend-dot" style="background: var(--red)"></div>
+          <span class="sev-pill sev-RED">RED</span> Critical (30+ killed)
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot" style="background: var(--orange)"></div>
+          <span class="sev-pill sev-ORANGE">ORANGE</span> Serious (10–29)
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot" style="background: var(--yellow)"></div>
+          <span class="sev-pill sev-YELLOW">YELLOW</span> Moderate (1–9)
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot" style="background: var(--blue)"></div>
+          <span class="sev-pill sev-BLUE">BLUE</span> Low / Unconfirmed
+        </div>
+      </div>
+      <div class="legend-section">
+        <div class="legend-section-title">Incident type</div>
+        <div class="legend-item">
+          <i class="fas fa-bomb legend-icon-sm" style="color: #ff4444"></i
+          >Bombing / IED
+        </div>
+        <div class="legend-item">
+          <i
+            class="fas fa-user-secret legend-icon-sm"
+            style="color: #ff6600"
+          ></i
+          >Kidnapping
+        </div>
+        <div class="legend-item">
+          <i class="fas fa-skull legend-icon-sm" style="color: #cc0000"></i
+          >Massacre
+        </div>
+        <div class="legend-item">
+          <i class="fas fa-horse legend-icon-sm" style="color: #ffaa00"></i
+          >Banditry / Raid
+        </div>
+        <div class="legend-item">
+          <i class="fas fa-biohazard legend-icon-sm" style="color: #ff0066"></i
+          >Terrorism
+        </div>
+        <div class="legend-item">
+          <i class="fas fa-gun legend-icon-sm" style="color: #aaa"></i>Armed
+          Attack
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Map ── -->
+    <div id="map"></div>
+
+    <!-- ── Alerts panel ── -->
+    <div class="alerts-panel" id="alertsPanel">
+      <div class="panel-header">
+        <div class="panel-header-row">
+          <div class="panel-title">
+            <i class="fas fa-satellite-dish"></i> &nbsp;Live Intelligence Feed
+          </div>
+          <button class="panel-close" id="panelCloseBtn">&#10005;</button>
+        </div>
+        <div class="panel-filters">
+          <select class="filter-select" id="filterSeverity">
+            <option value="">All Severities</option>
+            <option value="RED">🔴 RED — Critical</option>
+            <option value="ORANGE">🟠 ORANGE — Serious</option>
+            <option value="YELLOW">🟡 YELLOW — Moderate</option>
+            <option value="BLUE">🔵 BLUE — Low</option>
+          </select>
+          <select class="filter-select" id="filterType">
+            <option value="">All Types</option>
+            <option value="bombing">Bombing / IED</option>
+            <option value="kidnapping">Kidnapping</option>
+            <option value="massacre">Massacre</option>
+            <option value="banditry">Banditry / Raid</option>
+            <option value="herder_clash">Herder–Farmer</option>
+            <option value="terrorism">Terrorism</option>
+            <option value="armed_attack">Armed Attack</option>
+            <option value="cult_violence">Cult Violence</option>
+            <option value="displacement">Displacement</option>
+          </select>
+          <select class="filter-select" id="filterState">
+            <option value="">All States</option>
+          </select>
+        </div>
+        <div class="panel-meta">
+          <span class="panel-count" id="panelCount">— incidents</span>
+          <span class="last-updated" id="lastUpdated"></span>
+        </div>
+      </div>
+
+      <div class="alerts-list" id="alertsList">
+        <div class="loading-spinner">
+          <div class="spinner"></div>
+          Loading…
+        </div>
+      </div>
+
+      <div class="panel-footer">
+        <button class="scrape-btn" id="scrapeBtn">
+          <i class="fas fa-sync-alt"></i> &nbsp;Trigger Manual Scrape
+        </button>
+      </div>
+    </div>
+
+    <!-- ── Panel toggle ── -->
+    <button class="panel-toggle" id="panelToggle">
+      <i class="fas fa-chevron-right" id="toggleIcon"></i>
+    </button>
+
+    <!-- ── Stats + Timeline bar ── -->
+    <div class="stats-bar" id="statsBar">
+      <div class="stats-top">
+        <span class="stats-title">🇳🇬 MOMAS Security Alert System</span>
+        <span class="stats-date-range" id="statsDateRange"></span>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat">
+          <div class="stat-value" style="color: var(--red)" id="stat-red">
+            —
+          </div>
+          <div class="stat-label">Critical Alerts</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="stat-live">—</div>
+          <div class="stat-label">Total Incidents</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="stat-states">—</div>
+          <div class="stat-label">States Affected</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="stat-killed">—</div>
+          <div class="stat-label">Confirmed Killed</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="stat-abducted">—</div>
+          <div class="stat-label">Abducted</div>
+        </div>
+      </div>
+
+      <div class="timeline">
+        <span class="timeline-label">Period</span>
+        <div class="year-btns" id="yearBtns">
+          <button class="year-btn" data-from="2020-01-01" data-to="2020-12-31">
+            2020
+          </button>
+          <button class="year-btn" data-from="2021-01-01" data-to="2021-12-31">
+            2021
+          </button>
+          <button class="year-btn" data-from="2022-01-01" data-to="2022-12-31">
+            2022
+          </button>
+          <button class="year-btn" data-from="2023-01-01" data-to="2023-12-31">
+            2023
+          </button>
+          <button class="year-btn" data-from="2024-01-01" data-to="2024-12-31">
+            2024
+          </button>
+          <button class="year-btn" data-from="2025-01-01" data-to="2025-12-31">
+            2025
+          </button>
+          <button class="year-btn" data-from="2026-01-01" data-to="2026-12-31">
+            2026
+          </button>
+          <button class="year-btn active" id="btnToday" data-mode="today">
+            Today
+          </button>
+          <button class="year-btn" id="btnAll" data-mode="all">All Time</button>
+        </div>
+        <span class="date-sep">|</span>
+        <input type="date" class="date-input" id="fromDate" title="From date" />
+        <span class="date-sep">→</span>
+        <input type="date" class="date-input" id="toDate" title="To date" />
+      </div>
+
+      <div class="layer-controls">
+        <button class="toggle-btn active" data-layer="live">Live Alerts</button>
+        <button class="toggle-btn active" data-layer="threat">
+          Threat Zones
+        </button>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+      // ════════════════════════════════════════════════════════════════════════════
+      // CONFIG
+      // ════════════════════════════════════════════════════════════════════════════
+      const API_BASE = "http://localhost:5050";
+      const REFRESH_MS = 5 * 60 * 1000;
+      const MAX_MARKERS = 500;
+
+      // ════════════════════════════════════════════════════════════════════════════
+      // MAP
+      // ════════════════════════════════════════════════════════════════════════════
+      const map = L.map("map", {
+        zoomControl: false,
+        attributionControl: false,
+      }).setView([9.5, 8.0], 6);
+      L.tileLayer(
+        "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+        { maxZoom: 19 },
+      ).addTo(map);
+      L.control.zoom({ position: "topleft" }).addTo(map);
+
+      const liveLayer = L.layerGroup().addTo(map);
+      const threatLayer = L.layerGroup().addTo(map);
+
+      const layerMap = { live: liveLayer, threat: threatLayer };
+
+      // ════════════════════════════════════════════════════════════════════════════
+      // DATE RANGE STATE — default: today only
+      // ════════════════════════════════════════════════════════════════════════════
+      const todayStr = new Date().toISOString().slice(0, 10);
+
+      let dateFrom = todayStr;
+      let dateTo = todayStr;
+
+      const fromInput = document.getElementById("fromDate");
+      const toInput = document.getElementById("toDate");
+      fromInput.value = todayStr;
+      toInput.value = todayStr;
+      fromInput.max = todayStr;
+      toInput.max = todayStr;
+
+      function updateDateLabel() {
+        const el = document.getElementById("statsDateRange");
+        if (dateFrom === dateTo) {
+          el.textContent = dateFrom === todayStr ? "Today" : dateFrom;
+        } else if (!dateFrom && !dateTo) {
+          el.textContent = "All time";
+        } else {
+          el.textContent = `${dateFrom || "…"} → ${dateTo || "…"}`;
+        }
+      }
+      updateDateLabel();
+
+      // Year / period buttons
+      document.getElementById("yearBtns").addEventListener("click", (e) => {
+        const btn = e.target.closest(".year-btn");
+        if (!btn) return;
+
+        document
+          .querySelectorAll(".year-btn")
+          .forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+
+        const mode = btn.dataset.mode;
+        if (mode === "today") {
+          dateFrom = todayStr;
+          dateTo = todayStr;
+          fromInput.value = todayStr;
+          toInput.value = todayStr;
+        } else if (mode === "all") {
+          dateFrom = "";
+          dateTo = "";
+          fromInput.value = "";
+          toInput.value = "";
+        } else {
+          dateFrom = btn.dataset.from;
+          dateTo = btn.dataset.to;
+          fromInput.value = dateFrom;
+          toInput.value = dateTo;
+        }
+        updateDateLabel();
+        fetchIncidents();
+      });
+
+      // Manual date pickers — deactivate year buttons
+      function onDateChange() {
+        const f = fromInput.value;
+        const t = toInput.value;
+        if (!f && !t) return;
+        dateFrom = f || "";
+        dateTo = t || "";
+        // Deselect year buttons
+        document
+          .querySelectorAll(".year-btn")
+          .forEach((b) => b.classList.remove("active"));
+        updateDateLabel();
+        fetchIncidents();
+      }
+      fromInput.addEventListener("change", onDateChange);
+      toInput.addEventListener("change", onDateChange);
+
+      // ════════════════════════════════════════════════════════════════════════════
+      // MARKERS
+      // ════════════════════════════════════════════════════════════════════════════
+      const SEV_COLORS = {
+        RED: "#ff1a1a",
+        ORANGE: "#ff6600",
+        YELLOW: "#ffcc00",
+        BLUE: "#3399ff",
+      };
+      const TYPE_ICONS = {
+        bombing: "fa-bomb",
+        kidnapping: "fa-user-secret",
+        massacre: "fa-skull",
+        banditry: "fa-horse",
+        herder_clash: "fa-cow",
+        terrorism: "fa-biohazard",
+        armed_attack: "fa-gun",
+        cult_violence: "fa-mask",
+        displacement: "fa-person-walking-arrow-right",
+      };
+
+      function makeLiveMarker(inc) {
+        if (!inc.lat || !inc.lon) return null;
+        const color = SEV_COLORS[inc.severity] || SEV_COLORS.BLUE;
+        const icon = L.divIcon({
+          className: "",
+          html: `<div class="live-marker sev-${inc.severity}"></div>`,
+          iconSize: [12, 12],
+          iconAnchor: [6, 6],
+        });
+        const m = L.marker([inc.lat, inc.lon], { icon });
+
+        const killed =
+          inc.fatalities > 0
+            ? `<div class="popup-detail"><strong>Killed:</strong> ${inc.fatalities}</div>`
+            : "";
+        const abducted =
+          inc.victims > 0
+            ? `<div class="popup-detail"><strong>Abducted:</strong> ${inc.victims}</div>`
+            : "";
+        const srcLink = inc.source_url
+          ? `<a href="${inc.source_url}" target="_blank" style="color:#ff8844;font-size:10px;">View source ↗</a>`
+          : "";
+
+        m.bindPopup(`
+    <div class="popup-title" style="color:${color}">${inc.title}</div>
+    <div class="popup-detail"><strong>Date:</strong> ${inc.date}</div>
+    <div class="popup-detail"><strong>Location:</strong> ${[inc.location, inc.state].filter(Boolean).join(", ") || "Nigeria"}</div>
+    <div class="popup-detail"><strong>Type:</strong> ${(inc.type || "").replace(/_/g, " ")}</div>
+    ${killed}${abducted}
+    <div class="popup-foot">
+      <span class="sev-pill sev-${inc.severity}">${inc.severity}</span>
+      &nbsp;<span style="font-size:10px;color:#666">${inc.source || ""}</span>
+      ${inc.verified ? '<span class="verified-badge" style="margin-left:4px">ACLED</span>' : ""}
+      ${inc.description ? `<div style="margin-top:5px;font-size:10px;color:#888">${inc.description.slice(0, 180)}${inc.description.length > 180 ? "…" : ""}</div>` : ""}
+      ${srcLink ? `<div style="margin-top:5px">${srcLink}</div>` : ""}
+    </div>
+  `);
+        return m;
+      }
+
+      function renderIncidents(incidents) {
+        liveLayer.clearLayers();
+        threatLayer.clearLayers();
+        let n = 0;
+        for (const inc of incidents) {
+          if (n >= MAX_MARKERS) break;
+          const m = makeLiveMarker(inc);
+          if (!m) continue;
+          m.addTo(liveLayer);
+          // Threat zone circle
+          L.circle([inc.lat, inc.lon], {
+            radius: 20000,
+            fillColor: SEV_COLORS[inc.severity] || "#aaa",
+            color: SEV_COLORS[inc.severity] || "#aaa",
+            weight: 1,
+            opacity: 0.12,
+            fillOpacity: 0.04,
+          }).addTo(threatLayer);
+          n++;
+        }
+      }
+
+      // ════════════════════════════════════════════════════════════════════════════
+      // ALERTS PANEL
+      // ════════════════════════════════════════════════════════════════════════════
+      const NIGERIAN_STATES = [
+        "Abia",
+        "Adamawa",
+        "Akwa Ibom",
+        "Anambra",
+        "Bauchi",
+        "Bayelsa",
+        "Benue",
+        "Borno",
+        "Cross River",
+        "Delta",
+        "Ebonyi",
+        "Edo",
+        "Ekiti",
+        "Enugu",
+        "FCT",
+        "Gombe",
+        "Imo",
+        "Jigawa",
+        "Kaduna",
+        "Kano",
+        "Katsina",
+        "Kebbi",
+        "Kogi",
+        "Kwara",
+        "Lagos",
+        "Nasarawa",
+        "Niger",
+        "Ogun",
+        "Ondo",
+        "Osun",
+        "Oyo",
+        "Plateau",
+        "Rivers",
+        "Sokoto",
+        "Taraba",
+        "Yobe",
+        "Zamfara",
+      ];
+      const filterState = document.getElementById("filterState");
+      NIGERIAN_STATES.forEach((s) => {
+        const o = document.createElement("option");
+        o.value = s;
+        o.textContent = s;
+        filterState.appendChild(o);
+      });
+
+      let allIncidents = [];
+
+      function relDate(d) {
+        const diff = Math.floor((Date.now() - new Date(d)) / 86400000);
+        if (diff === 0) return "Today";
+        if (diff === 1) return "Yesterday";
+        if (diff < 7) return `${diff}d ago`;
+        if (diff < 30) return `${Math.floor(diff / 7)}w ago`;
+        return new Date(d).toLocaleDateString("en-GB", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        });
+      }
+
+      function renderAlertItem(inc) {
+        const c = SEV_COLORS[inc.severity] || "#aaa";
+        const icon = TYPE_ICONS[inc.type] || "fa-circle-exclamation";
+        const hasGeo = inc.lat && inc.lon;
+        const stats = [];
+        if (inc.fatalities > 0)
+          stats.push(
+            `<div class="alert-stat">Killed: <span>${inc.fatalities}</span></div>`,
+          );
+        if (inc.victims > 0)
+          stats.push(
+            `<div class="alert-stat">Abducted: <span>${inc.victims}</span></div>`,
+          );
+
+        return `<div class="alert-item${hasGeo ? "" : " no-geo"}" data-lat="${inc.lat || ""}" data-lon="${inc.lon || ""}" title="${hasGeo ? "Click to locate on map" : ""}">
+    <div class="alert-row1">
+      <i class="fas ${icon} alert-icon" style="color:${c}"></i>
+      <div class="alert-title">${inc.title}</div>
+      <span class="sev-pill sev-${inc.severity}">${inc.severity}</span>
+    </div>
+    <div class="alert-row2">
+      <span class="alert-location">${[inc.location, inc.state].filter(Boolean).join(", ") || "Nigeria"}</span>
+      <span class="alert-date">${relDate(inc.date)}</span>
+    </div>
+    ${inc.description ? `<div class="alert-desc">${inc.description}</div>` : ""}
+    ${stats.length ? `<div class="alert-stats">${stats.join("")}</div>` : ""}
+    <div class="alert-row2" style="margin-top:3px">
+      <span class="source-badge">${inc.source || "unknown"}</span>
+      ${inc.verified ? '<span class="verified-badge">ACLED</span>' : ""}
+      ${inc.source_url ? `<a href="${inc.source_url}" target="_blank" style="color:#444;font-size:9px;margin-left:auto">source ↗</a>` : ""}
+    </div>
+  </div>`;
+      }
+
+      function applyPanelFilters() {
+        const sev = document.getElementById("filterSeverity").value;
+        const type = document.getElementById("filterType").value;
+        const state = document.getElementById("filterState").value;
+
+        const filtered = allIncidents.filter(
+          (i) =>
+            (!sev || i.severity === sev) &&
+            (!type || i.type === type) &&
+            (!state || i.state === state),
+        );
+
+        const list = document.getElementById("alertsList");
+        document.getElementById("panelCount").textContent =
+          `${filtered.length} incident${filtered.length !== 1 ? "s" : ""}`;
+
+        if (filtered.length === 0) {
+          const isToday = dateFrom === todayStr && dateTo === todayStr;
+          list.innerHTML = `<div class="empty-state">
+      <i class="fas fa-satellite-dish"></i>
+      <span>${isToday ? "No incidents found for today" : "No incidents match your filters"}</span>
+      ${isToday ? "<a onclick=\"document.getElementById('btnAll').click()\">Try All Time instead</a>" : ""}
+    </div>`;
+          return;
+        }
+
+        list.innerHTML = filtered.map(renderAlertItem).join("");
+        list.querySelectorAll(".alert-item").forEach((el) => {
+          const lat = parseFloat(el.dataset.lat);
+          const lon = parseFloat(el.dataset.lon);
+          if (!lat || !lon) return;
+          el.addEventListener("click", () =>
+            map.flyTo([lat, lon], 11, { duration: 1 }),
+          );
+        });
+
+        renderIncidents(
+          filtered.length < allIncidents.length ? filtered : allIncidents,
+        );
+      }
+
+      // ════════════════════════════════════════════════════════════════════════════
+      // API FETCH
+      // ════════════════════════════════════════════════════════════════════════════
+      async function fetchIncidents() {
+        const list = document.getElementById("alertsList");
+        list.innerHTML = `<div class="loading-spinner"><div class="spinner"></div> Loading…</div>`;
+
+        const params = new URLSearchParams({ limit: 500 });
+        if (dateFrom) params.set("from", dateFrom);
+        if (dateTo) params.set("to", dateTo);
+
+        try {
+          const resp = await fetch(`${API_BASE}/api/incidents?${params}`);
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const data = await resp.json();
+          allIncidents = data.incidents || [];
+
+          document.getElementById("lastUpdated").textContent =
+            `Updated ${new Date().toLocaleTimeString()}`;
+          document.getElementById("stat-live").textContent = (
+            data.total || allIncidents.length
+          ).toLocaleString();
+          document.getElementById("stat-red").textContent =
+            allIncidents.filter((i) => i.severity === "RED").length || "—";
+          document.getElementById("stat-states").textContent =
+            new Set(allIncidents.map((i) => i.state).filter(Boolean)).size ||
+            "—";
+          document.getElementById("stat-killed").textContent =
+            allIncidents
+              .reduce((s, i) => s + (i.fatalities || 0), 0)
+              .toLocaleString() || "—";
+          document.getElementById("stat-abducted").textContent =
+            allIncidents
+              .reduce((s, i) => s + (i.victims || 0), 0)
+              .toLocaleString() || "—";
+
+          applyPanelFilters();
+        } catch (err) {
+          console.warn("[API] Backend offline:", err.message);
+          allIncidents = [];
+          list.innerHTML = `<div class="empty-state">
+      <i class="fas fa-plug-circle-xmark"></i>
+      <span>Backend offline</span>
+      <span style="font-size:10px;color:#333">cd backend &amp;&amp; npm start</span>
+    </div>`;
+          [
+            "stat-live",
+            "stat-red",
+            "stat-states",
+            "stat-killed",
+            "stat-abducted",
+          ].forEach((id) => (document.getElementById(id).textContent = "—"));
+        }
+      }
+
+      // Panel filter listeners
+      ["filterSeverity", "filterType", "filterState"].forEach((id) =>
+        document
+          .getElementById(id)
+          .addEventListener("change", applyPanelFilters),
+      );
+
+      // ════════════════════════════════════════════════════════════════════════════
+      // PANEL TOGGLE
+      // ════════════════════════════════════════════════════════════════════════════
+      let panelOpen = true;
+      function setPanelState(open) {
+        panelOpen = open;
+        const panel = document.getElementById("alertsPanel");
+        const toggle = document.getElementById("panelToggle");
+        const icon = document.getElementById("toggleIcon");
+        const legend = document.getElementById("legend");
+        const bar = document.getElementById("statsBar");
+
+        if (open) {
+          panel.classList.remove("collapsed");
+          toggle.classList.remove("closed");
+          toggle.style.right = "380px";
+          icon.className = "fas fa-chevron-right";
+          legend.classList.remove("panel-closed");
+          bar.classList.remove("panel-closed");
+        } else {
+          panel.classList.add("collapsed");
+          toggle.classList.add("closed");
+          toggle.style.right = "0";
+          icon.className = "fas fa-chevron-left";
+          legend.classList.add("panel-closed");
+          bar.classList.add("panel-closed");
+        }
+      }
+      document
+        .getElementById("panelToggle")
+        .addEventListener("click", () => setPanelState(!panelOpen));
+      document
+        .getElementById("panelCloseBtn")
+        .addEventListener("click", () => setPanelState(false));
+
+      // ════════════════════════════════════════════════════════════════════════════
+      // LAYER TOGGLES
+      // ════════════════════════════════════════════════════════════════════════════
+      document.querySelectorAll(".toggle-btn").forEach((btn) => {
+        btn.addEventListener("click", function () {
+          this.classList.toggle("active");
+          const layer = layerMap[this.dataset.layer];
+          if (!layer) return;
+          this.classList.contains("active")
+            ? map.addLayer(layer)
+            : map.removeLayer(layer);
+        });
+      });
+
+      // ════════════════════════════════════════════════════════════════════════════
+      // SCRAPE BUTTON
+      // ════════════════════════════════════════════════════════════════════════════
+      document
+        .getElementById("scrapeBtn")
+        .addEventListener("click", async () => {
+          const btn = document.getElementById("scrapeBtn");
+          btn.disabled = true;
+          btn.innerHTML =
+            '<i class="fas fa-sync-alt fa-spin"></i> &nbsp;Scraping…';
+          try {
+            await fetch(`${API_BASE}/api/incidents/scrape`, { method: "POST" });
+            setTimeout(() => {
+              fetchIncidents();
+              btn.disabled = false;
+              btn.innerHTML =
+                '<i class="fas fa-sync-alt"></i> &nbsp;Trigger Manual Scrape';
+            }, 4000);
+          } catch {
+            btn.disabled = false;
+            btn.innerHTML =
+              '<i class="fas fa-sync-alt"></i> &nbsp;Trigger Manual Scrape';
+          }
+        });
+
+      // ════════════════════════════════════════════════════════════════════════════
+      // INIT
+      // ════════════════════════════════════════════════════════════════════════════
+      fetchIncidents();
+      setInterval(fetchIncidents, REFRESH_MS);
+    </script>
+  </body>
+</html>
