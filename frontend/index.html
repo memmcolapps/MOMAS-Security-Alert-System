@@ -885,8 +885,10 @@
       // ════════════════════════════════════════════════════════════════════════════
       // CONFIG — defaults from config.js, overridden by /api/config at runtime
       // ════════════════════════════════════════════════════════════════════════════
-      let API_BASE    = window.MOMAS_CONFIG?.apiBase    ?? "";
-      let REFRESH_MS  = window.MOMAS_CONFIG?.refreshMs  ?? 300000;
+      let API_BASE =
+        window.MOMAS_CONFIG?.apiBase ??
+        "https://momas-security-alert-system.onrender.com";
+      let REFRESH_MS = window.MOMAS_CONFIG?.refreshMs ?? 300000;
       let MAX_MARKERS = window.MOMAS_CONFIG?.maxMarkers ?? 500;
 
       // ════════════════════════════════════════════════════════════════════════════
@@ -973,17 +975,24 @@
 
       function rangeForMode(mode) {
         switch (mode) {
-          case "today":     return [todayStr, todayStr];
+          case "today":
+            return [todayStr, todayStr];
           case "yesterday": {
             const y = addDaysISO(todayStr, -1);
             return [y, y];
           }
-          case "7d":  return [addDaysISO(todayStr, -6),  todayStr];
-          case "30d": return [addDaysISO(todayStr, -29), todayStr];
-          case "90d": return [addDaysISO(todayStr, -89), todayStr];
-          case "ytd": return [`${new Date().getUTCFullYear()}-01-01`, todayStr];
-          case "all": return ["", ""];
-          default:    return [todayStr, todayStr];
+          case "7d":
+            return [addDaysISO(todayStr, -6), todayStr];
+          case "30d":
+            return [addDaysISO(todayStr, -29), todayStr];
+          case "90d":
+            return [addDaysISO(todayStr, -89), todayStr];
+          case "ytd":
+            return [`${new Date().getUTCFullYear()}-01-01`, todayStr];
+          case "all":
+            return ["", ""];
+          default:
+            return [todayStr, todayStr];
         }
       }
 
