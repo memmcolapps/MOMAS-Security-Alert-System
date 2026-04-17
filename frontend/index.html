@@ -697,7 +697,10 @@
     <!-- ── Header ── -->
     <div class="header">
       <h1>MOMAS Security Alert System</h1>
-      <p>Live intelligence feed — RSS sources, HAPI conflict data &amp; ReliefWeb reports</p>
+      <p>
+        Live intelligence feed — RSS sources, HAPI conflict data &amp; ReliefWeb
+        reports
+      </p>
       <div class="live-badge">
         <div class="live-dot"></div>
         LIVE MONITORING
@@ -854,31 +857,13 @@
       <div class="timeline">
         <span class="timeline-label">Period</span>
         <div class="year-btns" id="yearBtns">
-          <button class="year-btn" data-from="2020-01-01" data-to="2020-12-31">
-            2020
-          </button>
-          <button class="year-btn" data-from="2021-01-01" data-to="2021-12-31">
-            2021
-          </button>
-          <button class="year-btn" data-from="2022-01-01" data-to="2022-12-31">
-            2022
-          </button>
-          <button class="year-btn" data-from="2023-01-01" data-to="2023-12-31">
-            2023
-          </button>
-          <button class="year-btn" data-from="2024-01-01" data-to="2024-12-31">
-            2024
-          </button>
-          <button class="year-btn" data-from="2025-01-01" data-to="2025-12-31">
-            2025
-          </button>
-          <button class="year-btn" data-from="2026-01-01" data-to="2026-12-31">
-            2026
-          </button>
-          <button class="year-btn active" id="btnToday" data-mode="today">
-            Today
-          </button>
-          <button class="year-btn" id="btnAll" data-mode="all">All Time</button>
+          <button class="year-btn active" data-mode="today">Today</button>
+          <button class="year-btn" data-mode="yesterday">Yesterday</button>
+          <button class="year-btn" data-mode="7d">7d</button>
+          <button class="year-btn" data-mode="30d">30d</button>
+          <button class="year-btn" data-mode="90d">90d</button>
+          <button class="year-btn" data-mode="ytd">YTD</button>
+          <button class="year-btn" data-mode="all">All Time</button>
         </div>
         <span class="date-sep">|</span>
         <input type="date" class="date-input" id="fromDate" title="From date" />
@@ -895,25 +880,57 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="config.js"></script>
     <script>
       // ════════════════════════════════════════════════════════════════════════════
-      // CONFIG
+      // CONFIG — defaults from config.js, overridden by /api/config at runtime
       // ════════════════════════════════════════════════════════════════════════════
-      const API_BASE = "http://localhost:5050";
-      const REFRESH_MS = 5 * 60 * 1000;
-      const MAX_MARKERS = 500;
+      let API_BASE    = window.MOMAS_CONFIG?.apiBase    ?? "";
+      let REFRESH_MS  = window.MOMAS_CONFIG?.refreshMs  ?? 300000;
+      let MAX_MARKERS = window.MOMAS_CONFIG?.maxMarkers ?? 500;
 
       // ════════════════════════════════════════════════════════════════════════════
       // MAP
       // ════════════════════════════════════════════════════════════════════════════
+      // Nigeria bounds: SW [4.3, 2.7] → NE [13.9, 14.7]
+      const NIGERIA_BOUNDS = L.latLngBounds([4.3, 2.7], [13.9, 14.7]);
+      const NIGERIA_CENTER = [9.0, 8.5];
+
       const map = L.map("map", {
         zoomControl: false,
         attributionControl: false,
-      }).setView([9.5, 8.0], 6);
+        minZoom: 5,
+        maxZoom: 10,
+        maxBounds: NIGERIA_BOUNDS.pad(0.3),
+        maxBoundsViscosity: 0.85,
+      }).fitBounds(NIGERIA_BOUNDS);
       L.tileLayer(
         "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-        { maxZoom: 19 },
+        { maxZoom: 16 },
       ).addTo(map);
+
+      // Nigeria country outline for visual context
+      fetch(
+        "https://raw.githubusercontent.com/datasets/geo-boundaries-world-110m/master/countries.geojson",
+      )
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
+        .then((data) => {
+          if (!data) return;
+          const nigeria = data.features?.find(
+            (f) => f.properties?.name === "Nigeria",
+          );
+          if (!nigeria) return;
+          L.geoJSON(nigeria, {
+            style: {
+              color: "rgba(255,68,68,0.35)",
+              weight: 1.5,
+              fillColor: "rgba(255,68,68,0.03)",
+              fillOpacity: 1,
+            },
+            interactive: false,
+          }).addTo(map);
+        });
       L.control.zoom({ position: "topleft" }).addTo(map);
 
       const liveLayer = L.layerGroup().addTo(map);
@@ -948,7 +965,29 @@
       }
       updateDateLabel();
 
-      // Year / period buttons
+      function addDaysISO(iso, days) {
+        const d = new Date(iso + "T00:00:00Z");
+        d.setUTCDate(d.getUTCDate() + days);
+        return d.toISOString().slice(0, 10);
+      }
+
+      function rangeForMode(mode) {
+        switch (mode) {
+          case "today":     return [todayStr, todayStr];
+          case "yesterday": {
+            const y = addDaysISO(todayStr, -1);
+            return [y, y];
+          }
+          case "7d":  return [addDaysISO(todayStr, -6),  todayStr];
+          case "30d": return [addDaysISO(todayStr, -29), todayStr];
+          case "90d": return [addDaysISO(todayStr, -89), todayStr];
+          case "ytd": return [`${new Date().getUTCFullYear()}-01-01`, todayStr];
+          case "all": return ["", ""];
+          default:    return [todayStr, todayStr];
+        }
+      }
+
+      // Period preset buttons
       document.getElementById("yearBtns").addEventListener("click", (e) => {
         const btn = e.target.closest(".year-btn");
         if (!btn) return;
@@ -958,43 +997,52 @@
           .forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
 
-        const mode = btn.dataset.mode;
-        if (mode === "today") {
-          dateFrom = todayStr;
-          dateTo = todayStr;
-          fromInput.value = todayStr;
-          toInput.value = todayStr;
-        } else if (mode === "all") {
-          dateFrom = "";
-          dateTo = "";
-          fromInput.value = "";
-          toInput.value = "";
-        } else {
-          dateFrom = btn.dataset.from;
-          dateTo = btn.dataset.to;
-          fromInput.value = dateFrom;
-          toInput.value = dateTo;
-        }
+        const [f, t] = rangeForMode(btn.dataset.mode);
+        dateFrom = f;
+        dateTo = t;
+        fromInput.value = f;
+        toInput.value = t;
         updateDateLabel();
         fetchIncidents();
       });
 
-      // Manual date pickers — deactivate year buttons
-      function onDateChange() {
+      // Manual date pickers — one-click = single day, second click = range
+      function onFromChange() {
         const f = fromInput.value;
-        const t = toInput.value;
-        if (!f && !t) return;
-        dateFrom = f || "";
-        dateTo = t || "";
-        // Deselect year buttons
-        document
-          .querySelectorAll(".year-btn")
-          .forEach((b) => b.classList.remove("active"));
+        if (!f) return;
+        // Auto-mirror: if `to` is empty or earlier than `from`, snap to same day
+        if (!toInput.value || toInput.value < f) {
+          toInput.value = f;
+        }
+        dateFrom = f;
+        dateTo = toInput.value;
+        deactivatePresets();
         updateDateLabel();
         fetchIncidents();
       }
-      fromInput.addEventListener("change", onDateChange);
-      toInput.addEventListener("change", onDateChange);
+
+      function onToChange() {
+        const t = toInput.value;
+        if (!t) return;
+        // Auto-mirror: if `from` is empty or later than `to`, snap to same day
+        if (!fromInput.value || fromInput.value > t) {
+          fromInput.value = t;
+        }
+        dateFrom = fromInput.value;
+        dateTo = t;
+        deactivatePresets();
+        updateDateLabel();
+        fetchIncidents();
+      }
+
+      function deactivatePresets() {
+        document
+          .querySelectorAll(".year-btn")
+          .forEach((b) => b.classList.remove("active"));
+      }
+
+      fromInput.addEventListener("change", onFromChange);
+      toInput.addEventListener("change", onToChange);
 
       // ════════════════════════════════════════════════════════════════════════════
       // MARKERS
@@ -1017,6 +1065,17 @@
         displacement: "fa-person-walking-arrow-right",
       };
 
+      // Track how many markers share the same rounded coordinate so we can jitter
+      const _coordCount = {};
+      function jitteredCoord(lat, lon) {
+        const key = `${lat.toFixed(3)},${lon.toFixed(3)}`;
+        _coordCount[key] = (_coordCount[key] || 0) + 1;
+        if (_coordCount[key] === 1) return [lat, lon]; // first at this spot — no jitter
+        const angle = Math.random() * 2 * Math.PI;
+        const r = 0.02 + Math.random() * 0.04; // ~2–6 km spread
+        return [lat + r * Math.sin(angle), lon + r * Math.cos(angle)];
+      }
+
       function makeLiveMarker(inc) {
         if (!inc.lat || !inc.lon) return null;
         const color = SEV_COLORS[inc.severity] || SEV_COLORS.BLUE;
@@ -1026,7 +1085,8 @@
           iconSize: [12, 12],
           iconAnchor: [6, 6],
         });
-        const m = L.marker([inc.lat, inc.lon], { icon });
+        const [jLat, jLon] = jitteredCoord(inc.lat, inc.lon);
+        const m = L.marker([jLat, jLon], { icon });
 
         const killed =
           inc.fatalities > 0
@@ -1060,6 +1120,8 @@
       function renderIncidents(incidents) {
         liveLayer.clearLayers();
         threatLayer.clearLayers();
+        // Reset jitter state so repeated renders don't accumulate offsets
+        Object.keys(_coordCount).forEach((k) => delete _coordCount[k]);
         let n = 0;
         for (const inc of incidents) {
           if (n >= MAX_MARKERS) break;
@@ -1356,10 +1418,20 @@
         });
 
       // ════════════════════════════════════════════════════════════════════════════
-      // INIT
+      // INIT — fetch runtime config then start
       // ════════════════════════════════════════════════════════════════════════════
-      fetchIncidents();
-      setInterval(fetchIncidents, REFRESH_MS);
+      (async () => {
+        try {
+          const cfg = await fetch("/api/config").then((r) => r.json());
+          if (cfg.apiBase !== undefined) API_BASE = cfg.apiBase;
+          if (cfg.refreshMs !== undefined) REFRESH_MS = cfg.refreshMs;
+          if (cfg.maxMarkers !== undefined) MAX_MARKERS = cfg.maxMarkers;
+        } catch {
+          // backend offline or config endpoint missing — fall back to defaults
+        }
+        fetchIncidents();
+        setInterval(fetchIncidents, REFRESH_MS);
+      })();
     </script>
   </body>
 </html>

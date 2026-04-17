@@ -1,1 +1,21 @@
 .claude
+
+# Dependencies
+node_modules/
+
+# Environment files — never commit
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+
+# Generated frontend config (built from env at deploy time)
+frontend/config.js
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store

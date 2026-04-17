@@ -1,0 +1,13 @@
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Generated at build time from .env / Vercel env vars
+config.js
+
+# Dependencies
+node_modules/
+
+# OS
+.DS_Store

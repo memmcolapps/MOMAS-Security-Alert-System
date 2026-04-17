@@ -2,185 +2,300 @@
 
 /**
  * Incident classifier for Nigeria security events.
- * Uses keyword scoring + regex extraction to tag type, severity,
- * fatalities, and victims from raw article text.
+ *
+ * Pipeline: cheap keyword prefilter → in-memory LRU cache → Groq batch call.
+ * Groq is still the final gatekeeper, but most items never reach it.
+ *
+ * Graceful failure: if GROQ_API_KEY is unset, or the call fails after retries,
+ * or the response is unparseable, the per-item result is null. Callers MUST
+ * treat null as "skip this item" — there is no regex fallback.
  */
 
-const INCIDENT_PATTERNS = {
-  bombing: {
-    keywords: [
-      'bomb', 'bombing', 'explosion', 'explode', 'ied', 'blast',
-      'detonate', 'suicide bomb', 'suicide bomber', 'ieds', 'roadside bomb',
-      'car bomb', 'landmine', 'mine blast',
-    ],
-    weight: 10,
-  },
-  kidnapping: {
-    keywords: [
-      'kidnap', 'abduct', 'hostage', 'ransom', 'abduction', 'seized',
-      'taken hostage', 'abducted', 'held captive', 'school abduction',
-      'mass abduction', 'missing students',
-    ],
-    weight: 8,
-  },
-  massacre: {
-    keywords: [
-      'massacre', 'slaughter', 'mass killing', 'mass murder',
-      'gruesomely killed', 'butchered', 'hacked to death',
-    ],
-    weight: 10,
-  },
-  banditry: {
-    keywords: [
-      'bandit', 'bandits', 'banditry', 'cattle rustl', 'rustling',
-      'ransack', 'loot', 'pillage', 'marauder',
-    ],
-    weight: 6,
-  },
-  herder_clash: {
-    keywords: [
-      'herdsmen', 'herder', 'fulani', 'farmer-herder', 'herder-farmer',
-      'grazing dispute', 'cattle herder', 'pastoralist',
-    ],
-    weight: 6,
-  },
-  terrorism: {
-    keywords: [
-      'boko haram', 'iswap', 'jihadist', 'insurgent', 'islamic state',
-      'lakurawa', 'jnim', 'ansaru', 'terrorist', 'islamist',
-      'jihadist group', 'armed group',
-    ],
-    weight: 9,
-  },
-  armed_attack: {
-    keywords: [
-      'gunmen', 'armed men', 'armed bandits', 'attack', 'ambush',
-      'assault', 'raid', 'invasion', 'invade', 'shoot', 'shooting',
-      'gunshot', 'open fire', 'fired on',
-    ],
-    weight: 5,
-  },
-  cult_violence: {
-    keywords: [
-      'cult', 'cultist', 'confraternity', 'gang war', 'rival cult',
-      'fraternity clash', 'black axe', 'eiye', 'aiye',
-    ],
-    weight: 5,
-  },
-  displacement: {
-    keywords: [
-      'displaced', 'displacement', 'fled', 'idp', 'internally displaced',
-      'refugee', 'communities flee', 'residents flee', 'evacuate',
-    ],
-    weight: 3,
-  },
-};
+const axios = require('axios');
+const crypto = require('crypto');
+const { looksLikeSecurityIncident } = require('./prefilter');
 
-// Patterns to extract fatality numbers (covers both orderings: "kills 12" and "12 killed")
-const FATALITY_PATTERNS = [
-  // "kills/killed 12 people" or "kill 35 civilians"
-  /kills?\s+(?:at\s+least\s+)?(\d+)\s*(?:people|persons|civilians|soldiers|farmers|students|villagers|others?|worshippers?|residents?|men|women|children)?/gi,
-  // "35 people killed/murdered/slaughtered"
-  /(\d+)\s*(?:people|persons|civilians|soldiers|farmers|students|villagers|others?|worshippers?|residents?|men|women|children)\s*(?:were\s+)?(?:killed|murdered|slaughtered|dead|shot\s+dead|hacked|butchered)/gi,
-  // "killed/murdered at least 12"
-  /(?:killed|murdered|dead)\s+(?:at\s+least\s+)?(\d+)/gi,
-  // "at least 12 killed/dead/casualties"
-  /(?:at\s+least\s+)?(\d+)\s*(?:killed|dead|deaths?|casualties|persons?\s+dead)/gi,
-  // "death toll of 35" / "toll rises to 35"
-  /(?:death\s+toll|toll\s+rises?\s+to)\s+(?:of\s+)?(\d+)/gi,
-  // "claimed the lives of 12"
-  /claimed\s+(?:the\s+lives?\s+of\s+)?(\d+)/gi,
-  // "12 lives lost"
-  /(\d+)\s*(?:lives?\s+)?(?:were\s+)?lost/gi,
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
+const GROQ_TIMEOUT_MS = parseInt(process.env.GROQ_TIMEOUT_MS || '30000', 10);
+const GROQ_MAX_RETRIES = parseInt(process.env.GROQ_MAX_RETRIES || '5', 10);
+// 15s interval ≈ 4 calls/min. With ~1.5K tokens/batch this stays under the
+// 6K TPM cap on llama-3.1-8b-instant while leaving RPM headroom.
+const GROQ_MIN_INTERVAL_MS = parseInt(process.env.GROQ_MIN_INTERVAL_MS || '15000', 10);
+const GROQ_BATCH_SIZE = Math.max(1, parseInt(process.env.GROQ_BATCH_SIZE || '10', 10));
+const CACHE_MAX = Math.max(100, parseInt(process.env.CLASSIFIER_CACHE_MAX || '5000', 10));
+
+const INCIDENT_TYPES = [
+  'bombing',
+  'kidnapping',
+  'massacre',
+  'banditry',
+  'herder_clash',
+  'terrorism',
+  'armed_attack',
+  'cult_violence',
+  'displacement',
 ];
 
-// Patterns to extract kidnapping victim numbers
-const VICTIM_PATTERNS = [
-  /(\d+)\s*(?:people|persons|students|girls|boys|women|men|pupils?|workers?|farmers?|teachers?)\s*(?:were\s+)?(?:abducted|kidnapped|taken hostage|seized|taken)/gi,
-  /(?:abducted|kidnapped|seized)\s+(?:at\s+least\s+)?(\d+)/gi,
-  /(\d+)\s*(?:abductees?|hostages?|kidnap victims?)/gi,
-  /freed?\s+(?:all\s+)?(\d+)\s*(?:abductees?|hostages?|kidnapped)/gi,
-];
+const SEVERITIES = ['RED', 'ORANGE', 'YELLOW', 'BLUE'];
+
+const NON_INCIDENT = Object.freeze({
+  is_security_incident: false, type: null, fatalities: 0, victims: 0, severity: 'BLUE',
+});
+
+const SYSTEM_PROMPT = `You classify short news reports about security events in Nigeria.
+
+You will receive a JSON array of items, each with an "id" and "text". For each item decide:
+1. Whether it is a Nigerian security incident. If the text is NOT about a concrete security incident in Nigeria (economics, elections, court cases, appointments, road accidents, disease outbreaks, sports, opinion, weather/flooding, routine humanitarian assistance with no violence, etc.), set "is_security_incident" to false.
+2. If it IS a security incident, pick exactly ONE "type":
+   - bombing         (IED, suicide bomb, blast, landmine, air strike)
+   - kidnapping      (abduction, hostage-taking, ransom)
+   - massacre        (mass killing, slaughter of civilians)
+   - banditry        (armed robbery, rustling, looting by bandit groups)
+   - herder_clash    (farmer-herder, pastoralist violence)
+   - terrorism       (Boko Haram, ISWAP, JNIM, Lakurawa, Ansaru, jihadist attacks)
+   - armed_attack    (generic gunmen raid/ambush without clearer label)
+   - cult_violence   (confraternity / campus / street-gang clashes)
+   - displacement    (IDPs, people fleeing, refugee movement caused by conflict)
+3. Extract integer counts:
+   - "fatalities": people killed (0 if unknown/none)
+   - "victims":    people abducted/kidnapped/held hostage OR displaced (0 if not applicable)
+4. Pick a "severity":
+   - RED:    mass-casualty (>=30 killed, or any bombing/massacre with deaths, or >=100 kidnapped/displaced)
+   - ORANGE: serious (>=10 killed, or >=20 kidnapped, or terrorism with deaths, or >=5 kidnapped)
+   - YELLOW: at least one fatality or victim, or bombing/terrorism/kidnapping with no confirmed count
+   - BLUE:   general security news with no casualties
+
+Respond ONLY with a JSON array. Each element must be:
+{"id": <same id as input>, "is_security_incident": boolean, "type": string|null, "fatalities": integer, "victims": integer, "severity": string}
+Do not include any other text.`;
+
+// ── Slot-based rate limiter ────────────────────────────────────────────────
+let _nextSlot = 0;
+
+async function _enforceRateLimit() {
+  const now = Date.now();
+  const waitUntil = Math.max(_nextSlot, now);
+  _nextSlot = waitUntil + GROQ_MIN_INTERVAL_MS;
+  const waitMs = waitUntil - now;
+  if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
+}
+
+// ── LRU cache keyed by sha1(title|description) ─────────────────────────────
+const _cache = new Map();
+
+function cacheKey(title, description) {
+  return crypto.createHash('sha1').update(`${title}\n${description || ''}`).digest('hex');
+}
+
+function cacheGet(key) {
+  if (!_cache.has(key)) return undefined;
+  const val = _cache.get(key);
+  _cache.delete(key);
+  _cache.set(key, val);
+  return val;
+}
+
+function cacheSet(key, val) {
+  if (_cache.has(key)) _cache.delete(key);
+  _cache.set(key, val);
+  if (_cache.size > CACHE_MAX) {
+    const oldest = _cache.keys().next().value;
+    _cache.delete(oldest);
+  }
+}
+
+function isGroqEnabled() {
+  return Boolean(process.env.GROQ_API_KEY);
+}
+
+function sanitize(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+
+  if (raw.is_security_incident !== true) return { ...NON_INCIDENT };
+
+  const type = INCIDENT_TYPES.includes(raw.type) ? raw.type : 'armed_attack';
+  const severity = SEVERITIES.includes(raw.severity) ? raw.severity : 'YELLOW';
+
+  const fatalities = Number.isFinite(raw.fatalities) && raw.fatalities >= 0 && raw.fatalities < 5000
+    ? Math.floor(raw.fatalities) : 0;
+  const victims = Number.isFinite(raw.victims) && raw.victims >= 0 && raw.victims < 5000
+    ? Math.floor(raw.victims) : 0;
+
+  return { is_security_incident: true, type, fatalities, victims, severity };
+}
+
+function extractJSON(text) {
+  if (!text || typeof text !== 'string') return null;
+  try { return JSON.parse(text); } catch {}
+
+  const fence = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
+  if (fence) { try { return JSON.parse(fence[1]); } catch {} }
+
+  // Try object or array slice
+  for (const [open, close] of [['[', ']'], ['{', '}']]) {
+    const s = text.indexOf(open);
+    const e = text.lastIndexOf(close);
+    if (s !== -1 && e > s) {
+      try { return JSON.parse(text.slice(s, e + 1)); } catch {}
+    }
+  }
+  return null;
+}
+
+async function callGroqBatch(batch) {
+  const payload = batch.map((b, i) => ({
+    id: i,
+    text: `Headline: ${b.title}\n\nDescription: ${b.description || '(none)'}`,
+  }));
+
+  for (let attempt = 1; attempt <= GROQ_MAX_RETRIES; attempt++) {
+    await _enforceRateLimit();
+
+    try {
+      const resp = await axios.post(
+        GROQ_API_URL,
+        {
+          model: GROQ_MODEL,
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: JSON.stringify(payload) },
+          ],
+          temperature: 0,
+          max_tokens: 200 * batch.length + 200,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: GROQ_TIMEOUT_MS,
+        },
+      );
+
+      const content = resp.data?.choices?.[0]?.message?.content;
+      if (!content) throw new Error('Groq returned empty content');
+
+      const parsed = extractJSON(content);
+      if (!Array.isArray(parsed)) {
+        throw new Error(`Expected JSON array, got: ${content.slice(0, 200)}`);
+      }
+
+      const byId = new Map();
+      for (const r of parsed) {
+        if (r && Number.isInteger(r.id)) byId.set(r.id, r);
+      }
+      return batch.map((_, i) => sanitize(byId.get(i)));
+    } catch (err) {
+      const status = err.response?.status;
+
+      if (status === 429 && attempt < GROQ_MAX_RETRIES) {
+        const retryAfterMs = (parseInt(err.response?.headers?.['retry-after'] || '0', 10) * 1000) || 0;
+        const backoffMs = Math.min(retryAfterMs || (GROQ_MIN_INTERVAL_MS * Math.pow(2, attempt - 1)), 60000);
+        console.warn(`[classifier] 429 (attempt ${attempt}/${GROQ_MAX_RETRIES}), waiting ${Math.round(backoffMs / 1000)}s…`);
+        _nextSlot = Date.now() + backoffMs;
+        await new Promise((r) => setTimeout(r, backoffMs));
+        continue;
+      }
+
+      if (status === 503 && attempt < GROQ_MAX_RETRIES) {
+        const backoffMs = Math.min(GROQ_MIN_INTERVAL_MS * Math.pow(2, attempt - 1), 30000);
+        console.warn(`[classifier] 503 (attempt ${attempt}/${GROQ_MAX_RETRIES}), waiting ${Math.round(backoffMs / 1000)}s…`);
+        await new Promise((r) => setTimeout(r, backoffMs));
+        continue;
+      }
+
+      const msg = err.response?.data?.error?.message || err.message;
+      console.warn(`[classifier] Groq batch failed (${status ?? 'n/a'}): ${msg}. Dropping batch.`);
+      return batch.map(() => null);
+    }
+  }
+
+  return batch.map(() => null);
+}
 
 /**
- * Classify an incident by type using keyword scoring.
- * Returns the highest-scoring type, or 'armed_attack' as fallback.
+ * Classify a single item. Returns the sanitized result, or null on failure.
+ * Goes through prefilter and cache, same as classifyMany.
  */
-function classifyType(text) {
-  const lower = text.toLowerCase();
-  const scores = {};
+async function classify(title, description = '') {
+  const [result] = await classifyMany([{ title, description }]);
+  return result;
+}
 
-  for (const [type, { keywords, weight }] of Object.entries(INCIDENT_PATTERNS)) {
-    scores[type] = 0;
-    for (const kw of keywords) {
-      if (lower.includes(kw)) {
-        scores[type] += weight;
+/**
+ * Classify many items. Preserves input order. Each result is either a
+ * sanitized object or null (on per-item failure).
+ *
+ * Steps per item:
+ *   1. prefilter  — regex gate; misses return NON_INCIDENT without API call
+ *   2. cache      — sha1(title|description) lookup
+ *   3. batch call — remaining items grouped into Groq calls of BATCH_SIZE
+ */
+async function classifyMany(items) {
+  const results = new Array(items.length);
+  const toCall = [];
+
+  for (let i = 0; i < items.length; i++) {
+    const title = items[i].title || '';
+    const description = items[i].description || '';
+
+    if (!looksLikeSecurityIncident(title, description)) {
+      results[i] = { ...NON_INCIDENT };
+      continue;
+    }
+
+    const key = cacheKey(title, description);
+    const cached = cacheGet(key);
+    if (cached !== undefined) {
+      results[i] = cached;
+      continue;
+    }
+
+    toCall.push({ index: i, key, title, description });
+  }
+
+  const prefiltered = items.length - toCall.length;
+  if (!toCall.length) {
+    console.log(`[classifier] ${items.length} items: ${prefiltered} filtered/cached, 0 LLM calls`);
+    return results;
+  }
+
+  if (!isGroqEnabled()) {
+    console.warn('[classifier] GROQ_API_KEY not set — skipping LLM items.');
+    for (const t of toCall) results[t.index] = null;
+    return results;
+  }
+
+  const batches = [];
+  for (let i = 0; i < toCall.length; i += GROQ_BATCH_SIZE) {
+    batches.push(toCall.slice(i, i + GROQ_BATCH_SIZE));
+  }
+
+  const start = Date.now();
+  console.log(`[classifier] ${items.length} items: ${prefiltered} filtered/cached, ${toCall.length} → ${batches.length} LLM batch(es)`);
+
+  let incidents = 0;
+  for (let b = 0; b < batches.length; b++) {
+    const batch = batches[b];
+    const batchResults = await callGroqBatch(
+      batch.map((t) => ({ title: t.title, description: t.description })),
+    );
+
+    for (let j = 0; j < batch.length; j++) {
+      const t = batch[j];
+      const r = batchResults[j];
+      results[t.index] = r;
+      if (r) {
+        cacheSet(t.key, r);
+        if (r.is_security_incident) incidents++;
       }
     }
   }
 
-  const top = Object.entries(scores)
-    .filter(([, score]) => score > 0)
-    .sort(([, a], [, b]) => b - a)[0];
-
-  return top ? top[0] : 'armed_attack';
+  const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+  console.log(`[classifier] Batch done in ${elapsed}s — ${incidents} incidents from ${toCall.length} LLM items`);
+  return results;
 }
 
-/** Extract highest plausible fatality and victim counts from text. */
-function extractCasualties(text) {
-  let fatalities = 0;
-  let victims = 0;
-
-  for (const pattern of FATALITY_PATTERNS) {
-    const re = new RegExp(pattern.source, pattern.flags);
-    for (const m of text.matchAll(re)) {
-      const n = parseInt(m[1] ?? m[2]);
-      if (n && n > fatalities && n < 5000) fatalities = n;
-    }
-  }
-
-  for (const pattern of VICTIM_PATTERNS) {
-    const re = new RegExp(pattern.source, pattern.flags);
-    for (const m of text.matchAll(re)) {
-      const n = parseInt(m[1] ?? m[2]);
-      if (n && n > victims && n < 5000) victims = n;
-    }
-  }
-
-  return { fatalities, victims };
-}
-
-/** Assign severity tier based on type and casualty numbers. */
-function scoreSeverity({ type, fatalities, victims }) {
-  if (fatalities >= 30) return 'RED';
-  if (type === 'massacre') return 'RED';
-  if (type === 'bombing' && fatalities > 0) return 'RED';
-  if (victims >= 100) return 'RED';
-
-  if (fatalities >= 10) return 'ORANGE';
-  if (victims >= 20) return 'ORANGE';
-  if (type === 'terrorism' && fatalities > 0) return 'ORANGE';
-  if (type === 'kidnapping' && victims >= 5) return 'ORANGE';
-
-  if (fatalities >= 1) return 'YELLOW';
-  if (victims >= 1) return 'YELLOW';
-  if (['bombing', 'terrorism', 'kidnapping'].includes(type)) return 'YELLOW';
-
-  return 'BLUE';
-}
-
-/**
- * Main classify function.
- * @param {string} title
- * @param {string} [description]
- * @returns {{ type, fatalities, victims, severity }}
- */
-function classify(title, description = '') {
-  const text = `${title} ${description}`;
-  const type = classifyType(text);
-  const { fatalities, victims } = extractCasualties(text);
-  const severity = scoreSeverity({ type, fatalities, victims });
-  return { type, fatalities, victims, severity };
-}
-
-module.exports = { classify, classifyType, extractCasualties, scoreSeverity };
+module.exports = { classify, classifyMany, isGroqEnabled };

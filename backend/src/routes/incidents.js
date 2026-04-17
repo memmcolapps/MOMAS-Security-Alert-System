@@ -6,6 +6,7 @@ const db      = require('../db');
 const { scrapeAll }   = require('../scrapers/rss');
 const { fetchHAPI }   = require('../scrapers/hapi');
 const { scrapeReliefWeb } = require('../scrapers/reliefweb');
+const { scrapeGDELT } = require('../scrapers/gdelt');
 
 // ── GET /api/incidents ────────────────────────────────────────────────────────
 router.get('/', async (req, res) => {
@@ -60,6 +61,7 @@ router.post('/scrape', async (req, res) => {
       scrapeAll(),
       fetchHAPI(parseInt(req.body?.days_back) || 7),
       scrapeReliefWeb(parseInt(req.body?.days_back) || 7),
+      scrapeGDELT(parseInt(req.body?.days_back) || 7),
     ]);
   } catch (err) {
     console.error('[Scrape] Manual scrape error:', err.message);

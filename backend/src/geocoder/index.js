@@ -235,6 +235,29 @@ const PLACES = [
   { name: 'jangebe',    state: 'Zamfara',   lat: 12.450, lon: 6.050 },
   { name: 'bukkuyum',   state: 'Zamfara',   lat: 12.080, lon: 5.850 },
   { name: 'gobirawa chali',state:'Zamfara', lat: 11.980, lon: 6.350 },
+
+  // ── State-level fallbacks (used when HAPI/ACLED returns state name only) ────
+  { name: 'abia',         state: 'Abia',       lat: 5.532,  lon: 7.485 },
+  { name: 'adamawa',      state: 'Adamawa',    lat: 9.204,  lon: 12.496 },
+  { name: 'akwa ibom',    state: 'Akwa Ibom',  lat: 5.033,  lon: 7.933 },
+  { name: 'anambra',      state: 'Anambra',    lat: 6.211,  lon: 7.074 },
+  { name: 'bayelsa',      state: 'Bayelsa',    lat: 4.926,  lon: 6.269 },
+  { name: 'benue',        state: 'Benue',      lat: 7.730,  lon: 8.522 },
+  { name: 'borno',        state: 'Borno',      lat: 11.833, lon: 13.150 },
+  { name: 'cross river',  state: 'Cross River',lat: 4.958,  lon: 8.339 },
+  { name: 'delta',        state: 'Delta',      lat: 6.199,  lon: 6.745 },
+  { name: 'ebonyi',       state: 'Ebonyi',     lat: 6.326,  lon: 8.112 },
+  { name: 'edo',          state: 'Edo',        lat: 6.338,  lon: 5.627 },
+  { name: 'ekiti',        state: 'Ekiti',      lat: 7.624,  lon: 5.226 },
+  { name: 'fct',          state: 'FCT',        lat: 9.072,  lon: 7.393 },
+  { name: 'imo',          state: 'Imo',        lat: 5.483,  lon: 7.035 },
+  { name: 'jigawa',       state: 'Jigawa',     lat: 11.758, lon: 9.348 },
+  { name: 'kebbi',        state: 'Kebbi',      lat: 12.454, lon: 4.197 },
+  { name: 'ogun',         state: 'Ogun',       lat: 7.153,  lon: 3.345 },
+  { name: 'osun',         state: 'Osun',       lat: 7.768,  lon: 4.556 },
+  { name: 'oyo',          state: 'Oyo',        lat: 7.388,  lon: 3.898 },
+  { name: 'rivers',       state: 'Rivers',     lat: 4.815,  lon: 7.049 },
+  { name: 'yobe',         state: 'Yobe',       lat: 11.752, lon: 11.960 },
 ];
 
 // Build a sorted list (longest names first so they match before substrings)

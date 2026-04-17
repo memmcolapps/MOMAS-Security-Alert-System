@@ -1,0 +1,5 @@
+{
+  "buildCommand": "node scripts/build-config.js",
+  "outputDirectory": ".",
+  "cleanUrls": true
+}

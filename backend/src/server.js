@@ -17,6 +17,10 @@ const {
   scrapeReliefWeb,
   isReliefWebEnabled,
 } = require("./scrapers/reliefweb");
+const {
+  scrapeGDELT,
+  isGDELTEnabled,
+} = require("./scrapers/gdelt");
 const incidentsRouter = require("./routes/incidents");
 
 const app = express();
@@ -29,6 +33,14 @@ app.use(express.static(path.join(__dirname, "../../frontend")));
 
 app.use("/api/incidents", incidentsRouter);
 
+app.get("/api/config", (req, res) =>
+  res.json({
+    apiBase:    process.env.FRONTEND_API_BASE    || "",
+    refreshMs:  parseInt(process.env.FRONTEND_REFRESH_MS)  || 300000,
+    maxMarkers: parseInt(process.env.FRONTEND_MAX_MARKERS) || 500,
+  }),
+);
+
 app.get("/api/health", (req, res) =>
   res.json({
     status: "ok",
@@ -36,16 +48,35 @@ app.get("/api/health", (req, res) =>
     scrape_interval_minutes: SCRAPE_INTERVAL,
     hapi_enabled: isHAPIEnabled(),
     reliefweb_enabled: isReliefWebEnabled(),
+    gdelt_enabled: isGDELTEnabled(),
   }),
 );
 
+let _scraping = false;
+
 async function runScrape() {
+  if (_scraping) {
+    console.log("[Scrape] Already running — skipping this trigger");
+    return;
+  }
+  _scraping = true;
+  const start = Date.now();
   try {
-    await scrapeAll();
-    await fetchHAPI(7);
-    await scrapeReliefWeb(7);
-  } catch (err) {
-    console.error("[Scrape] Error:", err.message);
+    const outcomes = await Promise.allSettled([
+      scrapeAll(),
+      fetchHAPI(90),
+      scrapeReliefWeb(7),
+      scrapeGDELT(7),
+    ]);
+    const labels = ["RSS", "HAPI", "ReliefWeb", "GDELT"];
+    outcomes.forEach((o, i) => {
+      if (o.status === "rejected") {
+        console.error(`[Scrape] ${labels[i]} failed:`, o.reason?.message || o.reason);
+      }
+    });
+    console.log(`[Scrape] Full cycle done in ${((Date.now() - start) / 1000).toFixed(1)}s`);
+  } finally {
+    _scraping = false;
   }
 }
 

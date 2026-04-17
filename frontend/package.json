@@ -1,0 +1,10 @@
+{
+  "name": "momas-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "description": "MOMAS Security Alert System — static frontend",
+  "scripts": {
+    "build": "node scripts/build-config.js",
+    "dev": "node scripts/build-config.js && echo 'Serve with: npx serve . OR open index.html'"
+  }
+}
