@@ -9,18 +9,9 @@ const path = require("path");
 
 const db = require("./db");
 const { scrapeAll } = require("./scrapers/rss");
-const {
-  fetchHAPI,
-  isHAPIEnabled,
-} = require("./scrapers/hapi");
-const {
-  scrapeReliefWeb,
-  isReliefWebEnabled,
-} = require("./scrapers/reliefweb");
-const {
-  scrapeGDELT,
-  isGDELTEnabled,
-} = require("./scrapers/gdelt");
+const { fetchHAPI, isHAPIEnabled } = require("./scrapers/hapi");
+const { scrapeReliefWeb, isReliefWebEnabled } = require("./scrapers/reliefweb");
+const { scrapeGDELT, isGDELTEnabled } = require("./scrapers/gdelt");
 const incidentsRouter = require("./routes/incidents");
 
 const app = express();
@@ -35,8 +26,8 @@ app.use("/api/incidents", incidentsRouter);
 
 app.get("/api/config", (req, res) =>
   res.json({
-    apiBase:    process.env.FRONTEND_API_BASE    || "",
-    refreshMs:  parseInt(process.env.FRONTEND_REFRESH_MS)  || 300000,
+    apiBase: process.env.FRONTEND_API_BASE || "",
+    refreshMs: parseInt(process.env.FRONTEND_REFRESH_MS) || 300000,
     maxMarkers: parseInt(process.env.FRONTEND_MAX_MARKERS) || 500,
   }),
 );
@@ -71,10 +62,15 @@ async function runScrape() {
     const labels = ["RSS", "HAPI", "ReliefWeb", "GDELT"];
     outcomes.forEach((o, i) => {
       if (o.status === "rejected") {
-        console.error(`[Scrape] ${labels[i]} failed:`, o.reason?.message || o.reason);
+        console.error(
+          `[Scrape] ${labels[i]} failed:`,
+          o.reason?.message || o.reason,
+        );
       }
     });
-    console.log(`[Scrape] Full cycle done in ${((Date.now() - start) / 1000).toFixed(1)}s`);
+    console.log(
+      `[Scrape] Full cycle done in ${((Date.now() - start) / 1000).toFixed(1)}s`,
+    );
   } finally {
     _scraping = false;
   }
@@ -86,7 +82,7 @@ db.init()
     app.listen(PORT, () => {
       console.log(`
 ╔══════════════════════════════════════════════╗
-║   MOMAS Security Alert System — Backend    ║
+║   Epail Security Alert System — Backend    ║
 ╠══════════════════════════════════════════════╣
 ║  Server  : http://localhost:${PORT}             ║
 ║  Frontend: http://localhost:${PORT}              ║

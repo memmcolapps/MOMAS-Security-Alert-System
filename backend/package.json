@@ -1,7 +1,7 @@
 {
   "name": "nigeria-security-alert-backend",
   "version": "1.0.0",
-  "description": "MOMAS Security Alert System — Backend API with RSS + ACLED scrapers",
+  "description": "Epail Security Alert System — Backend API with RSS + ACLED scrapers",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
