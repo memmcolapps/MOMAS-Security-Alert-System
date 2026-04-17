@@ -46,7 +46,7 @@ const NON_INCIDENT = Object.freeze({
 const SYSTEM_PROMPT = `You classify short news reports about security events in Nigeria.
 
 You will receive a JSON array of items, each with an "id" and "text". For each item decide:
-1. Whether it is a Nigerian security incident. If the text is NOT about a concrete security incident in Nigeria (economics, elections, court cases, appointments, road accidents, disease outbreaks, sports, opinion, weather/flooding, routine humanitarian assistance with no violence, etc.), set "is_security_incident" to false.
+1. Whether it is a security incident. Set "is_security_incident" to false if the text is NOT about a concrete security event that actually occurred. REJECT: political reactions, condemnations, statements about security ("X condemns Y", "X calls for investigation", "X expresses concern"), opinion pieces, editorials, calls to action, routine press conferences, election violence coverage with no specific event, economics, court cases, appointments, road accidents, disease outbreaks, sports, weather/flooding with no human cause, routine humanitarian assistance with no violence.
 2. If it IS a security incident, pick exactly ONE "type":
    - bombing         (IED, suicide bomb, blast, landmine, air strike)
    - kidnapping      (abduction, hostage-taking, ransom)
@@ -64,7 +64,7 @@ You will receive a JSON array of items, each with an "id" and "text". For each i
    - RED:    mass-casualty (>=30 killed, or any bombing/massacre with deaths, or >=100 kidnapped/displaced)
    - ORANGE: serious (>=10 killed, or >=20 kidnapped, or terrorism with deaths, or >=5 kidnapped)
    - YELLOW: at least one fatality or victim, or bombing/terrorism/kidnapping with no confirmed count
-   - BLUE:   general security news with no casualties
+   - BLUE:   general security news with no casualties (e.g., fire outbreak, building collapse, security alert with no deaths)
 
 Respond ONLY with a JSON array. Each element must be:
 {"id": <same id as input>, "is_security_incident": boolean, "type": string|null, "fatalities": integer, "victims": integer, "severity": string}

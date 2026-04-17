@@ -68,4 +68,14 @@ router.post('/scrape', async (req, res) => {
   }
 });
 
+// ── DELETE /api/incidents ─────────────────────────────────────────────────────
+router.delete('/', async (req, res) => {
+  try {
+    await db.clearAll();
+    res.json({ message: 'All incidents and scrape logs cleared' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

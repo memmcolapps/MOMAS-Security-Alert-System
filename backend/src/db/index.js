@@ -246,6 +246,13 @@ async function getById(id) {
   return rows[0] ?? null;
 }
 
+/** Clear all incidents and scrape logs. */
+async function clearAll() {
+  await pool.query("DELETE FROM incidents");
+  await pool.query("DELETE FROM scrape_logs");
+  console.log("[DB] All incidents and scrape logs cleared");
+}
+
 module.exports = {
   pool,
   init,
@@ -255,4 +262,5 @@ module.exports = {
   countIncidents,
   getStats,
   getById,
+  clearAll,
 };
