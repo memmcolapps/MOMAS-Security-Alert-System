@@ -3,10 +3,12 @@
 const express = require('express');
 const router  = express.Router();
 const db      = require('../db');
-const { scrapeAll }   = require('../scrapers/rss');
-const { fetchHAPI }   = require('../scrapers/hapi');
+const { scrapeAll }       = require('../scrapers/rss');
+const { fetchHAPI }       = require('../scrapers/hapi');
 const { scrapeReliefWeb } = require('../scrapers/reliefweb');
-const { scrapeGDELT } = require('../scrapers/gdelt');
+const { scrapeGDELT }     = require('../scrapers/gdelt');
+const { scrapeNewsAPI }   = require('../scrapers/newsapi');
+const { scrapeGuardian }  = require('../scrapers/guardian');
 
 // ── Simple TTL cache (2-minute window, cleared on scrape) ─────────────────────
 const _cache = new Map();
@@ -85,11 +87,14 @@ router.get('/:id', async (req, res) => {
 router.post('/scrape', async (req, res) => {
   res.json({ message: 'Scrape started', timestamp: new Date().toISOString() });
   try {
+    const d = parseInt(req.body?.days_back) || 7;
     await Promise.all([
       scrapeAll(),
-      fetchHAPI(parseInt(req.body?.days_back) || 7),
-      scrapeReliefWeb(parseInt(req.body?.days_back) || 7),
-      scrapeGDELT(parseInt(req.body?.days_back) || 7),
+      fetchHAPI(d),
+      scrapeReliefWeb(d),
+      scrapeGDELT(d),
+      scrapeNewsAPI(Math.min(d, 2)),
+      scrapeGuardian(Math.min(d, 2)),
     ]);
     clearCache();
   } catch (err) {

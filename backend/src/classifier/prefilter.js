@@ -37,12 +37,22 @@ const SECURITY_RE = new RegExp(
 // Reaction/commentary patterns — block these UNLESS concrete event words also present
 const NON_EVENT_RE = new RegExp(
   [
+    // Political reactions & condemnations
     'condemns?', 'reacts?\\s+to', 'calls?\\s+for', 'expresses?\\s+(concern|shock|outrage)',
     'urges?\\s+(government|authorities|security|end|stop)', 'demands?\\s+(action|investigation|justice|end)',
     'statement\\s+on', 'speaks?\\s+out', 'slams', 'criticis(e|z)es?\\s+(handling|response|failure)',
     'appeals?\\s+(to|for)', 'pledges?\\s+(support|help|assistance)', 'promises?\\s+(to\\s+(end|tackle|address|investigate))',
     'meets?\\s+with', 'visits?\\s+(victims|scene|hospital)', 'offers?\\s+(condolences?|sympathy|prayers)',
     'mourns?', 'extends?\\s+(condolences?|sympathy)', 'saddened\\s+by',
+    // Retrospective / cumulative / feature journalism
+    'families\\s+(face|await|demand|seek|grieve)', 'agonizing\\s+silence', 'still\\s+missing',
+    'remain(?:s|ing)?\\s+in\\s+(captivity|custody|detention)',
+    'years?\\s+(after|since|later|of\\s+(violence|conflict|crisis))',
+    'a\\s+total\\s+of\\s+\\d', 'more\\s+than\\s+\\d+\\s+(have\\s+been|were)',
+    'since\\s+(20\\d\\d|the\\s+(start|beginning|outbreak))',
+    'how\\s+(many|nigeria)', 'toll\\s+(rises?|climbs?|mounts?)',
+    'analysis\\s*:', 'opinion\\s*:', 'explainer\\s*:', 'fact\\s*check',
+    'what\\s+you\\s+need\\s+to\\s+know', 'everything\\s+you\\s+need',
   ].join('|'),
   'i',
 );

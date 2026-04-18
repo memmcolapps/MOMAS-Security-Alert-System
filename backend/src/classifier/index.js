@@ -57,9 +57,12 @@ You will receive a JSON array of items, each with an "id" and "text". For each i
    - armed_attack    (generic gunmen raid/ambush without clearer label)
    - cult_violence   (confraternity / campus / street-gang clashes)
    - displacement    (IDPs, people fleeing, refugee movement caused by conflict)
-3. Extract integer counts:
-   - "fatalities": people killed (0 if unknown/none)
-   - "victims":    people abducted/kidnapped/held hostage OR displaced (0 if not applicable)
+3. Extract integer counts — ONLY for this single specific new event, NOT cumulative totals:
+   - "fatalities": people killed IN THIS INCIDENT (0 if unknown/none)
+   - "victims":    people abducted/kidnapped/displaced IN THIS INCIDENT (0 if not applicable)
+   IMPORTANT: If the text is a retrospective, feature story, or reports a cumulative statistic
+   ("X people have been abducted since 2020", "toll rises to X this year", "families still waiting"),
+   set is_security_incident to false. Do NOT extract historical totals as if they were a new event.
 4. Pick a "severity":
    - RED:    mass-casualty (>=30 killed, or any bombing/massacre with deaths, or >=100 kidnapped/displaced)
    - ORANGE: serious (>=10 killed, or >=20 kidnapped, or terrorism with deaths, or >=5 kidnapped)
@@ -117,9 +120,11 @@ function sanitize(raw) {
   const type = INCIDENT_TYPES.includes(raw.type) ? raw.type : 'armed_attack';
   const severity = SEVERITIES.includes(raw.severity) ? raw.severity : 'YELLOW';
 
-  const fatalities = Number.isFinite(raw.fatalities) && raw.fatalities >= 0 && raw.fatalities < 5000
+  // Cap at 500 — genuine single-incident counts rarely exceed this;
+  // larger numbers usually come from cumulative/retrospective reporting.
+  const fatalities = Number.isFinite(raw.fatalities) && raw.fatalities >= 0 && raw.fatalities <= 500
     ? Math.floor(raw.fatalities) : 0;
-  const victims = Number.isFinite(raw.victims) && raw.victims >= 0 && raw.victims < 5000
+  const victims = Number.isFinite(raw.victims) && raw.victims >= 0 && raw.victims <= 500
     ? Math.floor(raw.victims) : 0;
 
   return { is_security_incident: true, type, fatalities, victims, severity };

@@ -1050,8 +1050,6 @@
           Threat Zones
         </button>
         <button class="toggle-btn" data-layer="heat">Heatmap</button>
-        <button class="toggle-btn" data-layer="states">States</button>
-        <button class="toggle-btn" data-layer="idp">IDP Camps</button>
         <button class="toggle-btn" id="liveModeBtn">&#127919; Live Mode</button>
         <button class="toggle-btn" id="exportCsvBtn">
           <i class="fas fa-download"></i> Export CSV
@@ -1131,24 +1129,7 @@
         gradient: { 0.3: "#3399ff", 0.55: "#ffcc00", 0.75: "#ff6600", 1.0: "#ff1a1a" },
       });
 
-      const statesLayer = L.layerGroup();
-      const idpLayer    = L.layerGroup();
-      const layerMap = { live: liveLayer, threat: threatLayer, heat: heatLayer, states: statesLayer, idp: idpLayer };
-
-      // Load Nigerian state boundaries
-      fetch("https://raw.githubusercontent.com/wmgeolab/geoBoundaries/main/releaseData/gbOpen/NGA/ADM1/geoBoundaries-NGA-ADM1_simplified.geojson")
-        .then(r => r.ok ? r.json() : null)
-        .catch(() => null)
-        .then(data => {
-          if (!data) return;
-          L.geoJSON(data, {
-            style: { color: "rgba(255,68,68,0.25)", weight: 1, fillOpacity: 0, interactive: false },
-            onEachFeature(feature, layer) {
-              const name = feature.properties?.shapeName || feature.properties?.NAME_1 || "";
-              if (name) layer.bindTooltip(name, { permanent: false, className: "leaflet-tooltip", direction: "center" });
-            },
-          }).addTo(statesLayer);
-        });
+      const layerMap = { live: liveLayer, threat: threatLayer, heat: heatLayer };
 
       // ════════════════════════════════════════════════════════════════════════════
       // DATE RANGE STATE — default: today only
@@ -1360,7 +1341,6 @@
       function renderIncidents(incidents) {
         liveLayer.clearLayers();
         threatLayer.clearLayers();
-        idpLayer.clearLayers();
         // Reset jitter state so repeated renders don't accumulate offsets
         Object.keys(_coordCount).forEach((k) => delete _coordCount[k]);
         const heatPoints = [];
@@ -1370,12 +1350,6 @@
           const m = makeLiveMarker(inc);
           if (!m) continue;
           m.addTo(liveLayer);
-          // IDP displacement marker (distinct purple square icon)
-          if (inc.type === "displacement" && inc.lat && inc.lon) {
-            L.marker([inc.lat, inc.lon], {
-              icon: L.divIcon({ className: "", html: '<div class="idp-marker"></div>', iconSize: [10,10], iconAnchor: [5,5] }),
-            }).bindTooltip(`IDP: ${inc.title.slice(0, 60)}`, { direction: "top" }).addTo(idpLayer);
-          }
           // Threat zone circle
           L.circle([inc.lat, inc.lon], {
             radius: 20000,

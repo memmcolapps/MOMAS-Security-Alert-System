@@ -12,6 +12,8 @@ const { scrapeAll } = require("./scrapers/rss");
 const { fetchHAPI, isHAPIEnabled } = require("./scrapers/hapi");
 const { scrapeReliefWeb, isReliefWebEnabled } = require("./scrapers/reliefweb");
 const { scrapeGDELT, isGDELTEnabled } = require("./scrapers/gdelt");
+const { scrapeNewsAPI, isNewsAPIEnabled } = require("./scrapers/newsapi");
+const { scrapeGuardian, isGuardianEnabled } = require("./scrapers/guardian");
 const incidentsRouter = require("./routes/incidents");
 
 const app = express();
@@ -40,6 +42,8 @@ app.get("/api/health", (req, res) =>
     hapi_enabled: isHAPIEnabled(),
     reliefweb_enabled: isReliefWebEnabled(),
     gdelt_enabled: isGDELTEnabled(),
+    newsapi_enabled: isNewsAPIEnabled(),
+    guardian_enabled: isGuardianEnabled(),
   }),
 );
 
@@ -58,8 +62,10 @@ async function runScrape() {
       fetchHAPI(90),
       scrapeReliefWeb(7),
       scrapeGDELT(7),
+      scrapeNewsAPI(2),
+      scrapeGuardian(2),
     ]);
-    const labels = ["RSS", "HAPI", "ReliefWeb", "GDELT"];
+    const labels = ["RSS", "HAPI", "ReliefWeb", "GDELT", "NewsAPI", "Guardian"];
     outcomes.forEach((o, i) => {
       if (o.status === "rejected") {
         console.error(
