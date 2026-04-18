@@ -33,6 +33,22 @@ const FEEDS = [
     name: "Google News — Bandits",
     url: "https://news.google.com/rss/search?q=nigeria+bandits+kidnap+zamfara+kaduna+katsina&hl=en-NG&gl=NG&ceid=NG:en",
   },
+  {
+    name: "Google News — Breaking Security",
+    url: "https://news.google.com/rss/search?q=nigeria+breaking+attack+killed+bomb+shooting&hl=en-NG&gl=NG&ceid=NG:en&tbs=qdr:d",
+  },
+  {
+    name: "Google News — Middle Belt",
+    url: "https://news.google.com/rss/search?q=benue+plateau+nasarawa+kogi+attack+killed+herdsmen+gunmen&hl=en-NG&gl=NG&ceid=NG:en",
+  },
+  {
+    name: "Google News — South-East Security",
+    url: "https://news.google.com/rss/search?q=anambra+imo+enugu+ebonyi+abia+gunmen+attack+killed+IPOB&hl=en-NG&gl=NG&ceid=NG:en",
+  },
+  {
+    name: "Google News — Delta/Rivers",
+    url: "https://news.google.com/rss/search?q=delta+rivers+bayelsa+cult+attack+killing+pipeline&hl=en-NG&gl=NG&ceid=NG:en",
+  },
 ];
 
 const REQUEST_HEADERS = {
@@ -130,25 +146,35 @@ async function scrapeFeed(feed) {
   }
 
   const items = feedData.items || [];
-  console.log(`[RSS] ${feed.name}: fetched ${items.length} items, classifying…`);
 
+  // Build external_ids first, then skip items already in the DB
   const classifyItems = items.map((item) => {
     const title = stripHtml(item.title || "");
     const rawContent =
       item["content:encoded"] || item.content || item.contentSnippet || "";
     const description = stripHtml(rawContent).slice(0, 1000);
-    return { title, description, item };
+    const external_id = buildId(feed.name, item);
+    return { title, description, item, external_id };
   });
 
+  const knownIds = await db.existingExternalIds(classifyItems.map((ci) => ci.external_id));
+  const newItems = classifyItems.filter((ci) => !knownIds.has(ci.external_id));
+
+  console.log(
+    `[RSS] ${feed.name}: fetched ${items.length} items, ${knownIds.size} already known, classifying ${newItems.length} new…`,
+  );
+
+  if (!newItems.length) return { found: items.length, added: 0, skipped: items.length, error: null };
+
   const results = await classifyMany(
-    classifyItems.map((ci) => ({ title: ci.title, description: ci.description })),
+    newItems.map((ci) => ({ title: ci.title, description: ci.description })),
   );
 
   let added = 0;
-  let skipped = 0;
+  let skipped = knownIds.size;
 
-  for (let i = 0; i < classifyItems.length; i++) {
-    const { title, description, item } = classifyItems[i];
+  for (let i = 0; i < newItems.length; i++) {
+    const { title, description, item, external_id } = newItems[i];
     const result = results[i];
 
     if (!result || !result.is_security_incident) {
@@ -162,7 +188,7 @@ async function scrapeFeed(feed) {
     const state = geo?.state || extractState(fullText) || null;
 
     const inserted = await db.insertIncident({
-      external_id: buildId(feed.name, item),
+      external_id,
       title: title.slice(0, 500),
       description: description.slice(0, 2000),
       date: parseDate(item.isoDate, item.pubDate),

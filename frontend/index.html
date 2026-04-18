@@ -10,6 +10,14 @@
     />
     <link
       rel="stylesheet"
+      href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"
+    />
+    <link
+      rel="stylesheet"
       href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
     />
     <style>
@@ -642,6 +650,131 @@
         border-top: 1px solid rgba(255, 255, 255, 0.08);
       }
 
+      /* ── Header stats strip ── */
+      .header-stats {
+        margin-top: 7px;
+        font-size: 10px;
+        color: #777;
+        letter-spacing: 0.3px;
+      }
+      .header-stats .hs-val {
+        font-weight: 700;
+        color: #ff4444;
+      }
+      .header-stats .hs-killed {
+        color: #ff8800;
+      }
+
+      /* ── Source tier badges ── */
+      .tier-WIRE {
+        font-size: 8px; font-weight: 700; padding: 1px 4px;
+        border-radius: 2px; background: rgba(0,200,120,0.15);
+        color: #00c878; border: 1px solid rgba(0,200,120,0.3);
+      }
+      .tier-A {
+        font-size: 8px; font-weight: 700; padding: 1px 4px;
+        border-radius: 2px; background: rgba(80,160,255,0.15);
+        color: #50a0ff; border: 1px solid rgba(80,160,255,0.3);
+      }
+
+      /* ── IDP displacement marker ── */
+      .idp-marker {
+        width: 10px; height: 10px; border-radius: 2px;
+        background: #aa44ff;
+        border: 1px solid rgba(170,68,255,0.6);
+      }
+
+      /* ── Auto-pan live mode indicator ── */
+      .live-mode-active .panel-title::after {
+        content: " ● TOURING";
+        color: #ff4444;
+        font-size: 8px;
+        animation: pulse-dot 1s infinite;
+      }
+
+      /* ── Toast notifications ── */
+      #toast-container {
+        position: fixed;
+        bottom: 90px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        pointer-events: none;
+      }
+      .toast {
+        background: rgba(0,0,0,0.92);
+        border: 1px solid rgba(255,68,68,0.5);
+        color: #e0e0e0;
+        padding: 8px 14px;
+        border-radius: 6px;
+        font-size: 11px;
+        max-width: 360px;
+        pointer-events: all;
+        animation: toast-in 0.3s ease;
+      }
+      .toast .toast-title { font-weight: 700; color: #ff4444; margin-bottom: 2px; }
+      @keyframes toast-in {
+        from { opacity: 0; transform: translateY(10px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+
+      /* ── Alert subscription modal ── */
+      .alert-modal-backdrop {
+        display: none;
+        position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+        z-index: 2000; align-items: center; justify-content: center;
+      }
+      .alert-modal-backdrop.open { display: flex; }
+      .alert-modal {
+        background: #111; border: 1px solid rgba(255,68,68,0.4);
+        border-radius: 10px; padding: 20px; width: 320px;
+        max-height: 70vh; overflow-y: auto;
+      }
+      .alert-modal h3 { color: #ff4444; font-size: 13px; margin-bottom: 12px; }
+      .alert-modal label { font-size: 10px; color: #888; display: block; margin-bottom: 4px; }
+      .alert-modal input[type=text] {
+        width: 100%; background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.1); color: #e0e0e0;
+        font-size: 11px; padding: 6px 8px; border-radius: 4px;
+        margin-bottom: 12px;
+      }
+      .alert-modal input[type=text]:focus { outline: none; border-color: #ff4444; }
+      .alert-state-grid {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 12px;
+      }
+      .alert-state-grid label {
+        display: flex; align-items: center; gap: 5px;
+        font-size: 10px; color: #aaa; cursor: pointer;
+        margin-bottom: 0;
+      }
+      .alert-modal-btns { display: flex; gap: 8px; margin-top: 8px; }
+      .alert-modal-btns button {
+        flex: 1; padding: 7px; border-radius: 4px; font-size: 11px;
+        font-weight: 600; cursor: pointer; border: none;
+      }
+      .btn-save { background: #ff4444; color: #000; }
+      .btn-cancel { background: rgba(255,255,255,0.08); color: #aaa; }
+
+      /* ── Cluster icons — dark red theme ── */
+      .marker-cluster-small,
+      .marker-cluster-medium,
+      .marker-cluster-large {
+        background-color: rgba(255, 68, 68, 0.15) !important;
+        border: 1px solid rgba(255, 68, 68, 0.4) !important;
+      }
+      .marker-cluster-small div,
+      .marker-cluster-medium div,
+      .marker-cluster-large div {
+        background-color: rgba(255, 68, 68, 0.65) !important;
+        color: #fff !important;
+        font-weight: 700;
+        font-size: 11px;
+        line-height: 30px;
+      }
+
       /* ── Live pulsing markers ── */
       .live-marker {
         width: 12px;
@@ -691,6 +824,20 @@
           opacity: 0;
         }
       }
+      /* Second ring for RED severity only */
+      .live-marker.sev-RED {
+        width: 14px;
+        height: 14px;
+      }
+      .live-marker.sev-RED::after {
+        content: "";
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: var(--red);
+        animation: ripple 2s ease-out infinite 0.75s;
+      }
     </style>
   </head>
   <body>
@@ -704,6 +851,29 @@
       <div class="live-badge">
         <div class="live-dot"></div>
         LIVE MONITORING
+      </div>
+      <div class="header-stats">
+        <span class="hs-val" id="hdr-red">—</span> CRITICAL &nbsp;·&nbsp;
+        <span class="hs-val" id="hdr-total">—</span> TOTAL &nbsp;·&nbsp;
+        <span class="hs-val hs-killed" id="hdr-killed">—</span> KILLED
+      </div>
+    </div>
+
+    <!-- ── Toast container ── -->
+    <div id="toast-container"></div>
+
+    <!-- ── Alert subscription modal ── -->
+    <div class="alert-modal-backdrop" id="alertModalBackdrop">
+      <div class="alert-modal">
+        <h3><i class="fas fa-bell"></i> &nbsp;Watch Alerts</h3>
+        <label>Keywords (comma-separated)</label>
+        <input type="text" id="alertKeywords" placeholder="e.g. bombing, Borno, ISWAP" />
+        <label>Watch States</label>
+        <div class="alert-state-grid" id="alertStateGrid"></div>
+        <div class="alert-modal-btns">
+          <button class="btn-save" id="alertSaveBtn">Save</button>
+          <button class="btn-cancel" id="alertCancelBtn">Cancel</button>
+        </div>
       </div>
     </div>
 
@@ -771,7 +941,10 @@
           <div class="panel-title">
             <i class="fas fa-satellite-dish"></i> &nbsp;Live Intelligence Feed
           </div>
-          <button class="panel-close" id="panelCloseBtn">&#10005;</button>
+          <div style="display:flex;gap:6px;align-items:center">
+            <button class="panel-close" id="alertBellBtn" title="Watch Alerts" style="font-size:13px">🔔</button>
+            <button class="panel-close" id="panelCloseBtn">&#10005;</button>
+          </div>
         </div>
         <div class="panel-filters">
           <select class="filter-select" id="filterSeverity">
@@ -876,10 +1049,19 @@
         <button class="toggle-btn active" data-layer="threat">
           Threat Zones
         </button>
+        <button class="toggle-btn" data-layer="heat">Heatmap</button>
+        <button class="toggle-btn" data-layer="states">States</button>
+        <button class="toggle-btn" data-layer="idp">IDP Camps</button>
+        <button class="toggle-btn" id="liveModeBtn">&#127919; Live Mode</button>
+        <button class="toggle-btn" id="exportCsvBtn">
+          <i class="fas fa-download"></i> Export CSV
+        </button>
       </div>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
     <script src="config.js"></script>
     <script>
       // ════════════════════════════════════════════════════════════════════════════
@@ -935,10 +1117,38 @@
         });
       L.control.zoom({ position: "topleft" }).addTo(map);
 
-      const liveLayer = L.layerGroup().addTo(map);
+      const liveLayer = L.markerClusterGroup({
+        maxClusterRadius: 50,
+        showCoverageOnHover: false,
+        spiderfyOnMaxZoom: true,
+        disableClusteringAtZoom: 9,
+      }).addTo(map);
       const threatLayer = L.layerGroup().addTo(map);
+      const heatLayer = L.heatLayer([], {
+        radius: 30,
+        blur: 20,
+        maxZoom: 10,
+        gradient: { 0.3: "#3399ff", 0.55: "#ffcc00", 0.75: "#ff6600", 1.0: "#ff1a1a" },
+      });
 
-      const layerMap = { live: liveLayer, threat: threatLayer };
+      const statesLayer = L.layerGroup();
+      const idpLayer    = L.layerGroup();
+      const layerMap = { live: liveLayer, threat: threatLayer, heat: heatLayer, states: statesLayer, idp: idpLayer };
+
+      // Load Nigerian state boundaries
+      fetch("https://raw.githubusercontent.com/wmgeolab/geoBoundaries/main/releaseData/gbOpen/NGA/ADM1/geoBoundaries-NGA-ADM1_simplified.geojson")
+        .then(r => r.ok ? r.json() : null)
+        .catch(() => null)
+        .then(data => {
+          if (!data) return;
+          L.geoJSON(data, {
+            style: { color: "rgba(255,68,68,0.25)", weight: 1, fillOpacity: 0, interactive: false },
+            onEachFeature(feature, layer) {
+              const name = feature.properties?.shapeName || feature.properties?.NAME_1 || "";
+              if (name) layer.bindTooltip(name, { permanent: false, className: "leaflet-tooltip", direction: "center" });
+            },
+          }).addTo(statesLayer);
+        });
 
       // ════════════════════════════════════════════════════════════════════════════
       // DATE RANGE STATE — default: today only
@@ -1074,6 +1284,24 @@
         displacement: "fa-person-walking-arrow-right",
       };
 
+      // ── Source credibility tiers ─────────────────────────────────────────────
+      const WIRE_NAMES  = ["Reuters", "BBC", "AP ", "AFP", "Al Jazeera", "France24"];
+      const TIER_A_NAMES = ["Punch", "Premium Times", "Channels", "Vanguard", "Daily Trust", "Sahara"];
+
+      function sourceTier(source) {
+        if (!source) return null;
+        if (WIRE_NAMES.some(w => source.includes(w))) return "WIRE";
+        if (TIER_A_NAMES.some(a => source.includes(a))) return "A";
+        return null;
+      }
+
+      function tierBadgeHtml(source, verified) {
+        if (verified) return ""; // already shown as ACLED badge
+        const t = sourceTier(source);
+        if (!t) return "";
+        return `<span class="tier-${t}">${t === "WIRE" ? "WIRE" : "TIER-A"}</span>`;
+      }
+
       // Track how many markers share the same rounded coordinate so we can jitter
       const _coordCount = {};
       function jitteredCoord(lat, lon) {
@@ -1119,6 +1347,7 @@
       <span class="sev-pill sev-${inc.severity}">${inc.severity}</span>
       &nbsp;<span style="font-size:10px;color:#666">${inc.source || ""}</span>
       ${inc.verified ? '<span class="verified-badge" style="margin-left:4px">ACLED</span>' : ""}
+      ${tierBadgeHtml(inc.source, inc.verified)}
       ${inc.description ? `<div style="margin-top:5px;font-size:10px;color:#888">${inc.description.slice(0, 180)}${inc.description.length > 180 ? "…" : ""}</div>` : ""}
       ${srcLink ? `<div style="margin-top:5px">${srcLink}</div>` : ""}
     </div>
@@ -1126,17 +1355,27 @@
         return m;
       }
 
+      const SEV_HEAT_WEIGHT = { RED: 1.0, ORANGE: 0.7, YELLOW: 0.4, BLUE: 0.2 };
+
       function renderIncidents(incidents) {
         liveLayer.clearLayers();
         threatLayer.clearLayers();
+        idpLayer.clearLayers();
         // Reset jitter state so repeated renders don't accumulate offsets
         Object.keys(_coordCount).forEach((k) => delete _coordCount[k]);
+        const heatPoints = [];
         let n = 0;
         for (const inc of incidents) {
           if (n >= MAX_MARKERS) break;
           const m = makeLiveMarker(inc);
           if (!m) continue;
           m.addTo(liveLayer);
+          // IDP displacement marker (distinct purple square icon)
+          if (inc.type === "displacement" && inc.lat && inc.lon) {
+            L.marker([inc.lat, inc.lon], {
+              icon: L.divIcon({ className: "", html: '<div class="idp-marker"></div>', iconSize: [10,10], iconAnchor: [5,5] }),
+            }).bindTooltip(`IDP: ${inc.title.slice(0, 60)}`, { direction: "top" }).addTo(idpLayer);
+          }
           // Threat zone circle
           L.circle([inc.lat, inc.lon], {
             radius: 20000,
@@ -1146,8 +1385,10 @@
             opacity: 0.12,
             fillOpacity: 0.04,
           }).addTo(threatLayer);
+          heatPoints.push([inc.lat, inc.lon, SEV_HEAT_WEIGHT[inc.severity] ?? 0.2]);
           n++;
         }
+        heatLayer.setLatLngs(heatPoints);
       }
 
       // ════════════════════════════════════════════════════════════════════════════
@@ -1244,6 +1485,7 @@
     <div class="alert-row2" style="margin-top:3px">
       <span class="source-badge">${inc.source || "unknown"}</span>
       ${inc.verified ? '<span class="verified-badge">ACLED</span>' : ""}
+      ${tierBadgeHtml(inc.source, inc.verified)}
       ${inc.source_url ? `<a href="${inc.source_url}" target="_blank" style="color:#444;font-size:9px;margin-left:auto">source ↗</a>` : ""}
     </div>
   </div>`;
@@ -1309,24 +1551,39 @@
 
           document.getElementById("lastUpdated").textContent =
             `Updated ${new Date().toLocaleTimeString()}`;
-          document.getElementById("stat-live").textContent = (
-            data.total || allIncidents.length
-          ).toLocaleString();
-          document.getElementById("stat-red").textContent =
-            allIncidents.filter((i) => i.severity === "RED").length || "—";
-          document.getElementById("stat-states").textContent =
-            new Set(allIncidents.map((i) => i.state).filter(Boolean)).size ||
-            "—";
-          document.getElementById("stat-killed").textContent =
-            allIncidents
-              .reduce((s, i) => s + (i.fatalities || 0), 0)
-              .toLocaleString() || "—";
-          document.getElementById("stat-abducted").textContent =
-            allIncidents
-              .reduce((s, i) => s + (i.victims || 0), 0)
-              .toLocaleString() || "—";
+          const redCount   = allIncidents.filter((i) => i.severity === "RED").length;
+          const totalCount = data.total || allIncidents.length;
+
+          // Use DB-computed sums (accurate across all rows, not just the fetched page).
+          // Also deduplicate cross-source: group by (date+state+type), keep max counts
+          // so the same event reported by Punch + Vanguard + GDELT counts once.
+          const dedupMap = new Map();
+          for (const inc of allIncidents) {
+            const key = `${inc.date}|${inc.state || ""}|${inc.type || ""}`;
+            const prev = dedupMap.get(key);
+            if (!prev || inc.verified > prev.verified ||
+                (inc.fatalities || 0) + (inc.victims || 0) > (prev.fatalities || 0) + (prev.victims || 0)) {
+              dedupMap.set(key, inc);
+            }
+          }
+          const deduped = [...dedupMap.values()];
+          // Prefer DB aggregate sums when available (covers rows beyond the 500 fetch limit)
+          const killedSum   = data.sum_fatalities ?? deduped.reduce((s, i) => s + (i.fatalities || 0), 0);
+          const abductedSum = data.sum_victims    ?? deduped.reduce((s, i) => s + (i.victims    || 0), 0);
+
+          document.getElementById("stat-live").textContent    = totalCount.toLocaleString();
+          document.getElementById("stat-red").textContent     = redCount || "—";
+          document.getElementById("stat-states").textContent  =
+            new Set(allIncidents.map((i) => i.state).filter(Boolean)).size || "—";
+          document.getElementById("stat-killed").textContent   = killedSum.toLocaleString();
+          document.getElementById("stat-abducted").textContent = abductedSum.toLocaleString();
+          // Header stats strip
+          document.getElementById("hdr-red").textContent    = redCount || "0";
+          document.getElementById("hdr-total").textContent  = totalCount.toLocaleString();
+          document.getElementById("hdr-killed").textContent = killedSum.toLocaleString();
 
           applyPanelFilters();
+          checkAlerts(allIncidents);
         } catch (err) {
           console.warn("[API] Backend offline:", err.message);
           allIncidents = [];
@@ -1390,7 +1647,7 @@
       // ════════════════════════════════════════════════════════════════════════════
       // LAYER TOGGLES
       // ════════════════════════════════════════════════════════════════════════════
-      document.querySelectorAll(".toggle-btn").forEach((btn) => {
+      document.querySelectorAll("[data-layer]").forEach((btn) => {
         btn.addEventListener("click", function () {
           this.classList.toggle("active");
           const layer = layerMap[this.dataset.layer];
@@ -1425,6 +1682,160 @@
               '<i class="fas fa-sync-alt"></i> &nbsp;Trigger Manual Scrape';
           }
         });
+
+      // ════════════════════════════════════════════════════════════════════════════
+      // AUTO-PAN LIVE MODE
+      // ════════════════════════════════════════════════════════════════════════════
+      let _liveModeInterval = null;
+      let _liveModeIdx = 0;
+
+      function startLiveMode() {
+        const targets = allIncidents.filter(
+          (i) => (i.severity === "RED" || i.severity === "ORANGE") && i.lat && i.lon,
+        );
+        if (!targets.length) return;
+        _liveModeIdx = 0;
+        _liveModeInterval = setInterval(() => {
+          const inc = targets[_liveModeIdx % targets.length];
+          map.flyTo([inc.lat, inc.lon], 9, { duration: 2.5, easeLinearity: 0.3 });
+          _liveModeIdx++;
+        }, 5000);
+        document.getElementById("alertsPanel").classList.add("live-mode-active");
+      }
+
+      function stopLiveMode() {
+        clearInterval(_liveModeInterval);
+        _liveModeInterval = null;
+        document.getElementById("alertsPanel").classList.remove("live-mode-active");
+        map.fitBounds(NIGERIA_BOUNDS);
+      }
+
+      document.getElementById("liveModeBtn").addEventListener("click", function () {
+        this.classList.toggle("active");
+        this.classList.contains("active") ? startLiveMode() : stopLiveMode();
+      });
+
+      // ════════════════════════════════════════════════════════════════════════════
+      // ALERT SUBSCRIPTIONS (localStorage + toast)
+      // ════════════════════════════════════════════════════════════════════════════
+      const ALERT_KEY = "epailAlerts";
+
+      function loadAlertPrefs() {
+        try { return JSON.parse(localStorage.getItem(ALERT_KEY)) || { keywords: [], states: [] }; }
+        catch { return { keywords: [], states: [] }; }
+      }
+      function saveAlertPrefs(prefs) {
+        localStorage.setItem(ALERT_KEY, JSON.stringify(prefs));
+      }
+
+      function showToast(title, body) {
+        const container = document.getElementById("toast-container");
+        const el = document.createElement("div");
+        el.className = "toast";
+        el.innerHTML = `<div class="toast-title">${title}</div><div>${body}</div>`;
+        container.appendChild(el);
+        setTimeout(() => el.remove(), 7000);
+      }
+
+      let _prevIncidentIds = new Set();
+
+      function checkAlerts(incidents) {
+        const prefs = loadAlertPrefs();
+        if (!prefs.keywords.length && !prefs.states.length) return;
+        const newOnes = incidents.filter((i) => !_prevIncidentIds.has(i.id));
+        if (!newOnes.length) return;
+        _prevIncidentIds = new Set(incidents.map((i) => i.id));
+
+        const kwLower = prefs.keywords.map((k) => k.toLowerCase());
+        for (const inc of newOnes) {
+          const text = `${inc.title} ${inc.state || ""} ${inc.location || ""}`.toLowerCase();
+          const stateMatch = prefs.states.includes(inc.state);
+          const kwMatch    = kwLower.some((k) => k && text.includes(k));
+          if (stateMatch || kwMatch)
+            showToast(
+              `🚨 ${inc.severity} — ${inc.state || "Nigeria"}`,
+              inc.title.slice(0, 100),
+            );
+        }
+      }
+
+      // Build state checkboxes in modal
+      const alertGrid = document.getElementById("alertStateGrid");
+      NIGERIAN_STATES.forEach((s) => {
+        const lbl = document.createElement("label");
+        lbl.innerHTML = `<input type="checkbox" value="${s}"> ${s}`;
+        alertGrid.appendChild(lbl);
+      });
+
+      function openAlertModal() {
+        const prefs = loadAlertPrefs();
+        document.getElementById("alertKeywords").value = prefs.keywords.join(", ");
+        alertGrid.querySelectorAll("input[type=checkbox]").forEach((cb) => {
+          cb.checked = prefs.states.includes(cb.value);
+        });
+        document.getElementById("alertModalBackdrop").classList.add("open");
+      }
+
+      document.getElementById("alertBellBtn").addEventListener("click", openAlertModal);
+      document.getElementById("alertCancelBtn").addEventListener("click", () =>
+        document.getElementById("alertModalBackdrop").classList.remove("open"),
+      );
+      document.getElementById("alertSaveBtn").addEventListener("click", () => {
+        const keywords = document.getElementById("alertKeywords").value
+          .split(",").map((k) => k.trim()).filter(Boolean);
+        const states = [...alertGrid.querySelectorAll("input:checked")].map((c) => c.value);
+        saveAlertPrefs({ keywords, states });
+        document.getElementById("alertModalBackdrop").classList.remove("open");
+        showToast("Alerts saved", `Watching ${keywords.length} keyword(s), ${states.length} state(s)`);
+      });
+
+      // ════════════════════════════════════════════════════════════════════════════
+      // CSV EXPORT
+      // ════════════════════════════════════════════════════════════════════════════
+      function exportCSV() {
+        const sev = document.getElementById("filterSeverity").value;
+        const type = document.getElementById("filterType").value;
+        const state = document.getElementById("filterState").value;
+
+        const filtered = allIncidents.filter(
+          (i) =>
+            (!sev || i.severity === sev) &&
+            (!type || i.type === type) &&
+            (!state || i.state === state),
+        );
+
+        if (!filtered.length) return;
+
+        const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+        const headers = ["Date", "Title", "Type", "Severity", "Location", "State", "Killed", "Abducted", "Source", "Source URL"];
+        const rows = filtered.map((i) =>
+          [
+            i.date,
+            esc(i.title),
+            i.type || "",
+            i.severity || "",
+            esc(i.location),
+            i.state || "",
+            i.fatalities || 0,
+            i.victims || 0,
+            esc(i.source),
+            i.source_url || "",
+          ].join(","),
+        );
+
+        const csv = [headers.join(","), ...rows].join("\n");
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `epail-incidents-${dateFrom || "all"}-to-${dateTo || "all"}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+
+      document.getElementById("exportCsvBtn").addEventListener("click", exportCSV);
 
       // ════════════════════════════════════════════════════════════════════════════
       // INIT — fetch runtime config then start

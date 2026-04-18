@@ -160,38 +160,37 @@ async function getIncidents({
   return rows;
 }
 
-/** Count incidents matching the same filters. */
+/** Count + aggregate incidents matching the same filters. */
 async function countIncidents({ state, type, severity, from, to } = {}) {
   const conds = ["1=1"];
   const vals = [];
   let i = 1;
 
-  if (state) {
-    conds.push(`state    = $${i++}`);
-    vals.push(state);
-  }
-  if (type) {
-    conds.push(`type     = $${i++}`);
-    vals.push(type);
-  }
-  if (severity) {
-    conds.push(`severity = $${i++}`);
-    vals.push(severity);
-  }
-  if (from) {
-    conds.push(`date    >= $${i++}`);
-    vals.push(from);
-  }
-  if (to) {
-    conds.push(`date    <= $${i++}`);
-    vals.push(to);
-  }
+  if (state)    { conds.push(`state    = $${i++}`); vals.push(state); }
+  if (type)     { conds.push(`type     = $${i++}`); vals.push(type); }
+  if (severity) { conds.push(`severity = $${i++}`); vals.push(severity); }
+  if (from)     { conds.push(`date    >= $${i++}`); vals.push(from); }
+  if (to)       { conds.push(`date    <= $${i++}`); vals.push(to); }
 
   const { rows } = await pool.query(
-    `SELECT COUNT(*)::int AS total FROM incidents WHERE ${conds.join(" AND ")}`,
+    `SELECT
+       COUNT(*)::int                       AS total,
+       COALESCE(SUM(fatalities), 0)::int   AS sum_fatalities,
+       COALESCE(SUM(victims),    0)::int   AS sum_victims
+     FROM incidents WHERE ${conds.join(" AND ")}`,
     vals,
   );
-  return rows[0].total;
+  return rows[0];
+}
+
+/** Check which external_ids already exist (for dedup before LLM classification). */
+async function existingExternalIds(ids) {
+  if (!ids.length) return new Set();
+  const { rows } = await pool.query(
+    `SELECT external_id FROM incidents WHERE external_id = ANY($1)`,
+    [ids],
+  );
+  return new Set(rows.map((r) => r.external_id));
 }
 
 /** Aggregate stats + breakdowns for the dashboard. */
@@ -260,6 +259,7 @@ module.exports = {
   logScrape,
   getIncidents,
   countIncidents,
+  existingExternalIds,
   getStats,
   getById,
   clearAll,

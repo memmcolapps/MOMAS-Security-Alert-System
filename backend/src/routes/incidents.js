@@ -8,15 +8,43 @@ const { fetchHAPI }   = require('../scrapers/hapi');
 const { scrapeReliefWeb } = require('../scrapers/reliefweb');
 const { scrapeGDELT } = require('../scrapers/gdelt');
 
+// ── Simple TTL cache (2-minute window, cleared on scrape) ─────────────────────
+const _cache = new Map();
+const CACHE_TTL_MS = 2 * 60 * 1000;
+
+function getCached(key) {
+  const hit = _cache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.ts > CACHE_TTL_MS) { _cache.delete(key); return null; }
+  return hit.data;
+}
+function setCache(key, data) {
+  _cache.set(key, { data, ts: Date.now() });
+  if (_cache.size > 100) _cache.delete([..._cache.keys()][0]);
+}
+function clearCache() { _cache.clear(); }
+
 // ── GET /api/incidents ────────────────────────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
     const { state, type, severity, from, to, limit = 100, offset = 0 } = req.query;
-    const [incidents, total] = await Promise.all([
+    const key = JSON.stringify({ state, type, severity, from, to, limit, offset });
+    const cached = getCached(key);
+    if (cached) return res.json(cached);
+
+    const [incidents, agg] = await Promise.all([
       db.getIncidents({ state, type, severity, from, to, limit, offset }),
       db.countIncidents({ state, type, severity, from, to }),
     ]);
-    res.json({ total, count: incidents.length, incidents });
+    const payload = {
+      total: agg.total,
+      sum_fatalities: agg.sum_fatalities,
+      sum_victims: agg.sum_victims,
+      count: incidents.length,
+      incidents,
+    };
+    setCache(key, payload);
+    res.json(payload);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -63,6 +91,7 @@ router.post('/scrape', async (req, res) => {
       scrapeReliefWeb(parseInt(req.body?.days_back) || 7),
       scrapeGDELT(parseInt(req.body?.days_back) || 7),
     ]);
+    clearCache();
   } catch (err) {
     console.error('[Scrape] Manual scrape error:', err.message);
   }
