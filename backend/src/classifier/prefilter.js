@@ -53,6 +53,15 @@ const NON_EVENT_RE = new RegExp(
     'how\\s+(many|nigeria)', 'toll\\s+(rises?|climbs?|mounts?)',
     'analysis\\s*:', 'opinion\\s*:', 'explainer\\s*:', 'fact\\s*check',
     'what\\s+you\\s+need\\s+to\\s+know', 'everything\\s+you\\s+need',
+    // Court / legal proceedings about past incidents
+    'court\\s+(frees?|releases?|orders?|rules?|sentences?|acquits?|discharges?)',
+    'frees?\\s+(policem[ae]n|officers?|soldiers?|suspects?|accused|detainees?)',
+    'releases?\\s+(policem[ae]n|officers?|soldiers?|suspects?|accused)',
+    'dpp\\s+(releases?|drops?|declines?|discontinues?)',
+    'arraigned?\\s+(for|over|in)', 'charged\\s+with\\s+(killing|murder|manslaughter)',
+    'bail\\s+(granted|denied|rejected)', 'prosecut(e|ed|ing|ion)',
+    'tribunal\\s+(rules?|orders?)', 'sentenced\\s+to',
+    'fuming?\\s+(over|at)', 'fumes?\\s+(over|at|as)',
   ].join('|'),
   'i',
 );
