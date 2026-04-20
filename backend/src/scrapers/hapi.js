@@ -2,6 +2,7 @@
 
 const axios = require('axios');
 const { geocode } = require('../geocoder');
+const { buildFingerprint, fingerprintsMatch } = require('../classifier/fingerprint');
 const db = require('../db');
 
 const HAPI_BASE = 'https://hapi.humdata.org/api/v2';
@@ -142,26 +143,56 @@ async function fetchHAPI(daysBack = 30) {
     const description = `${event.events || 1} conflict event(s) recorded with ${fatalities} fatalities between ${event.reference_period_start?.slice(0, 10) || 'N/A'} and ${event.reference_period_end?.slice(0, 10) || 'N/A'}`;
 
     const geo = geocode(location) || geocode(state || '');
+    const date = event.reference_period_start?.slice(0, 10) || new Date().toISOString().slice(0, 10);
 
-    const inserted = await db.insertIncident({
-      external_id: `hapi:${event.resource_hdx_id}:${event.event_type}:${event.reference_period_start?.slice(0, 10)}`,
-      title: title.slice(0, 500),
-      description: description.slice(0, 2000),
-      date: event.reference_period_start?.slice(0, 10) || new Date().toISOString().slice(0, 10),
-      location: geo ? geo.matched.charAt(0).toUpperCase() + geo.matched.slice(1) : location,
-      state: geo?.state || state,
-      lat: geo?.lat ?? null,
-      lon: geo?.lon ?? null,
-      type,
-      severity,
-      fatalities,
-      victims: 0,
-      source: 'HAPI (ACLED)',
-      source_url: 'https://hapi.humdata.org',
-      source_type: 'hapi',
-      verified: 1,
-    });
-    if (inserted) added++;
+    // Check for existing incident with matching fingerprint
+    const fp = buildFingerprint({ date, state, type, title, description });
+    const matches = await db.findMatchingIncidents({ date, state, type });
+
+    let merged = false;
+    for (const existing of matches) {
+      const existingFp = buildFingerprint({
+        date: existing.date.toISOString().slice(0, 10),
+        state: existing.state,
+        type: existing.type,
+        title: existing.title,
+        description: existing.description,
+      });
+      if (fingerprintsMatch(fp, existingFp)) {
+        merged = await db.mergeIntoIncident(existing.id, {
+          source: 'HAPI (ACLED)',
+          source_url: 'https://hapi.humdata.org',
+          fatalities,
+          victims: 0,
+        });
+        if (merged) {
+          console.log(`[HAPI] Merged into existing incident #${existing.id}: ${title.slice(0, 60)}…`);
+        }
+        break;
+      }
+    }
+
+    if (!merged) {
+      const inserted = await db.insertIncident({
+        external_id: `hapi:${event.resource_hdx_id}:${event.event_type}:${date}`,
+        title: title.slice(0, 500),
+        description: description.slice(0, 2000),
+        date,
+        location: geo ? geo.matched.charAt(0).toUpperCase() + geo.matched.slice(1) : location,
+        state: geo?.state || state,
+        lat: geo?.lat ?? null,
+        lon: geo?.lon ?? null,
+        type,
+        severity,
+        fatalities,
+        victims: 0,
+        source: 'HAPI (ACLED)',
+        source_url: 'https://hapi.humdata.org',
+        source_type: 'hapi',
+        verified: 1,
+      });
+      if (inserted) added++;
+    }
   }
 
   for (const idp of idpData) {
@@ -175,26 +206,56 @@ async function fetchHAPI(daysBack = 30) {
 
     const geo = geocode(location) || geocode(state || '');
     const severity = severityFromDisplaced(population);
+    const date = idp.reference_period_start?.slice(0, 10) || new Date().toISOString().slice(0, 10);
 
-    const inserted = await db.insertIncident({
-      external_id: `hapi:idp:${idp.resource_hdx_id}:${idp.reference_period_start?.slice(0, 10)}`,
-      title: title.slice(0, 500),
-      description: description.slice(0, 2000),
-      date: idp.reference_period_start?.slice(0, 10) || new Date().toISOString().slice(0, 10),
-      location: geo ? geo.matched.charAt(0).toUpperCase() + geo.matched.slice(1) : location,
-      state: geo?.state || state,
-      lat: geo?.lat ?? null,
-      lon: geo?.lon ?? null,
-      type: 'displacement',
-      severity,
-      fatalities: 0,
-      victims: Math.min(population, 4999),
-      source: 'HAPI (IOM DTM)',
-      source_url: 'https://hapi.humdata.org',
-      source_type: 'hapi',
-      verified: 1,
-    });
-    if (inserted) added++;
+    // Check for existing incident with matching fingerprint
+    const fp = buildFingerprint({ date, state, type: 'displacement', title, description });
+    const matches = await db.findMatchingIncidents({ date, state, type: 'displacement' });
+
+    let merged = false;
+    for (const existing of matches) {
+      const existingFp = buildFingerprint({
+        date: existing.date.toISOString().slice(0, 10),
+        state: existing.state,
+        type: existing.type,
+        title: existing.title,
+        description: existing.description,
+      });
+      if (fingerprintsMatch(fp, existingFp)) {
+        merged = await db.mergeIntoIncident(existing.id, {
+          source: 'HAPI (IOM DTM)',
+          source_url: 'https://hapi.humdata.org',
+          fatalities: 0,
+          victims: Math.min(population, 4999),
+        });
+        if (merged) {
+          console.log(`[HAPI] Merged into existing incident #${existing.id}: ${title.slice(0, 60)}…`);
+        }
+        break;
+      }
+    }
+
+    if (!merged) {
+      const inserted = await db.insertIncident({
+        external_id: `hapi:idp:${idp.resource_hdx_id}:${date}`,
+        title: title.slice(0, 500),
+        description: description.slice(0, 2000),
+        date,
+        location: geo ? geo.matched.charAt(0).toUpperCase() + geo.matched.slice(1) : location,
+        state: geo?.state || state,
+        lat: geo?.lat ?? null,
+        lon: geo?.lon ?? null,
+        type: 'displacement',
+        severity,
+        fatalities: 0,
+        victims: Math.min(population, 4999),
+        source: 'HAPI (IOM DTM)',
+        source_url: 'https://hapi.humdata.org',
+        source_type: 'hapi',
+        verified: 1,
+      });
+      if (inserted) added++;
+    }
   }
 
   const totalCount = conflictEvents.length + idpData.length;

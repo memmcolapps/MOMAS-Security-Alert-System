@@ -36,6 +36,8 @@ async function init() {
       source_url  TEXT,
       source_type TEXT    DEFAULT 'rss',
       verified    INTEGER DEFAULT 0,
+      report_count INTEGER DEFAULT 1,
+      sources     TEXT    DEFAULT '[]',
       created_at  TIMESTAMPTZ DEFAULT NOW(),
       updated_at  TIMESTAMPTZ DEFAULT NOW()
     );
@@ -55,6 +57,17 @@ async function init() {
     CREATE INDEX IF NOT EXISTS idx_incidents_type     ON incidents(type);
     CREATE INDEX IF NOT EXISTS idx_incidents_severity ON incidents(severity);
   `);
+
+  // Add new columns if they don't exist (idempotent migration)
+  try {
+    await pool.query(`
+      ALTER TABLE incidents ADD COLUMN IF NOT EXISTS report_count INTEGER DEFAULT 1;
+      ALTER TABLE incidents ADD COLUMN IF NOT EXISTS sources TEXT DEFAULT '[]';
+    `);
+  } catch (err) {
+    console.warn("[DB] Column migration note:", err.message);
+  }
+
   console.log("[DB] PostgreSQL schema ready");
 }
 
@@ -193,6 +206,44 @@ async function existingExternalIds(ids) {
   return new Set(rows.map((r) => r.external_id));
 }
 
+/** Find incidents matching a fingerprint within the dedup window. */
+async function findMatchingIncidents({ date, state, type }) {
+  const { rows } = await pool.query(
+    `SELECT id, date, state, type, fatalities, victims, title, description,
+            report_count, sources, severity
+     FROM incidents
+     WHERE date >= $1::DATE - INTERVAL '1 day'
+       AND date <= $1::DATE + INTERVAL '1 day'
+       AND type = $2
+       AND (state IS NULL OR state = $3 OR $3 IS NULL)
+     ORDER BY date DESC, report_count DESC`,
+    [date, type, state?.toLowerCase() || null],
+  );
+  return rows;
+}
+
+/**
+ * Merge a new report into an existing incident.
+ * Updates report_count, sources array, and takes the max casualty count.
+ * Returns true if merged successfully.
+ */
+async function mergeIntoIncident(incidentId, { source, source_url, fatalities, victims }) {
+  const result = await pool.query(
+    `UPDATE incidents
+     SET report_count = report_count + 1,
+         sources = jsonb_build_array(
+           jsonb_build_object('source', $2, 'url', $3)
+         ) || sources,
+         fatalities = GREATEST(fatalities, $4),
+         victims = GREATEST(victims, $5),
+         updated_at = NOW()
+     WHERE id = $1
+     RETURNING id`,
+    [incidentId, source, source_url, fatalities || 0, victims || 0],
+  );
+  return result.rowCount > 0;
+}
+
 /** Aggregate stats + breakdowns for the dashboard. */
 async function getStats() {
   const {
@@ -260,6 +311,8 @@ module.exports = {
   getIncidents,
   countIncidents,
   existingExternalIds,
+  findMatchingIncidents,
+  mergeIntoIncident,
   getStats,
   getById,
   clearAll,

@@ -3,6 +3,7 @@
 const axios = require('axios');
 const { classifyMany } = require('../classifier');
 const { geocode, extractState } = require('../geocoder');
+const { buildFingerprint, fingerprintsMatch } = require('../classifier/fingerprint');
 const db = require('../db');
 
 const RELIEFWEB_URL = 'https://api.reliefweb.int/v2/reports';
@@ -132,26 +133,55 @@ async function scrapeReliefWeb(daysBack = 30) {
     const state = geo?.state || extractState(fullText) || null;
     const dateStr = ri.dateCreated.slice(0, 10);
 
-    const inserted = await db.insertIncident({
-      external_id: `reliefweb:${ri.reportId}`,
-      title: ri.title.slice(0, 500),
-      description: ri.description.slice(0, 2000),
-      date: dateStr,
-      location: geo ? geo.matched.charAt(0).toUpperCase() + geo.matched.slice(1) : state || 'Nigeria',
-      state,
-      lat: geo?.lat ?? null,
-      lon: geo?.lon ?? null,
-      type,
-      severity,
-      fatalities,
-      victims,
-      source: ri.sourceName,
-      source_url: ri.sourceUrl,
-      source_type: 'reliefweb',
-      verified: 1,
-    });
+    // Check for existing incident with matching fingerprint
+    const fp = buildFingerprint({ date: dateStr, state, type, title: ri.title, description: ri.description });
+    const matches = await db.findMatchingIncidents({ date: dateStr, state, type });
 
-    if (inserted) added++;
+    let merged = false;
+    for (const existing of matches) {
+      const existingFp = buildFingerprint({
+        date: existing.date.toISOString().slice(0, 10),
+        state: existing.state,
+        type: existing.type,
+        title: existing.title,
+        description: existing.description,
+      });
+      if (fingerprintsMatch(fp, existingFp)) {
+        merged = await db.mergeIntoIncident(existing.id, {
+          source: ri.sourceName,
+          source_url: ri.sourceUrl,
+          fatalities,
+          victims,
+        });
+        if (merged) {
+          console.log(`[ReliefWeb] Merged into existing incident #${existing.id}: ${ri.title.slice(0, 60)}…`);
+        }
+        break;
+      }
+    }
+
+    if (!merged) {
+      const inserted = await db.insertIncident({
+        external_id: `reliefweb:${ri.reportId}`,
+        title: ri.title.slice(0, 500),
+        description: ri.description.slice(0, 2000),
+        date: dateStr,
+        location: geo ? geo.matched.charAt(0).toUpperCase() + geo.matched.slice(1) : state || 'Nigeria',
+        state,
+        lat: geo?.lat ?? null,
+        lon: geo?.lon ?? null,
+        type,
+        severity,
+        fatalities,
+        victims,
+        source: ri.sourceName,
+        source_url: ri.sourceUrl,
+        source_type: 'reliefweb',
+        verified: 1,
+      });
+
+      if (inserted) added++;
+    }
   }
 
   await db.logScrape({ source: 'reliefweb', status: 'ok', items_found: reports.length, items_added: added, error: null });

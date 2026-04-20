@@ -3,6 +3,7 @@
 const axios = require('axios');
 const { classifyMany } = require('../classifier');
 const { geocode, extractState } = require('../geocoder');
+const { buildFingerprint, fingerprintsMatch } = require('../classifier/fingerprint');
 const db = require('../db');
 
 const GDELT_URL = 'https://api.gdeltproject.org/api/v2/doc/doc';
@@ -350,26 +351,55 @@ async function scrapeGDELT(daysBack = 7) {
     const dateStr = firstEv.datePublished?.slice(0, 10) || new Date().toISOString().slice(0, 10);
     const { tier: confidenceTier } = computeIncidentConfidence(cluster);
 
-    const inserted = await db.insertIncident({
-      external_id: `gdelt:${Buffer.from(allUrls[0] || title).toString('base64').slice(0, 40)}`,
-      title: title.slice(0, 500),
-      description: description.slice(0, 2000),
-      date: dateStr,
-      location: geo?.matched?.charAt(0).toUpperCase() + (geo?.matched?.slice(1) || '') || state || 'Nigeria',
-      state,
-      lat: geo?.lat ?? null,
-      lon: geo?.lon ?? null,
-      type,
-      severity,
-      fatalities,
-      victims,
-      source: `GDELT (${firstEv.domain || 'unknown'})`,
-      source_url: allUrls[0] || null,
-      source_type: 'gdelt',
-      verified: confidenceTier === 'HIGH' ? 1 : 0,
-    });
+    // Check for existing incident with matching fingerprint
+    const fp = buildFingerprint({ date: dateStr, state, type, title, description });
+    const matches = await db.findMatchingIncidents({ date: dateStr, state, type });
 
-    if (inserted) added++;
+    let merged = false;
+    for (const existing of matches) {
+      const existingFp = buildFingerprint({
+        date: existing.date.toISOString().slice(0, 10),
+        state: existing.state,
+        type: existing.type,
+        title: existing.title,
+        description: existing.description,
+      });
+      if (fingerprintsMatch(fp, existingFp)) {
+        merged = await db.mergeIntoIncident(existing.id, {
+          source: `GDELT (${firstEv.domain || 'unknown'})`,
+          source_url: allUrls[0],
+          fatalities,
+          victims,
+        });
+        if (merged) {
+          console.log(`[GDELT] Merged into existing incident #${existing.id}: ${title.slice(0, 60)}…`);
+        }
+        break;
+      }
+    }
+
+    if (!merged) {
+      const inserted = await db.insertIncident({
+        external_id: `gdelt:${Buffer.from(allUrls[0] || title).toString('base64').slice(0, 40)}`,
+        title: title.slice(0, 500),
+        description: description.slice(0, 2000),
+        date: dateStr,
+        location: geo?.matched?.charAt(0).toUpperCase() + (geo?.matched?.slice(1) || '') || state || 'Nigeria',
+        state,
+        lat: geo?.lat ?? null,
+        lon: geo?.lon ?? null,
+        type,
+        severity,
+        fatalities,
+        victims,
+        source: `GDELT (${firstEv.domain || 'unknown'})`,
+        source_url: allUrls[0] || null,
+        source_type: 'gdelt',
+        verified: confidenceTier === 'HIGH' ? 1 : 0,
+      });
+
+      if (inserted) added++;
+    }
   }
 
   await db.logScrape({ source: 'gdelt', status: 'ok', items_found: articles.length, items_added: added, error: null });

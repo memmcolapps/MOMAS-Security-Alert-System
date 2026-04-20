@@ -4,6 +4,7 @@ const axios = require("axios");
 const Parser = require("rss-parser");
 const { classifyMany } = require("../classifier");
 const { geocode, extractState } = require("../geocoder");
+const { buildFingerprint, fingerprintsMatch } = require("../classifier/fingerprint");
 const db = require("../db");
 
 const parser = new Parser({
@@ -186,29 +187,59 @@ async function scrapeFeed(feed) {
     const fullText = `${title} ${description}`;
     const geo = geocode(fullText) || geocode(title);
     const state = geo?.state || extractState(fullText) || null;
+    const date = parseDate(item.isoDate, item.pubDate);
 
-    const inserted = await db.insertIncident({
-      external_id,
-      title: title.slice(0, 500),
-      description: description.slice(0, 2000),
-      date: parseDate(item.isoDate, item.pubDate),
-      location: geo
-        ? geo.matched.charAt(0).toUpperCase() + geo.matched.slice(1)
-        : state || "Nigeria",
-      state,
-      lat: geo?.lat ?? null,
-      lon: geo?.lon ?? null,
-      type,
-      severity,
-      fatalities,
-      victims,
-      source: feed.name,
-      source_url: item.link || null,
-      source_type: "rss",
-      verified: 0,
-    });
+    // Check for existing incident with matching fingerprint
+    const fp = buildFingerprint({ date, state, type, title, description });
+    const matches = await db.findMatchingIncidents({ date, state, type });
 
-    if (inserted) added++;
+    let merged = false;
+    for (const existing of matches) {
+      const existingFp = buildFingerprint({
+        date: existing.date.toISOString().slice(0, 10),
+        state: existing.state,
+        type: existing.type,
+        title: existing.title,
+        description: existing.description,
+      });
+      if (fingerprintsMatch(fp, existingFp)) {
+        merged = await db.mergeIntoIncident(existing.id, {
+          source: feed.name,
+          source_url: item.link,
+          fatalities,
+          victims,
+        });
+        if (merged) {
+          console.log(`[RSS] Merged into existing incident #${existing.id}: ${title.slice(0, 60)}…`);
+        }
+        break;
+      }
+    }
+
+    if (!merged) {
+      const inserted = await db.insertIncident({
+        external_id,
+        title: title.slice(0, 500),
+        description: description.slice(0, 2000),
+        date,
+        location: geo
+          ? geo.matched.charAt(0).toUpperCase() + geo.matched.slice(1)
+          : state || "Nigeria",
+        state,
+        lat: geo?.lat ?? null,
+        lon: geo?.lon ?? null,
+        type,
+        severity,
+        fatalities,
+        victims,
+        source: feed.name,
+        source_url: item.link || null,
+        source_type: "rss",
+        verified: 0,
+      });
+
+      if (inserted) added++;
+    }
   }
 
   return { found: items.length, added, skipped, error: null };

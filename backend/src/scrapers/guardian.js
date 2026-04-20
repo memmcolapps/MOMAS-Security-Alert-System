@@ -4,6 +4,7 @@ const axios = require('axios');
 const { classifyMany } = require('../classifier');
 const { geocode, extractState } = require('../geocoder');
 const { looksLikeSecurityIncident } = require('../classifier/prefilter');
+const { buildFingerprint, fingerprintsMatch } = require('../classifier/fingerprint');
 const db = require('../db');
 
 // Guardian API is free with no hard rate limit — run multiple focused queries.
@@ -124,27 +125,56 @@ async function scrapeGuardian(daysBack = 2) {
       const geo = geocode(fullText) || geocode(item.title);
       const state = geo?.state || extractState(fullText) || null;
 
-      const inserted = await db.insertIncident({
-        external_id: item.external_id,
-        title: item.title,
-        description: item.description.slice(0, 2000),
-        date: item.date,
-        location: geo
-          ? geo.matched.charAt(0).toUpperCase() + geo.matched.slice(1)
-          : state || 'Nigeria',
-        state,
-        lat: geo?.lat ?? null,
-        lon: geo?.lon ?? null,
-        type: result.type,
-        severity: result.severity,
-        fatalities: result.fatalities,
-        victims: result.victims,
-        source: 'The Guardian',
-        source_url: item.source_url,
-        source_type: 'guardian',
-        verified: 0,
-      });
-      if (inserted) added++;
+      // Check for existing incident with matching fingerprint
+      const fp = buildFingerprint({ date: item.date, state, type: result.type, title: item.title, description: item.description });
+      const matches = await db.findMatchingIncidents({ date: item.date, state, type: result.type });
+
+      let merged = false;
+      for (const existing of matches) {
+        const existingFp = buildFingerprint({
+          date: existing.date.toISOString().slice(0, 10),
+          state: existing.state,
+          type: existing.type,
+          title: existing.title,
+          description: existing.description,
+        });
+        if (fingerprintsMatch(fp, existingFp)) {
+          merged = await db.mergeIntoIncident(existing.id, {
+            source: 'The Guardian',
+            source_url: item.source_url,
+            fatalities: result.fatalities,
+            victims: result.victims,
+          });
+          if (merged) {
+            console.log(`[Guardian] Merged into existing incident #${existing.id}: ${item.title.slice(0, 60)}…`);
+          }
+          break;
+        }
+      }
+
+      if (!merged) {
+        const inserted = await db.insertIncident({
+          external_id: item.external_id,
+          title: item.title,
+          description: item.description.slice(0, 2000),
+          date: item.date,
+          location: geo
+            ? geo.matched.charAt(0).toUpperCase() + geo.matched.slice(1)
+            : state || 'Nigeria',
+          state,
+          lat: geo?.lat ?? null,
+          lon: geo?.lon ?? null,
+          type: result.type,
+          severity: result.severity,
+          fatalities: result.fatalities,
+          victims: result.victims,
+          source: 'The Guardian',
+          source_url: item.source_url,
+          source_type: 'guardian',
+          verified: 0,
+        });
+        if (inserted) added++;
+      }
     }
 
     console.log(`[Guardian] "${query}": added=${added}`);
