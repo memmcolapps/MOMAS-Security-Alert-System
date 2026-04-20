@@ -667,21 +667,31 @@
 
       /* ── Source tier badges ── */
       .tier-WIRE {
-        font-size: 8px; font-weight: 700; padding: 1px 4px;
-        border-radius: 2px; background: rgba(0,200,120,0.15);
-        color: #00c878; border: 1px solid rgba(0,200,120,0.3);
+        font-size: 8px;
+        font-weight: 700;
+        padding: 1px 4px;
+        border-radius: 2px;
+        background: rgba(0, 200, 120, 0.15);
+        color: #00c878;
+        border: 1px solid rgba(0, 200, 120, 0.3);
       }
       .tier-A {
-        font-size: 8px; font-weight: 700; padding: 1px 4px;
-        border-radius: 2px; background: rgba(80,160,255,0.15);
-        color: #50a0ff; border: 1px solid rgba(80,160,255,0.3);
+        font-size: 8px;
+        font-weight: 700;
+        padding: 1px 4px;
+        border-radius: 2px;
+        background: rgba(80, 160, 255, 0.15);
+        color: #50a0ff;
+        border: 1px solid rgba(80, 160, 255, 0.3);
       }
 
       /* ── IDP displacement marker ── */
       .idp-marker {
-        width: 10px; height: 10px; border-radius: 2px;
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
         background: #aa44ff;
-        border: 1px solid rgba(170,68,255,0.6);
+        border: 1px solid rgba(170, 68, 255, 0.6);
       }
 
       /* ── Auto-pan live mode indicator ── */
@@ -705,8 +715,8 @@
         pointer-events: none;
       }
       .toast {
-        background: rgba(0,0,0,0.92);
-        border: 1px solid rgba(255,68,68,0.5);
+        background: rgba(0, 0, 0, 0.92);
+        border: 1px solid rgba(255, 68, 68, 0.5);
         color: #e0e0e0;
         padding: 8px 14px;
         border-radius: 6px;
@@ -715,48 +725,106 @@
         pointer-events: all;
         animation: toast-in 0.3s ease;
       }
-      .toast .toast-title { font-weight: 700; color: #ff4444; margin-bottom: 2px; }
+      .toast .toast-title {
+        font-weight: 700;
+        color: #ff4444;
+        margin-bottom: 2px;
+      }
       @keyframes toast-in {
-        from { opacity: 0; transform: translateY(10px); }
-        to   { opacity: 1; transform: translateY(0); }
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
       }
 
       /* ── Alert subscription modal ── */
       .alert-modal-backdrop {
         display: none;
-        position: fixed; inset: 0; background: rgba(0,0,0,0.6);
-        z-index: 2000; align-items: center; justify-content: center;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        z-index: 2000;
+        align-items: center;
+        justify-content: center;
       }
-      .alert-modal-backdrop.open { display: flex; }
+      .alert-modal-backdrop.open {
+        display: flex;
+      }
       .alert-modal {
-        background: #111; border: 1px solid rgba(255,68,68,0.4);
-        border-radius: 10px; padding: 20px; width: 320px;
-        max-height: 70vh; overflow-y: auto;
+        background: #111;
+        border: 1px solid rgba(255, 68, 68, 0.4);
+        border-radius: 10px;
+        padding: 20px;
+        width: 320px;
+        max-height: 70vh;
+        overflow-y: auto;
       }
-      .alert-modal h3 { color: #ff4444; font-size: 13px; margin-bottom: 12px; }
-      .alert-modal label { font-size: 10px; color: #888; display: block; margin-bottom: 4px; }
-      .alert-modal input[type=text] {
-        width: 100%; background: rgba(255,255,255,0.05);
-        border: 1px solid rgba(255,255,255,0.1); color: #e0e0e0;
-        font-size: 11px; padding: 6px 8px; border-radius: 4px;
+      .alert-modal h3 {
+        color: #ff4444;
+        font-size: 13px;
         margin-bottom: 12px;
       }
-      .alert-modal input[type=text]:focus { outline: none; border-color: #ff4444; }
+      .alert-modal label {
+        font-size: 10px;
+        color: #888;
+        display: block;
+        margin-bottom: 4px;
+      }
+      .alert-modal input[type="text"] {
+        width: 100%;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: #e0e0e0;
+        font-size: 11px;
+        padding: 6px 8px;
+        border-radius: 4px;
+        margin-bottom: 12px;
+      }
+      .alert-modal input[type="text"]:focus {
+        outline: none;
+        border-color: #ff4444;
+      }
       .alert-state-grid {
-        display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 12px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4px;
+        margin-bottom: 12px;
       }
       .alert-state-grid label {
-        display: flex; align-items: center; gap: 5px;
-        font-size: 10px; color: #aaa; cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 10px;
+        color: #aaa;
+        cursor: pointer;
         margin-bottom: 0;
       }
-      .alert-modal-btns { display: flex; gap: 8px; margin-top: 8px; }
-      .alert-modal-btns button {
-        flex: 1; padding: 7px; border-radius: 4px; font-size: 11px;
-        font-weight: 600; cursor: pointer; border: none;
+      .alert-modal-btns {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
       }
-      .btn-save { background: #ff4444; color: #000; }
-      .btn-cancel { background: rgba(255,255,255,0.08); color: #aaa; }
+      .alert-modal-btns button {
+        flex: 1;
+        padding: 7px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        border: none;
+      }
+      .btn-save {
+        background: #ff4444;
+        color: #000;
+      }
+      .btn-cancel {
+        background: rgba(255, 255, 255, 0.08);
+        color: #aaa;
+      }
 
       /* ── Cluster icons — dark red theme ── */
       .marker-cluster-small,
@@ -867,7 +935,11 @@
       <div class="alert-modal">
         <h3><i class="fas fa-bell"></i> &nbsp;Watch Alerts</h3>
         <label>Keywords (comma-separated)</label>
-        <input type="text" id="alertKeywords" placeholder="e.g. bombing, Borno, ISWAP" />
+        <input
+          type="text"
+          id="alertKeywords"
+          placeholder="e.g. bombing, Borno, ISWAP"
+        />
         <label>Watch States</label>
         <div class="alert-state-grid" id="alertStateGrid"></div>
         <div class="alert-modal-btns">
@@ -941,8 +1013,15 @@
           <div class="panel-title">
             <i class="fas fa-satellite-dish"></i> &nbsp;Live Intelligence Feed
           </div>
-          <div style="display:flex;gap:6px;align-items:center">
-            <button class="panel-close" id="alertBellBtn" title="Watch Alerts" style="font-size:13px">🔔</button>
+          <div style="display: flex; gap: 6px; align-items: center">
+            <button
+              class="panel-close"
+              id="alertBellBtn"
+              title="Watch Alerts"
+              style="font-size: 13px"
+            >
+              🔔
+            </button>
             <button class="panel-close" id="panelCloseBtn">&#10005;</button>
           </div>
         </div>
@@ -1021,10 +1100,10 @@
           <div class="stat-value" id="stat-killed">—</div>
           <div class="stat-label">Confirmed Killed</div>
         </div>
-        <!-- <div class="stat">
+        <div class="stat">
           <div class="stat-value" id="stat-abducted">—</div>
           <div class="stat-label">Abducted</div>
-        </div> -->
+        </div>
       </div>
 
       <div class="timeline">
@@ -1126,10 +1205,19 @@
         radius: 30,
         blur: 20,
         maxZoom: 10,
-        gradient: { 0.3: "#3399ff", 0.55: "#ffcc00", 0.75: "#ff6600", 1.0: "#ff1a1a" },
+        gradient: {
+          0.3: "#3399ff",
+          0.55: "#ffcc00",
+          0.75: "#ff6600",
+          1.0: "#ff1a1a",
+        },
       });
 
-      const layerMap = { live: liveLayer, threat: threatLayer, heat: heatLayer };
+      const layerMap = {
+        live: liveLayer,
+        threat: threatLayer,
+        heat: heatLayer,
+      };
 
       // ════════════════════════════════════════════════════════════════════════════
       // DATE RANGE STATE — default: today only
@@ -1266,13 +1354,27 @@
       };
 
       // ── Source credibility tiers ─────────────────────────────────────────────
-      const WIRE_NAMES  = ["Reuters", "BBC", "AP ", "AFP", "Al Jazeera", "France24"];
-      const TIER_A_NAMES = ["Punch", "Premium Times", "Channels", "Vanguard", "Daily Trust", "Sahara"];
+      const WIRE_NAMES = [
+        "Reuters",
+        "BBC",
+        "AP ",
+        "AFP",
+        "Al Jazeera",
+        "France24",
+      ];
+      const TIER_A_NAMES = [
+        "Punch",
+        "Premium Times",
+        "Channels",
+        "Vanguard",
+        "Daily Trust",
+        "Sahara",
+      ];
 
       function sourceTier(source) {
         if (!source) return null;
-        if (WIRE_NAMES.some(w => source.includes(w))) return "WIRE";
-        if (TIER_A_NAMES.some(a => source.includes(a))) return "A";
+        if (WIRE_NAMES.some((w) => source.includes(w))) return "WIRE";
+        if (TIER_A_NAMES.some((a) => source.includes(a))) return "A";
         return null;
       }
 
@@ -1359,7 +1461,11 @@
             opacity: 0.12,
             fillOpacity: 0.04,
           }).addTo(threatLayer);
-          heatPoints.push([inc.lat, inc.lon, SEV_HEAT_WEIGHT[inc.severity] ?? 0.2]);
+          heatPoints.push([
+            inc.lat,
+            inc.lon,
+            SEV_HEAT_WEIGHT[inc.severity] ?? 0.2,
+          ]);
           n++;
         }
         heatLayer.setLatLngs(heatPoints);
@@ -1525,7 +1631,9 @@
 
           document.getElementById("lastUpdated").textContent =
             `Updated ${new Date().toLocaleTimeString()}`;
-          const redCount   = allIncidents.filter((i) => i.severity === "RED").length;
+          const redCount = allIncidents.filter(
+            (i) => i.severity === "RED",
+          ).length;
           const totalCount = data.total || allIncidents.length;
 
           // Use DB-computed sums (accurate across all rows, not just the fetched page).
@@ -1535,26 +1643,40 @@
           for (const inc of allIncidents) {
             const key = `${inc.date}|${inc.state || ""}|${inc.type || ""}`;
             const prev = dedupMap.get(key);
-            if (!prev || inc.verified > prev.verified ||
-                (inc.fatalities || 0) + (inc.victims || 0) > (prev.fatalities || 0) + (prev.victims || 0)) {
+            if (
+              !prev ||
+              inc.verified > prev.verified ||
+              (inc.fatalities || 0) + (inc.victims || 0) >
+                (prev.fatalities || 0) + (prev.victims || 0)
+            ) {
               dedupMap.set(key, inc);
             }
           }
           const deduped = [...dedupMap.values()];
           // Prefer DB aggregate sums when available (covers rows beyond the 500 fetch limit)
-          const killedSum   = data.sum_fatalities ?? deduped.reduce((s, i) => s + (i.fatalities || 0), 0);
-          const abductedSum = data.sum_victims    ?? deduped.reduce((s, i) => s + (i.victims    || 0), 0);
+          const killedSum =
+            data.sum_fatalities ??
+            deduped.reduce((s, i) => s + (i.fatalities || 0), 0);
+          const abductedSum =
+            data.sum_victims ??
+            deduped.reduce((s, i) => s + (i.victims || 0), 0);
 
-          document.getElementById("stat-live").textContent    = totalCount.toLocaleString();
-          document.getElementById("stat-red").textContent     = redCount || "—";
-          document.getElementById("stat-states").textContent  =
-            new Set(allIncidents.map((i) => i.state).filter(Boolean)).size || "—";
-          document.getElementById("stat-killed").textContent   = killedSum.toLocaleString();
-          // document.getElementById("stat-abducted").textContent = abductedSum.toLocaleString();
+          document.getElementById("stat-live").textContent =
+            totalCount.toLocaleString();
+          document.getElementById("stat-red").textContent = redCount || "—";
+          document.getElementById("stat-states").textContent =
+            new Set(allIncidents.map((i) => i.state).filter(Boolean)).size ||
+            "—";
+          document.getElementById("stat-killed").textContent =
+            killedSum.toLocaleString();
+          document.getElementById("stat-abducted").textContent =
+            abductedSum.toLocaleString();
           // Header stats strip
-          document.getElementById("hdr-red").textContent    = redCount || "0";
-          document.getElementById("hdr-total").textContent  = totalCount.toLocaleString();
-          document.getElementById("hdr-killed").textContent = killedSum.toLocaleString();
+          document.getElementById("hdr-red").textContent = redCount || "0";
+          document.getElementById("hdr-total").textContent =
+            totalCount.toLocaleString();
+          document.getElementById("hdr-killed").textContent =
+            killedSum.toLocaleString();
 
           applyPanelFilters();
           checkAlerts(allIncidents);
@@ -1571,7 +1693,7 @@
             "stat-red",
             "stat-states",
             "stat-killed",
-            // "stat-abducted",
+            "stat-abducted",
           ].forEach((id) => (document.getElementById(id).textContent = "—"));
         }
       }
@@ -1665,29 +1787,39 @@
 
       function startLiveMode() {
         const targets = allIncidents.filter(
-          (i) => (i.severity === "RED" || i.severity === "ORANGE") && i.lat && i.lon,
+          (i) =>
+            (i.severity === "RED" || i.severity === "ORANGE") && i.lat && i.lon,
         );
         if (!targets.length) return;
         _liveModeIdx = 0;
         _liveModeInterval = setInterval(() => {
           const inc = targets[_liveModeIdx % targets.length];
-          map.flyTo([inc.lat, inc.lon], 9, { duration: 2.5, easeLinearity: 0.3 });
+          map.flyTo([inc.lat, inc.lon], 9, {
+            duration: 2.5,
+            easeLinearity: 0.3,
+          });
           _liveModeIdx++;
         }, 5000);
-        document.getElementById("alertsPanel").classList.add("live-mode-active");
+        document
+          .getElementById("alertsPanel")
+          .classList.add("live-mode-active");
       }
 
       function stopLiveMode() {
         clearInterval(_liveModeInterval);
         _liveModeInterval = null;
-        document.getElementById("alertsPanel").classList.remove("live-mode-active");
+        document
+          .getElementById("alertsPanel")
+          .classList.remove("live-mode-active");
         map.fitBounds(NIGERIA_BOUNDS);
       }
 
-      document.getElementById("liveModeBtn").addEventListener("click", function () {
-        this.classList.toggle("active");
-        this.classList.contains("active") ? startLiveMode() : stopLiveMode();
-      });
+      document
+        .getElementById("liveModeBtn")
+        .addEventListener("click", function () {
+          this.classList.toggle("active");
+          this.classList.contains("active") ? startLiveMode() : stopLiveMode();
+        });
 
       // ════════════════════════════════════════════════════════════════════════════
       // ALERT SUBSCRIPTIONS (localStorage + toast)
@@ -1695,8 +1827,16 @@
       const ALERT_KEY = "epailAlerts";
 
       function loadAlertPrefs() {
-        try { return JSON.parse(localStorage.getItem(ALERT_KEY)) || { keywords: [], states: [] }; }
-        catch { return { keywords: [], states: [] }; }
+        try {
+          return (
+            JSON.parse(localStorage.getItem(ALERT_KEY)) || {
+              keywords: [],
+              states: [],
+            }
+          );
+        } catch {
+          return { keywords: [], states: [] };
+        }
       }
       function saveAlertPrefs(prefs) {
         localStorage.setItem(ALERT_KEY, JSON.stringify(prefs));
@@ -1722,9 +1862,10 @@
 
         const kwLower = prefs.keywords.map((k) => k.toLowerCase());
         for (const inc of newOnes) {
-          const text = `${inc.title} ${inc.state || ""} ${inc.location || ""}`.toLowerCase();
+          const text =
+            `${inc.title} ${inc.state || ""} ${inc.location || ""}`.toLowerCase();
           const stateMatch = prefs.states.includes(inc.state);
-          const kwMatch    = kwLower.some((k) => k && text.includes(k));
+          const kwMatch = kwLower.some((k) => k && text.includes(k));
           if (stateMatch || kwMatch)
             showToast(
               `🚨 ${inc.severity} — ${inc.state || "Nigeria"}`,
@@ -1743,24 +1884,39 @@
 
       function openAlertModal() {
         const prefs = loadAlertPrefs();
-        document.getElementById("alertKeywords").value = prefs.keywords.join(", ");
+        document.getElementById("alertKeywords").value =
+          prefs.keywords.join(", ");
         alertGrid.querySelectorAll("input[type=checkbox]").forEach((cb) => {
           cb.checked = prefs.states.includes(cb.value);
         });
         document.getElementById("alertModalBackdrop").classList.add("open");
       }
 
-      document.getElementById("alertBellBtn").addEventListener("click", openAlertModal);
-      document.getElementById("alertCancelBtn").addEventListener("click", () =>
-        document.getElementById("alertModalBackdrop").classList.remove("open"),
-      );
+      document
+        .getElementById("alertBellBtn")
+        .addEventListener("click", openAlertModal);
+      document
+        .getElementById("alertCancelBtn")
+        .addEventListener("click", () =>
+          document
+            .getElementById("alertModalBackdrop")
+            .classList.remove("open"),
+        );
       document.getElementById("alertSaveBtn").addEventListener("click", () => {
-        const keywords = document.getElementById("alertKeywords").value
-          .split(",").map((k) => k.trim()).filter(Boolean);
-        const states = [...alertGrid.querySelectorAll("input:checked")].map((c) => c.value);
+        const keywords = document
+          .getElementById("alertKeywords")
+          .value.split(",")
+          .map((k) => k.trim())
+          .filter(Boolean);
+        const states = [...alertGrid.querySelectorAll("input:checked")].map(
+          (c) => c.value,
+        );
         saveAlertPrefs({ keywords, states });
         document.getElementById("alertModalBackdrop").classList.remove("open");
-        showToast("Alerts saved", `Watching ${keywords.length} keyword(s), ${states.length} state(s)`);
+        showToast(
+          "Alerts saved",
+          `Watching ${keywords.length} keyword(s), ${states.length} state(s)`,
+        );
       });
 
       // ════════════════════════════════════════════════════════════════════════════
@@ -1781,7 +1937,18 @@
         if (!filtered.length) return;
 
         const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-        const headers = ["Date", "Title", "Type", "Severity", "Location", "State", "Killed", "Abducted", "Source", "Source URL"];
+        const headers = [
+          "Date",
+          "Title",
+          "Type",
+          "Severity",
+          "Location",
+          "State",
+          "Killed",
+          "Abducted",
+          "Source",
+          "Source URL",
+        ];
         const rows = filtered.map((i) =>
           [
             i.date,
@@ -1809,7 +1976,9 @@
         URL.revokeObjectURL(url);
       }
 
-      document.getElementById("exportCsvBtn").addEventListener("click", exportCSV);
+      document
+        .getElementById("exportCsvBtn")
+        .addEventListener("click", exportCSV);
 
       // ════════════════════════════════════════════════════════════════════════════
       // INIT — fetch runtime config then start

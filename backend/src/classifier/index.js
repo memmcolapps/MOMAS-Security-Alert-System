@@ -16,7 +16,7 @@ const crypto = require("crypto");
 const { looksLikeSecurityIncident } = require("./prefilter");
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
+const GROQ_MODEL = process.env.GROQ_MODEL || "meta-llama/llama-4-scout-17b-16e-instruct";
 const GROQ_TIMEOUT_MS = parseInt(process.env.GROQ_TIMEOUT_MS || "30000", 10);
 const GROQ_MAX_RETRIES = parseInt(process.env.GROQ_MAX_RETRIES || "5", 10);
 // 15s interval ≈ 4 calls/min. With ~1.5K tokens/batch this stays under the
@@ -56,26 +56,41 @@ const NON_INCIDENT = Object.freeze({
   severity: "BLUE",
 });
 
-const SYSTEM_PROMPT = `You are a security analyst classifying news reports about events in Nigeria.
+const SYSTEM_PROMPT = `You are a security analyst. Your job: identify events that require a NEW security intervention.
 
-For each item, write a brief "reason" (≤12 words) explaining your decision FIRST — this forces you to reason before deciding. Then fill the remaining fields.
+CRITICAL: You must distinguish between the VIOLENCE itself and everything that follows it (rescues, arrests, trials, condemnations, investigations). Only the violence is a new incident.
 
-STEP 1 — IS IT A NEW, CONCRETE SECURITY INCIDENT?
-Set is_security_incident=false for anything that is NOT a fresh event happening now or very recently:
-- Political reactions/condemnations ("X condemns Y", "X calls for investigation", "X urges action")
-- Court/legal proceedings about PAST violence (bail, arraignment, trial, DPP decision, acquittal, sentencing) — deaths may be mentioned but the violence is not new
-- Retrospective or cumulative reports ("X killed since 2020", "toll rises this year", "families still waiting")
-- Feature/analysis/opinion journalism ("how the crisis unfolded", "what you need to know", "agonizing silence")
-- Road accidents, disease outbreaks, sports, weather/flooding without human cause, economics, appointments
+For each item, follow these steps IN ORDER:
 
-STEP 2 — TYPE (pick exactly one if is_security_incident=true):
+STEP 1 — WHAT IS THE NEW EVENT BEING REPORTED?
+Identify what actually happened that is new news. Be precise:
+- "Police rescue 15 abducted people" → the NEW event is the RESCUE, not the abduction
+- "President condemns bombing" → the NEW event is the STATEMENT, not the bombing
+- "Gunmen ambush convoy, kill 5" → the NEW event is the ATTACK itself
+- "Court arraigns suspect for past murder" → the NEW event is the COURT PROCEEDING
+
+STEP 2 — DOES THE NEW EVENT REQUIRE SECURITY INTERVENTION?
+Set is_security_incident=true ONLY if the new event itself is an active act of violence or imminent threat:
+- Active attacks, ambushes, bombings, kidnappings, massacres, armed assaults
+- Fresh displacement caused by violence happening now/recently
+
+Set is_security_incident=false for everything else:
+- Rescue/recovery operations ("police rescue hostages", "victims freed", "bodies recovered") — the violence already happened
+- Arrests or security operations referencing past crimes — the violence already happened
+- Political reactions/condemnations ("X condemns Y", "X calls for investigation")
+- Court/legal proceedings about past violence (bail, arraignment, trial, sentencing)
+- Retrospective/cumulative reports ("X killed since 2020", "toll rises this year")
+- Feature/analysis/opinion journalism
+- Road accidents, disease outbreaks, economics, appointments, weather
+
+STEP 3 — TYPE (pick exactly one if is_security_incident=true):
 bombing | kidnapping | massacre | banditry | herder_clash | terrorism | armed_attack | cult_violence | displacement
 
-STEP 3 — COUNTS (THIS incident only, not historical totals):
+STEP 4 — COUNTS (THIS incident only, not historical or cumulative):
 - fatalities: killed IN THIS EVENT (0 if unknown)
 - victims:    abducted/kidnapped/displaced IN THIS EVENT (0 if not applicable)
 
-STEP 4 — SEVERITY:
+STEP 5 — SEVERITY:
 RED    → ≥30 killed, OR bombing/massacre with deaths, OR ≥100 kidnapped/displaced
 ORANGE → ≥10 killed, OR ≥20 kidnapped, OR terrorism with deaths, OR ≥5 kidnapped
 YELLOW → ≥1 fatality or victim, OR bombing/terrorism/kidnapping with unconfirmed count
@@ -91,7 +106,9 @@ Input:
   {"id":2,"text":"Headline: Lagos frees policemen who killed six traders over land\\n\\nDescription: Lagos DPP releases four policemen accused in the Owode Onirin traders killing, citing self-defence. Activist Femi Falana contests the decision."},
   {"id":3,"text":"Headline: 1,000 Abducted Nigerians: Families Face Agonizing Silence\\n\\nDescription: More than a thousand Nigerians abducted by bandits since 2020 remain missing as families wait for news."},
   {"id":4,"text":"Headline: Bandits abduct 43 passengers on Abuja-Kaduna highway\\n\\nDescription: Armed men intercepted a luxury bus on Thursday, marching 43 passengers into the forest. A ransom demand has been made."},
-  {"id":5,"text":"Headline: IED blast kills 3 traders at Biu market, Borno\\n\\nDescription: A roadside bomb exploded near the Monday market in Biu, killing three civilians and wounding several others."}
+  {"id":5,"text":"Headline: IED blast kills 3 traders at Biu market, Borno\\n\\nDescription: A roadside bomb exploded near the Monday market in Biu, killing three civilians and wounding several others."},
+  {"id":6,"text":"Headline: Police rescue 15 abducted on Calabar – Oron waterway\\n\\nDescription: Police have rescued 15 persons who were abducted by gunmen along the Calabar-Oron waterway in Cross River State. The suspects fled into the forest after a shootout with security operatives."},
+  {"id":7,"text":"Headline: Army kills 12 bandits, rescues 30 hostages in Zamfara\\n\\nDescription: Troops of Operation Hadin Kai engaged armed bandits in their forest hideout, killing 12 and freeing 30 captives who were being held for ransom."}
 ]
 
 Output:
@@ -101,7 +118,9 @@ Output:
   {"id":2,"reason":"Court/DPP decision about a past killing, violence is not new","is_security_incident":false,"type":null,"fatalities":0,"victims":0,"severity":"BLUE"},
   {"id":3,"reason":"Retrospective feature on cumulative abductions since 2020","is_security_incident":false,"type":null,"fatalities":0,"victims":0,"severity":"BLUE"},
   {"id":4,"reason":"New kidnapping with confirmed victim count reported today","is_security_incident":true,"type":"kidnapping","fatalities":0,"victims":43,"severity":"RED"},
-  {"id":5,"reason":"New IED blast with confirmed civilian deaths at market","is_security_incident":true,"type":"bombing","fatalities":3,"victims":0,"severity":"ORANGE"}
+  {"id":5,"reason":"New IED blast with confirmed civilian deaths at market","is_security_incident":true,"type":"bombing","fatalities":3,"victims":0,"severity":"ORANGE"},
+  {"id":6,"reason":"Rescue operation — abduction already happened, new event is recovery","is_security_incident":false,"type":null,"fatalities":0,"victims":0,"severity":"BLUE"},
+  {"id":7,"reason":"Military operation to rescue hostages, violence already happened","is_security_incident":false,"type":null,"fatalities":0,"victims":0,"severity":"BLUE"}
 ]
 
 ---
