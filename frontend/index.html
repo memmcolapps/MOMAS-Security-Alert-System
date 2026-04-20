@@ -1021,10 +1021,10 @@
           <div class="stat-value" id="stat-killed">—</div>
           <div class="stat-label">Confirmed Killed</div>
         </div>
-        <div class="stat">
+        <!-- <div class="stat">
           <div class="stat-value" id="stat-abducted">—</div>
-          <!-- <div class="stat-label">Abducted</div> -->
-        </div>
+          <div class="stat-label">Abducted</div>
+        </div> -->
       </div>
 
       <div class="timeline">
@@ -1550,7 +1550,7 @@
           document.getElementById("stat-states").textContent  =
             new Set(allIncidents.map((i) => i.state).filter(Boolean)).size || "—";
           document.getElementById("stat-killed").textContent   = killedSum.toLocaleString();
-          document.getElementById("stat-abducted").textContent = abductedSum.toLocaleString();
+          // document.getElementById("stat-abducted").textContent = abductedSum.toLocaleString();
           // Header stats strip
           document.getElementById("hdr-red").textContent    = redCount || "0";
           document.getElementById("hdr-total").textContent  = totalCount.toLocaleString();
@@ -1571,7 +1571,7 @@
             "stat-red",
             "stat-states",
             "stat-killed",
-            "stat-abducted",
+            // "stat-abducted",
           ].forEach((id) => (document.getElementById(id).textContent = "—"));
         }
       }
