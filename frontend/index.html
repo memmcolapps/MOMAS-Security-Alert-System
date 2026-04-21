@@ -42,6 +42,7 @@
 
       :root {
         --red: #ff1a1a;
+        --amber: #ffb300;
         --orange: #ff6600;
         --yellow: #ffcc00;
         --blue: #3399ff;
@@ -165,8 +166,8 @@
         margin-right: 5px;
       }
       .sev-RED {
-        background: var(--red);
-        color: #fff;
+        background: var(--amber);
+        color: #000;
       }
       .sev-ORANGE {
         background: var(--orange);
@@ -844,26 +845,32 @@
       }
 
       /* ── POCSTARS device markers ── */
-      .device-marker {
-        width: 14px;
-        height: 14px;
+      .device-pin {
+        width: 26px;
+        height: 26px;
         border-radius: 50%;
         background: #00cc66;
-        border: 2px solid #0a0a0a;
-        box-shadow: 0 0 6px rgba(0, 204, 102, 0.7);
+        border: 2px solid rgba(0, 0, 0, 0.6);
+        box-shadow: 0 0 7px rgba(0, 204, 102, 0.75);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #000;
+        font-size: 11px;
       }
-      .device-marker.sos {
+      .device-pin.sos {
         background: #ff1a1a;
-        box-shadow: 0 0 10px rgba(255, 26, 26, 0.9);
+        border-color: rgba(0, 0, 0, 0.5);
+        box-shadow: 0 0 12px rgba(255, 26, 26, 0.9);
         animation: sos-pulse 0.9s ease-in-out infinite;
       }
       @keyframes sos-pulse {
-        0%, 100% { transform: scale(1); box-shadow: 0 0 10px rgba(255,26,26,0.9); }
-        50% { transform: scale(1.4); box-shadow: 0 0 18px rgba(255,26,26,1); }
+        0%, 100% { transform: scale(1);   box-shadow: 0 0 10px rgba(255, 26, 26, 0.9); }
+        50%       { transform: scale(1.3); box-shadow: 0 0 20px rgba(255, 26, 26, 1); }
       }
       .device-label {
         position: absolute;
-        top: 16px;
+        top: 28px;
         left: 50%;
         transform: translateX(-50%);
         background: rgba(0,0,0,0.85);
@@ -874,7 +881,7 @@
         border-radius: 3px;
         white-space: nowrap;
       }
-      .device-marker.sos + .device-label,
+      .device-pin.sos + .device-label,
       .device-label.sos { color: #ff1a1a; }
 
       /* ── Device history panel ── */
@@ -952,10 +959,10 @@
         animation: ripple 2s ease-out infinite;
       }
       .live-marker.sev-RED {
-        background: var(--red);
+        background: var(--amber);
       }
       .live-marker.sev-RED::before {
-        background: var(--red);
+        background: var(--amber);
       }
       .live-marker.sev-ORANGE {
         background: var(--orange);
@@ -996,7 +1003,7 @@
         width: 100%;
         height: 100%;
         border-radius: 50%;
-        background: var(--red);
+        background: var(--amber);
         animation: ripple 2s ease-out infinite 0.75s;
       }
     </style>
@@ -1046,10 +1053,25 @@
     <div class="legend" id="legend">
       <h3>Alert Key</h3>
       <div class="legend-section">
-        <div class="legend-section-title">Severity</div>
+        <div class="legend-section-title">Devices</div>
         <div class="legend-item">
-          <div class="legend-dot" style="background: var(--red)"></div>
-          <span class="sev-pill sev-RED">RED</span> Critical (30+ killed)
+          <div class="legend-dot" style="background:#00cc66;border-radius:50%;display:flex;align-items:center;justify-content:center;width:14px;height:14px">
+            <i class="fas fa-walkie-talkie" style="color:#000;font-size:7px"></i>
+          </div>
+          &nbsp;Online
+        </div>
+        <div class="legend-item">
+          <div class="legend-dot" style="background:#ff1a1a;border-radius:50%;display:flex;align-items:center;justify-content:center;width:14px;height:14px">
+            <i class="fas fa-walkie-talkie" style="color:#fff;font-size:7px"></i>
+          </div>
+          &nbsp;SOS alarm
+        </div>
+      </div>
+      <div class="legend-section">
+        <div class="legend-section-title">Incident severity</div>
+        <div class="legend-item">
+          <div class="legend-dot" style="background: var(--amber)"></div>
+          <span class="sev-pill sev-RED">AMBER</span> Critical (30+ killed)
         </div>
         <div class="legend-item">
           <div class="legend-dot" style="background: var(--orange)"></div>
@@ -1319,7 +1341,7 @@
           0.3: "#3399ff",
           0.55: "#ffcc00",
           0.75: "#ff6600",
-          1.0: "#ff1a1a",
+          1.0: "#ffb300",
         },
       });
 
@@ -1446,7 +1468,7 @@
       // MARKERS
       // ════════════════════════════════════════════════════════════════════════════
       const SEV_COLORS = {
-        RED: "#ff1a1a",
+        RED: "#ffb300",
         ORANGE: "#ff6600",
         YELLOW: "#ffcc00",
         BLUE: "#3399ff",
@@ -2118,19 +2140,32 @@
         const SOS_POLL_MS = 15_000;
 
         const deviceMarkers = new Map(); // uid -> { marker, data }
-        const activeSos = new Map(); // sosMsgId -> true (to avoid duplicate toasts)
+        const deviceRegistry = new Map(); // uid -> device row from DB
+        const activeSos = new Map();
         const processedSos = new Set();
         let dispatcherUid = "";
         let deviceUids = [];
 
         const fmtTime = (t) => (t ? new Date(t).toLocaleString() : "—");
 
-        function deviceIcon(sos) {
+        function typeIcon(deviceType) {
+          if (deviceType === "vehicle") return "fa-car";
+          if (deviceType === "fixed")   return "fa-map-pin";
+          return "fa-walkie-talkie"; // handheld + default
+        }
+
+        function deviceIcon(uid, sos) {
+          const reg = deviceRegistry.get(String(uid));
+          const fa  = typeIcon(reg?.device_type);
           return L.divIcon({
             className: "",
-            html: `<div style="position:relative"><div class="device-marker${sos ? " sos" : ""}"></div></div>`,
-            iconSize: [14, 14],
-            iconAnchor: [7, 7],
+            html: `<div style="position:relative">
+                     <div class="device-pin${sos ? " sos" : ""}">
+                       <i class="fas ${fa}"></i>
+                     </div>
+                   </div>`,
+            iconSize: [26, 26],
+            iconAnchor: [13, 13],
           });
         }
 
@@ -2159,11 +2194,11 @@
           const existing = deviceMarkers.get(d.Uid);
           if (existing) {
             existing.marker.setLatLng([d.Lat, d.Lng]);
-            existing.marker.setIcon(deviceIcon(sos));
+            existing.marker.setIcon(deviceIcon(d.Uid, sos));
             existing.marker.setPopupContent(buildPopup(d));
             existing.data = d;
           } else {
-            const marker = L.marker([d.Lat, d.Lng], { icon: deviceIcon(sos) })
+            const marker = L.marker([d.Lat, d.Lng], { icon: deviceIcon(d.Uid, sos) })
               .bindPopup(buildPopup(d))
               .addTo(deviceLayer);
             deviceMarkers.set(d.Uid, { marker, data: d });
@@ -2225,11 +2260,12 @@
                   const lon = parsed?.wgs84?.lon;
                   if (lat && lon && sos.sosFromId) {
                     updateDeviceMarker({
-                      Uid: sos.sosFromId,
+                      Uid: String(sos.sosFromId),
                       Lat: lat,
                       Lng: lon,
                       Rtime: sos.sosStamp,
                       processStatus: 1,
+                      Speed: 0,
                     });
                   }
                 } catch {}
@@ -2339,6 +2375,8 @@
           try {
             const { devices } = await fetch(`${API_BASE}/api/pocstars/devices`)
               .then((r) => r.json());
+            deviceRegistry.clear();
+            (devices || []).forEach((d) => deviceRegistry.set(d.device_id, d));
             deviceUids = (devices || [])
               .filter((d) => d.active)
               .map((d) => d.device_id);
