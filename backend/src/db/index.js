@@ -57,6 +57,24 @@ async function init() {
     CREATE INDEX IF NOT EXISTS idx_incidents_type     ON incidents(type);
     CREATE INDEX IF NOT EXISTS idx_incidents_severity ON incidents(severity);
 
+    CREATE TABLE IF NOT EXISTS sos_alerts (
+      id           SERIAL PRIMARY KEY,
+      sos_msg_id   INTEGER UNIQUE NOT NULL,
+      device_id    TEXT NOT NULL,
+      device_name  TEXT,
+      triggered_at TIMESTAMPTZ NOT NULL,
+      location_lat REAL,
+      location_lon REAL,
+      location_raw TEXT,
+      status       INTEGER DEFAULT 0,
+      resolved_at  TIMESTAMPTZ,
+      created_at   TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sos_status      ON sos_alerts(status);
+    CREATE INDEX IF NOT EXISTS idx_sos_triggered   ON sos_alerts(triggered_at);
+    CREATE INDEX IF NOT EXISTS idx_sos_device      ON sos_alerts(device_id);
+
     CREATE TABLE IF NOT EXISTS devices (
       device_id   TEXT PRIMARY KEY,
       name        TEXT,
@@ -307,6 +325,45 @@ async function getById(id) {
   return rows[0] ?? null;
 }
 
+// ── SOS alerts ────────────────────────────────────────────────────────────────
+
+async function insertSosAlert({ sos_msg_id, device_id, device_name, triggered_at, location_lat, location_lon, location_raw }) {
+  const { rows } = await pool.query(
+    `INSERT INTO sos_alerts (sos_msg_id, device_id, device_name, triggered_at, location_lat, location_lon, location_raw)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (sos_msg_id) DO NOTHING
+     RETURNING *`,
+    [sos_msg_id, device_id, device_name, triggered_at, location_lat ?? null, location_lon ?? null, location_raw ?? null],
+  );
+  return rows[0] ?? null; // null = already existed (duplicate)
+}
+
+async function resolveSosAlert(sos_msg_id) {
+  const { rows } = await pool.query(
+    `UPDATE sos_alerts SET status=2, resolved_at=NOW()
+     WHERE sos_msg_id=$1 AND status < 2
+     RETURNING *`,
+    [sos_msg_id],
+  );
+  return rows[0] ?? null;
+}
+
+async function listSosAlerts() {
+  // Show: unresolved (any date) + today's resolved
+  const { rows } = await pool.query(`
+    SELECT * FROM sos_alerts
+    WHERE status < 2
+       OR triggered_at::date = CURRENT_DATE
+    ORDER BY triggered_at DESC
+  `);
+  return rows;
+}
+
+async function knownSosMsgIds() {
+  const { rows } = await pool.query(`SELECT sos_msg_id, status FROM sos_alerts`);
+  return new Map(rows.map((r) => [r.sos_msg_id, r.status]));
+}
+
 // ── Device registry ───────────────────────────────────────────────────────────
 
 async function listDevices() {
@@ -364,4 +421,8 @@ module.exports = {
   listDevices,
   upsertDevice,
   deleteDevice,
+  insertSosAlert,
+  resolveSosAlert,
+  listSosAlerts,
+  knownSosMsgIds,
 };

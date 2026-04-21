@@ -893,6 +893,132 @@
       .device-pin.sos + .device-label,
       .device-label.sos { color: #ff1a1a; }
 
+      /* ── SOS alert panel ── */
+      .sos-panel {
+        position: absolute;
+        top: 14px;
+        right: 14px;
+        z-index: 1001;
+        width: 300px;
+        background: var(--glass);
+        border: 1px solid rgba(255, 26, 26, 0.45);
+        border-radius: 8px;
+        backdrop-filter: blur(12px);
+        display: flex;
+        flex-direction: column;
+        max-height: 420px;
+      }
+      .sos-panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+        flex-shrink: 0;
+      }
+      .sos-panel-title {
+        font-size: 11px;
+        font-weight: 700;
+        color: #ff1a1a;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .sos-count-badge {
+        background: #ff1a1a;
+        color: #fff;
+        font-size: 9px;
+        font-weight: 700;
+        padding: 1px 5px;
+        border-radius: 8px;
+      }
+      .sos-minimize-btn {
+        background: none;
+        border: none;
+        color: #555;
+        cursor: pointer;
+        font-size: 11px;
+        padding: 0;
+        line-height: 1;
+      }
+      .sos-minimize-btn:hover { color: #ccc; }
+      .sos-list {
+        overflow-y: auto;
+        flex: 1;
+      }
+      .sos-list::-webkit-scrollbar { width: 3px; }
+      .sos-list::-webkit-scrollbar-thumb { background: rgba(255,26,26,0.3); border-radius: 2px; }
+      .sos-item {
+        padding: 9px 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.04);
+      }
+      .sos-item.resolved {
+        opacity: 0.45;
+      }
+      .sos-item-row1 {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 3px;
+      }
+      .sos-device-name {
+        font-size: 11px;
+        font-weight: 700;
+        color: #ff1a1a;
+      }
+      .sos-item.resolved .sos-device-name { color: #888; }
+      .sos-time {
+        font-size: 9px;
+        color: #555;
+      }
+      .sos-location {
+        font-size: 10px;
+        color: #888;
+        margin-bottom: 5px;
+      }
+      .sos-item-row2 {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .sos-resolve-btn {
+        font-size: 9px;
+        font-weight: 700;
+        padding: 3px 8px;
+        border-radius: 3px;
+        border: 1px solid rgba(255,26,26,0.5);
+        background: rgba(255,26,26,0.1);
+        color: #ff4444;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .sos-resolve-btn:hover {
+        background: rgba(255,26,26,0.25);
+      }
+      .sos-zoom-btn {
+        font-size: 9px;
+        padding: 3px 8px;
+        border-radius: 3px;
+        border: 1px solid rgba(255,255,255,0.1);
+        background: none;
+        color: #666;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .sos-zoom-btn:hover { color: #ccc; border-color: rgba(255,255,255,0.3); }
+      .sos-resolved-tag {
+        font-size: 9px;
+        color: #444;
+        font-style: italic;
+      }
+      .sos-empty {
+        text-align: center;
+        padding: 24px;
+        color: #444;
+        font-size: 11px;
+      }
+      .sos-panel.hidden { display: none; }
+
       /* ── Device history panel ── */
       .device-panel {
         position: absolute;
@@ -1197,6 +1323,19 @@
     <button class="panel-toggle" id="panelToggle">
       <i class="fas fa-chevron-right" id="toggleIcon"></i>
     </button>
+
+    <!-- ── SOS alert panel ── -->
+    <div class="sos-panel hidden" id="sosPanel">
+      <div class="sos-panel-header">
+        <div class="sos-panel-title">
+          <i class="fas fa-circle-exclamation"></i>
+          SOS Alerts
+          <span class="sos-count-badge" id="sosCountBadge">0</span>
+        </div>
+        <button class="sos-minimize-btn" id="sosPanelMinBtn" title="Minimise">▾</button>
+      </div>
+      <div class="sos-list" id="sosList"></div>
+    </div>
 
     <!-- ── Device history panel ── -->
     <div class="device-panel" id="devicePanel">
@@ -2225,8 +2364,6 @@
 
         const deviceMarkers = new Map(); // uid -> { marker, data }
         const deviceRegistry = new Map(); // uid -> device row from DB
-        const activeSos = new Map();
-        const processedSos = new Set();
         let dispatcherUid = "";
         let deviceUids = [];
 
@@ -2315,6 +2452,94 @@
           updateDeviceStats();
         }
 
+        // ─── SOS panel ────────────────────────────────────────────────────────
+        const sosPanel    = document.getElementById("sosPanel");
+        const sosList     = document.getElementById("sosList");
+        const sosCountBadge = document.getElementById("sosCountBadge");
+        let sosAlerts = []; // local cache from /sos/log
+
+        function fmtSosTime(ts) {
+          if (!ts) return "—";
+          const d = new Date(ts);
+          return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" })
+            + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        }
+
+        function renderSosPanel() {
+          const active = sosAlerts.filter((a) => a.status < 2);
+          sosCountBadge.textContent = active.length;
+          sosPanel.classList.toggle("hidden", sosAlerts.length === 0);
+
+          if (!sosAlerts.length) { sosList.innerHTML = ""; return; }
+
+          sosList.innerHTML = sosAlerts.map((a) => {
+            const resolved = a.status === 2;
+            const hasCoords = a.location_lat && a.location_lon;
+            const locStr = hasCoords
+              ? `${parseFloat(a.location_lat).toFixed(4)}, ${parseFloat(a.location_lon).toFixed(4)}`
+              : "Location unknown";
+            return `<div class="sos-item${resolved ? " resolved" : ""}" data-id="${a.sos_msg_id}">
+              <div class="sos-item-row1">
+                <span class="sos-device-name">${a.device_name || `Device ${a.device_id}`}</span>
+                <span class="sos-time">${fmtSosTime(a.triggered_at)}</span>
+              </div>
+              <div class="sos-location"><i class="fas fa-location-dot" style="font-size:8px;margin-right:3px"></i>${locStr}</div>
+              <div class="sos-item-row2">
+                ${resolved
+                  ? `<span class="sos-resolved-tag">Resolved ${fmtSosTime(a.resolved_at)}</span>`
+                  : `<button class="sos-resolve-btn" onclick="window.__resolveSos(${a.sos_msg_id})">Resolve</button>`
+                }
+                ${hasCoords
+                  ? `<button class="sos-zoom-btn" onclick="map.flyTo([${a.location_lat},${a.location_lon}],16,{duration:1.5})">
+                       <i class="fas fa-crosshairs"></i> Zoom
+                     </button>`
+                  : ""}
+              </div>
+            </div>`;
+          }).join("");
+        }
+
+        window.__resolveSos = async function (sosMsgId) {
+          try {
+            const r = await fetch(`${API_BASE}/api/pocstars/sos/${sosMsgId}/resolve`, { method: "POST" });
+            if (!r.ok) throw new Error((await r.json()).error);
+            // Update local cache
+            const a = sosAlerts.find((x) => x.sos_msg_id === sosMsgId);
+            if (a) { a.status = 2; a.resolved_at = new Date().toISOString(); }
+            renderSosPanel();
+            // Revert device marker to normal if no other active SOS for same device
+            const deviceId = a?.device_id;
+            const stillActive = sosAlerts.some((x) => x.device_id === deviceId && x.status < 2);
+            if (!stillActive) {
+              const entry = deviceMarkers.get(deviceId);
+              if (entry) {
+                entry.marker.setIcon(deviceIcon(deviceId, false));
+                entry.data.processStatus = 0;
+                entry.marker.setPopupContent(buildPopup(entry.data));
+              }
+            }
+          } catch (err) {
+            showToast("Resolve failed", err.message);
+          }
+        };
+
+        // Minimise toggle
+        document.getElementById("sosPanelMinBtn").addEventListener("click", function () {
+          const collapsed = sosList.style.display === "none";
+          sosList.style.display = collapsed ? "" : "none";
+          this.textContent = collapsed ? "▾" : "▴";
+        });
+
+        async function loadSosLog() {
+          try {
+            const r = await fetch(`${API_BASE}/api/pocstars/sos/log`);
+            if (!r.ok) return;
+            const { alerts } = await r.json();
+            sosAlerts = alerts || [];
+            renderSosPanel();
+          } catch {}
+        }
+
         async function fetchSos() {
           if (!dispatcherUid) return;
           try {
@@ -2323,55 +2548,47 @@
             );
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
             const data = await r.json();
-            const list = data.data?.rows || data.data?.list || [];
-            const currentIds = new Set();
+            const list = data.data?.rows || [];
+
+            // Reload our DB log to get up-to-date state
+            await loadSosLog();
+
+            // Find genuinely new alerts (not yet in our local cache)
+            const knownIds = new Set(sosAlerts.map((a) => a.sos_msg_id));
+
             for (const sos of list) {
               if (!deviceUids.includes(String(sos.sosFromId))) continue;
-              currentIds.add(sos.sosMsgId);
-              if (sos.sosStatus === 2) continue;
-              if (!activeSos.has(sos.sosMsgId)) {
-                activeSos.set(sos.sosMsgId, sos);
+
+              // Check if we've already resolved this locally
+              const existing = sosAlerts.find((a) => a.sos_msg_id === sos.sosMsgId);
+              if (existing?.status === 2) continue;
+
+              let lat = null, lon = null, locationLabel = "unknown location";
+              try {
+                const parsed = typeof sos.sosLocationAt === "string"
+                  ? JSON.parse(sos.sosLocationAt) : sos.sosLocationAt;
+                lat = parsed?.wgs84?.lat;
+                lon = parsed?.wgs84?.lon;
+                if (lat && lon) locationLabel = `coordinates ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+              } catch {}
+
+              // Only alert (toast/voice/zoom) for brand-new IDs
+              if (!knownIds.has(sos.sosMsgId)) {
                 const deviceName = sos.sosSendName || `Device ${sos.sosFromId}`;
-                let locationLabel = "unknown location";
-                let lat = null, lon = null;
-                try {
-                  const parsed =
-                    typeof sos.sosLocationAt === "string"
-                      ? JSON.parse(sos.sosLocationAt)
-                      : sos.sosLocationAt;
-                  lat = parsed?.wgs84?.lat;
-                  lon = parsed?.wgs84?.lon;
-                  if (lat && lon) {
-                    locationLabel = `coordinates ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
-                  }
-                } catch {}
-
-                showToast(
-                  `🚨 SOS — ${deviceName}`,
-                  `Triggered at ${fmtTime(sos.sosStamp)}`,
-                );
-
-                // Voice + beep alert
-                sosAlert(
-                  `SOS alert! SOS alert! ${deviceName} has triggered an SOS alarm at ${locationLabel}. Immediate attention required.`
-                );
-
-                if (lat && lon && sos.sosFromId) {
-                  updateDeviceMarker({
-                    Uid: String(sos.sosFromId),
-                    Lat: lat,
-                    Lng: lon,
-                    Rtime: sos.sosStamp,
-                    processStatus: 1,
-                    Speed: 0,
-                  });
-                  map.flyTo([lat, lon], 16, { duration: 2.5, easeLinearity: 0.3 });
-                }
+                showToast(`🚨 SOS — ${deviceName}`, `Triggered at ${fmtTime(sos.sosStamp)}`);
+                sosAlert(`SOS alert! SOS alert! ${deviceName} has triggered an SOS alarm at ${locationLabel}. Immediate attention required.`);
+                if (lat && lon) map.flyTo([lat, lon], 16, { duration: 2.5, easeLinearity: 0.3 });
               }
-            }
-            // Clear SOS state from markers where the alert no longer appears
-            for (const [id] of activeSos) {
-              if (!currentIds.has(id)) activeSos.delete(id);
+
+              if (lat && lon) {
+                updateDeviceMarker({
+                  Uid: String(sos.sosFromId),
+                  Lat: lat, Lng: lon,
+                  Rtime: sos.sosStamp,
+                  processStatus: 1,
+                  Speed: 0,
+                });
+              }
             }
           } catch (err) {
             console.warn("[POCSTARS] sos failed:", err.message);
@@ -2495,6 +2712,7 @@
             console.warn("[POCSTARS] config failed:", err.message);
           }
           await loadDeviceUids();
+          await loadSosLog();
           fetchLocations();
           fetchSos();
           setInterval(fetchLocations, LOC_POLL_MS);

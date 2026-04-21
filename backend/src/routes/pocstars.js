@@ -53,6 +53,29 @@ router.delete("/devices/:device_id", async (req, res) => {
   }
 });
 
+// ── SOS log ───────────────────────────────────────────────────────────────────
+
+router.get("/sos/log", async (_req, res) => {
+  try {
+    const alerts = await db.listSosAlerts();
+    res.json({ alerts });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/sos/:sosMsgId/resolve", async (req, res) => {
+  const sosMsgId = parseInt(req.params.sosMsgId, 10);
+  if (!sosMsgId) return res.status(400).json({ error: "invalid sosMsgId" });
+  try {
+    const alert = await db.resolveSosAlert(sosMsgId);
+    if (!alert) return res.status(404).json({ error: "alert not found or already resolved" });
+    res.json({ alert });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── GPS proxy ─────────────────────────────────────────────────────────────────
 
 router.get("/config", async (_req, res) => {
@@ -124,6 +147,28 @@ router.get("/sos", async (req, res) => {
   if (req.query.cgId) params.cgId = req.query.cgId;
   try {
     const { data } = await axios.get(`${SOS_BASE}/sos/mg/records`, { params, timeout: 8000 });
+
+    // Persist any new alerts we haven't seen before
+    const rows = data?.data?.rows || [];
+    for (const s of rows) {
+      let lat = null, lon = null, locationRaw = null;
+      try {
+        const loc = typeof s.sosLocationAt === "string" ? JSON.parse(s.sosLocationAt) : s.sosLocationAt;
+        lat = loc?.wgs84?.lat ?? null;
+        lon = loc?.wgs84?.lon ?? null;
+        locationRaw = s.sosLocationAt;
+      } catch {}
+      await db.insertSosAlert({
+        sos_msg_id:   s.sosMsgId,
+        device_id:    String(s.sosFromId),
+        device_name:  s.sosSendName || null,
+        triggered_at: new Date(s.sosStamp),
+        location_lat: lat,
+        location_lon: lon,
+        location_raw: locationRaw,
+      });
+    }
+
     res.json(data);
   } catch (err) {
     res.status(err.response?.status || 502).json({
