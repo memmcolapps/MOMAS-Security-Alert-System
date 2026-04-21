@@ -44,7 +44,7 @@
         --red: #ff1a1a;
         --amber: #ffb300;
         --orange: #ff6600;
-        --yellow: #ffcc00;
+        --yellow: #00bbaa;
         --blue: #3399ff;
         --glass: rgba(0, 0, 0, 0.88);
         --border: rgba(255, 68, 68, 0.4);
@@ -175,7 +175,7 @@
       }
       .sev-YELLOW {
         background: var(--yellow);
-        color: #000;
+        color: #fff;
       }
       .sev-BLUE {
         background: var(--blue);
@@ -1088,7 +1088,7 @@
         </div>
         <div class="legend-item">
           <div class="legend-dot" style="background: var(--yellow)"></div>
-          <span class="sev-pill sev-YELLOW">YELLOW</span> Moderate (1–9)
+          <span class="sev-pill sev-YELLOW">TEAL</span> Moderate (1–9)
         </div>
         <div class="legend-item">
           <div class="legend-dot" style="background: var(--blue)"></div>
@@ -1154,7 +1154,7 @@
             <option value="">All Severities</option>
             <option value="RED">🔴 RED — Critical</option>
             <option value="ORANGE">🟠 ORANGE — Serious</option>
-            <option value="YELLOW">🟡 YELLOW — Moderate</option>
+            <option value="YELLOW">🩵 TEAL — Moderate</option>
             <option value="BLUE">🔵 BLUE — Low</option>
           </select>
           <select class="filter-select" id="filterType">
@@ -1346,7 +1346,7 @@
         maxZoom: 18,
         gradient: {
           0.3: "#3399ff",
-          0.55: "#ffcc00",
+          0.55: "#00bbaa",
           0.75: "#ff6600",
           1.0: "#ffb300",
         },
@@ -1477,7 +1477,7 @@
       const SEV_COLORS = {
         RED: "#ffb300",
         ORANGE: "#ff6600",
-        YELLOW: "#ffcc00",
+        YELLOW: "#00bbaa",
         BLUE: "#3399ff",
       };
       const TYPE_ICONS = {
