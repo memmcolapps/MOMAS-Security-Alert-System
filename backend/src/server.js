@@ -90,7 +90,7 @@ db.init()
     app.listen(PORT, () => {
       console.log(`
 ╔══════════════════════════════════════════════╗
-║   Epail Security Alert System — Backend    ║
+║   EPAIL Security Alert System — Backend    ║
 ╠══════════════════════════════════════════════╣
 ║  Server  : http://localhost:${PORT}             ║
 ║  Frontend: http://localhost:${PORT}              ║

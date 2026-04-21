@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Epail Security Alert System</title>
+    <title>EPAIL Security Alert System</title>
     <link
       rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -491,7 +491,9 @@
       .stats-bar.minimised {
         padding-bottom: 8px;
       }
-      #statsMinimizeBtn:hover { color: #ccc; }
+      #statsMinimizeBtn:hover {
+        color: #ccc;
+      }
 
       .stats-top {
         display: flex;
@@ -874,15 +876,22 @@
         animation: sos-pulse 0.9s ease-in-out infinite;
       }
       @keyframes sos-pulse {
-        0%, 100% { transform: scale(1);   box-shadow: 0 0 10px rgba(255, 26, 26, 0.9); }
-        50%       { transform: scale(1.3); box-shadow: 0 0 20px rgba(255, 26, 26, 1); }
+        0%,
+        100% {
+          transform: scale(1);
+          box-shadow: 0 0 10px rgba(255, 26, 26, 0.9);
+        }
+        50% {
+          transform: scale(1.3);
+          box-shadow: 0 0 20px rgba(255, 26, 26, 1);
+        }
       }
       .device-label {
         position: absolute;
         top: 28px;
         left: 50%;
         transform: translateX(-50%);
-        background: rgba(0,0,0,0.85);
+        background: rgba(0, 0, 0, 0.85);
         color: #00cc66;
         font-size: 9px;
         font-weight: 700;
@@ -891,7 +900,9 @@
         white-space: nowrap;
       }
       .device-pin.sos + .device-label,
-      .device-label.sos { color: #ff1a1a; }
+      .device-label.sos {
+        color: #ff1a1a;
+      }
 
       /* ── SOS alert panel ── */
       .sos-panel {
@@ -913,7 +924,7 @@
         align-items: center;
         justify-content: space-between;
         padding: 8px 12px;
-        border-bottom: 1px solid rgba(255,255,255,0.06);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
         flex-shrink: 0;
       }
       .sos-panel-title {
@@ -941,16 +952,23 @@
         padding: 0;
         line-height: 1;
       }
-      .sos-minimize-btn:hover { color: #ccc; }
+      .sos-minimize-btn:hover {
+        color: #ccc;
+      }
       .sos-list {
         overflow-y: auto;
         flex: 1;
       }
-      .sos-list::-webkit-scrollbar { width: 3px; }
-      .sos-list::-webkit-scrollbar-thumb { background: rgba(255,26,26,0.3); border-radius: 2px; }
+      .sos-list::-webkit-scrollbar {
+        width: 3px;
+      }
+      .sos-list::-webkit-scrollbar-thumb {
+        background: rgba(255, 26, 26, 0.3);
+        border-radius: 2px;
+      }
       .sos-item {
         padding: 9px 12px;
-        border-bottom: 1px solid rgba(255,255,255,0.04);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
       }
       .sos-item.resolved {
         opacity: 0.45;
@@ -966,7 +984,9 @@
         font-weight: 700;
         color: #ff1a1a;
       }
-      .sos-item.resolved .sos-device-name { color: #888; }
+      .sos-item.resolved .sos-device-name {
+        color: #888;
+      }
       .sos-time {
         font-size: 9px;
         color: #555;
@@ -986,26 +1006,29 @@
         font-weight: 700;
         padding: 3px 8px;
         border-radius: 3px;
-        border: 1px solid rgba(255,26,26,0.5);
-        background: rgba(255,26,26,0.1);
+        border: 1px solid rgba(255, 26, 26, 0.5);
+        background: rgba(255, 26, 26, 0.1);
         color: #ff4444;
         cursor: pointer;
         transition: all 0.2s;
       }
       .sos-resolve-btn:hover {
-        background: rgba(255,26,26,0.25);
+        background: rgba(255, 26, 26, 0.25);
       }
       .sos-zoom-btn {
         font-size: 9px;
         padding: 3px 8px;
         border-radius: 3px;
-        border: 1px solid rgba(255,255,255,0.1);
+        border: 1px solid rgba(255, 255, 255, 0.1);
         background: none;
         color: #666;
         cursor: pointer;
         transition: all 0.2s;
       }
-      .sos-zoom-btn:hover { color: #ccc; border-color: rgba(255,255,255,0.3); }
+      .sos-zoom-btn:hover {
+        color: #ccc;
+        border-color: rgba(255, 255, 255, 0.3);
+      }
       .sos-resolved-tag {
         font-size: 9px;
         color: #444;
@@ -1017,7 +1040,9 @@
         color: #444;
         font-size: 11px;
       }
-      .sos-panel.hidden { display: none; }
+      .sos-panel.hidden {
+        display: none;
+      }
 
       /* ── Device history panel ── */
       .device-panel {
@@ -1033,7 +1058,9 @@
         backdrop-filter: blur(12px);
         display: none;
       }
-      .device-panel.open { display: block; }
+      .device-panel.open {
+        display: block;
+      }
       .device-panel h4 {
         font-size: 12px;
         color: #00cc66;
@@ -1048,8 +1075,8 @@
       }
       .device-panel input[type="datetime-local"] {
         width: 100%;
-        background: rgba(255,255,255,0.05);
-        border: 1px solid rgba(255,255,255,0.1);
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
         color: #ddd;
         font-size: 10px;
         padding: 4px 6px;
@@ -1074,7 +1101,7 @@
         color: #000;
       }
       .btn-close-device {
-        background: rgba(255,255,255,0.08);
+        background: rgba(255, 255, 255, 0.08);
         color: #aaa;
       }
 
@@ -1146,7 +1173,7 @@
   <body>
     <!-- ── Header ── -->
     <div class="header">
-      <h1>Epail Security Alert System</h1>
+      <h1>EPAIL Security Alert System</h1>
       <p>
         Live intelligence feed — RSS sources, HAPI conflict data &amp; ReliefWeb
         reports
@@ -1190,14 +1217,42 @@
       <div class="legend-section">
         <div class="legend-section-title">Devices</div>
         <div class="legend-item">
-          <div class="legend-dot" style="background:#00cc66;border-radius:50%;display:flex;align-items:center;justify-content:center;width:14px;height:14px">
-            <i class="fas fa-walkie-talkie" style="color:#000;font-size:7px"></i>
+          <div
+            class="legend-dot"
+            style="
+              background: #00cc66;
+              border-radius: 50%;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              width: 14px;
+              height: 14px;
+            "
+          >
+            <i
+              class="fas fa-walkie-talkie"
+              style="color: #000; font-size: 7px"
+            ></i>
           </div>
           &nbsp;Online
         </div>
         <div class="legend-item">
-          <div class="legend-dot" style="background:#ff1a1a;border-radius:50%;display:flex;align-items:center;justify-content:center;width:14px;height:14px">
-            <i class="fas fa-walkie-talkie" style="color:#fff;font-size:7px"></i>
+          <div
+            class="legend-dot"
+            style="
+              background: #ff1a1a;
+              border-radius: 50%;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              width: 14px;
+              height: 14px;
+            "
+          >
+            <i
+              class="fas fa-walkie-talkie"
+              style="color: #fff; font-size: 7px"
+            ></i>
           </div>
           &nbsp;SOS alarm
         </div>
@@ -1332,15 +1387,22 @@
           SOS Alerts
           <span class="sos-count-badge" id="sosCountBadge">0</span>
         </div>
-        <button class="sos-minimize-btn" id="sosPanelMinBtn" title="Minimise">▾</button>
+        <button class="sos-minimize-btn" id="sosPanelMinBtn" title="Minimise">
+          ▾
+        </button>
       </div>
       <div class="sos-list" id="sosList"></div>
     </div>
 
     <!-- ── Device history panel ── -->
     <div class="device-panel" id="devicePanel">
-      <h4><i class="fas fa-walkie-talkie"></i> <span id="deviceName">Device</span></h4>
-      <div id="deviceDetails" style="font-size:10px;color:#aaa;line-height:1.5"></div>
+      <h4>
+        <i class="fas fa-walkie-talkie"></i> <span id="deviceName">Device</span>
+      </h4>
+      <div
+        id="deviceDetails"
+        style="font-size: 10px; color: #aaa; line-height: 1.5"
+      ></div>
       <label>From</label>
       <input type="datetime-local" id="histFrom" />
       <label>To (same day, max 24h)</label>
@@ -1354,18 +1416,40 @@
     <!-- ── Stats + Timeline bar ── -->
     <div class="stats-bar" id="statsBar">
       <div class="stats-top">
-        <span class="stats-title">Epail Security Alert System</span>
+        <span class="stats-title">EPAIL Security Alert System</span>
         <span class="stats-date-range" id="statsDateRange"></span>
-        <button id="statsMinimizeBtn" style="background:none;border:none;color:#555;cursor:pointer;font-size:11px;padding:0 0 0 10px;line-height:1" title="Minimise">▾</button>
+        <button
+          id="statsMinimizeBtn"
+          style="
+            background: none;
+            border: none;
+            color: #555;
+            cursor: pointer;
+            font-size: 11px;
+            padding: 0 0 0 10px;
+            line-height: 1;
+          "
+          title="Minimise"
+        >
+          ▾
+        </button>
       </div>
 
       <div class="stats-grid">
         <div class="stat">
-          <div class="stat-value" style="color: #00cc66" id="stat-devices-total">—</div>
+          <div
+            class="stat-value"
+            style="color: #00cc66"
+            id="stat-devices-total"
+          >
+            —
+          </div>
           <div class="stat-label">Total Devices</div>
         </div>
         <div class="stat">
-          <div class="stat-value" style="color: #00cc66" id="stat-devices-live">—</div>
+          <div class="stat-value" style="color: #00cc66" id="stat-devices-live">
+            —
+          </div>
           <div class="stat-label">Reporting</div>
         </div>
         <div class="stat">
@@ -1406,7 +1490,9 @@
       <div class="layer-controls">
         <button class="toggle-btn active" data-layer="live">Live Alerts</button>
         <button class="toggle-btn" data-layer="heat">Heatmap</button>
-        <button class="toggle-btn active" data-layer="devices">📻 Devices</button>
+        <button class="toggle-btn active" data-layer="devices">
+          📻 Devices
+        </button>
         <button class="toggle-btn" id="liveModeBtn">&#127919; Live Mode</button>
         <button class="toggle-btn" id="exportCsvBtn">
           <i class="fas fa-download"></i> Export CSV
@@ -1965,12 +2051,9 @@
       <span>Backend offline</span>
       <span style="font-size:10px;color:#333">cd backend &amp;&amp; npm start</span>
     </div>`;
-          [
-            "stat-live",
-            "stat-states",
-            "stat-killed",
-            "stat-abducted",
-          ].forEach((id) => (document.getElementById(id).textContent = "—"));
+          ["stat-live", "stat-states", "stat-killed", "stat-abducted"].forEach(
+            (id) => (document.getElementById(id).textContent = "—"),
+          );
         }
       }
 
@@ -2108,7 +2191,7 @@
       // ════════════════════════════════════════════════════════════════════════════
       // ALERT SUBSCRIPTIONS (localStorage + toast)
       // ════════════════════════════════════════════════════════════════════════════
-      const ALERT_KEY = "epailAlerts";
+      const ALERT_KEY = "EPAILAlerts";
 
       function loadAlertPrefs() {
         try {
@@ -2253,7 +2336,7 @@
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `epail-incidents-${dateFrom || "all"}-to-${dateTo || "all"}.csv`;
+        a.download = `EPAIL-incidents-${dateFrom || "all"}-to-${dateTo || "all"}.csv`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -2290,20 +2373,21 @@
       let _speechReady = false;
 
       function _getAudioCtx() {
-        if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (!_audioCtx)
+          _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         if (_audioCtx.state === "suspended") _audioCtx.resume();
         return _audioCtx;
       }
 
       function _playBeep() {
         try {
-          const ctx  = _getAudioCtx();
+          const ctx = _getAudioCtx();
           const gain = ctx.createGain();
           gain.gain.setValueAtTime(0.8, ctx.currentTime);
           gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8);
           gain.connect(ctx.destination);
           // Three sharp pulses
-          [0, 0.35, 0.70].forEach((offset) => {
+          [0, 0.35, 0.7].forEach((offset) => {
             const osc = ctx.createOscillator();
             osc.type = "square";
             osc.frequency.setValueAtTime(880, ctx.currentTime + offset);
@@ -2311,15 +2395,17 @@
             osc.start(ctx.currentTime + offset);
             osc.stop(ctx.currentTime + offset + 0.25);
           });
-        } catch (e) { console.warn("[SOS beep]", e.message); }
+        } catch (e) {
+          console.warn("[SOS beep]", e.message);
+        }
       }
 
       function _speak(text) {
         if (!("speechSynthesis" in window)) return;
         window.speechSynthesis.cancel();
-        const utter  = new SpeechSynthesisUtterance(text);
-        utter.rate   = 0.95;
-        utter.pitch  = 1;
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.rate = 0.95;
+        utter.pitch = 1;
         utter.volume = 1;
         // Ensure voices are loaded
         const voices = window.speechSynthesis.getVoices();
@@ -2340,16 +2426,20 @@
       }
 
       // Prime AudioContext + speech on first user gesture (browser autoplay policy)
-      document.addEventListener("click", function _prime() {
-        document.removeEventListener("click", _prime);
-        _getAudioCtx();
-        if ("speechSynthesis" in window) {
-          const silent = new SpeechSynthesisUtterance(" ");
-          silent.volume = 0;
-          window.speechSynthesis.speak(silent);
-        }
-        _speechReady = true;
-      }, { once: true });
+      document.addEventListener(
+        "click",
+        function _prime() {
+          document.removeEventListener("click", _prime);
+          _getAudioCtx();
+          if ("speechSynthesis" in window) {
+            const silent = new SpeechSynthesisUtterance(" ");
+            silent.volume = 0;
+            window.speechSynthesis.speak(silent);
+          }
+          _speechReady = true;
+        },
+        { once: true },
+      );
 
       // ════════════════════════════════════════════════════════════════════════════
       // POCSTARS DEVICE TRACKING
@@ -2364,7 +2454,7 @@
 
         const deviceMarkers = new Map(); // uid -> { marker, data }
         const deviceRegistry = new Map(); // uid -> device row from DB
-        const seenSosIds = new Set();    // every sosMsgId ever persisted — survives resolve
+        const seenSosIds = new Set(); // every sosMsgId ever persisted — survives resolve
         let dispatcherUid = "";
         let deviceUids = [];
 
@@ -2372,13 +2462,13 @@
 
         function typeIcon(deviceType) {
           if (deviceType === "vehicle") return "fa-car";
-          if (deviceType === "fixed")   return "fa-map-pin";
+          if (deviceType === "fixed") return "fa-map-pin";
           return "fa-walkie-talkie"; // handheld + default
         }
 
         function deviceIcon(uid, sos) {
           const reg = deviceRegistry.get(String(uid));
-          const fa  = typeIcon(reg?.device_type);
+          const fa = typeIcon(reg?.device_type);
           return L.divIcon({
             className: "",
             html: `<div style="position:relative">
@@ -2420,7 +2510,9 @@
             existing.marker.setPopupContent(buildPopup(d));
             existing.data = d;
           } else {
-            const marker = L.marker([d.Lat, d.Lng], { icon: deviceIcon(d.Uid, sos) })
+            const marker = L.marker([d.Lat, d.Lng], {
+              icon: deviceIcon(d.Uid, sos),
+            })
               .bindPopup(buildPopup(d))
               .addTo(deviceLayer);
             deviceMarkers.set(d.Uid, { marker, data: d });
@@ -2454,16 +2546,19 @@
         }
 
         // ─── SOS panel ────────────────────────────────────────────────────────
-        const sosPanel    = document.getElementById("sosPanel");
-        const sosList     = document.getElementById("sosList");
+        const sosPanel = document.getElementById("sosPanel");
+        const sosList = document.getElementById("sosList");
         const sosCountBadge = document.getElementById("sosCountBadge");
         let sosAlerts = []; // local cache from /sos/log
 
         function fmtSosTime(ts) {
           if (!ts) return "—";
           const d = new Date(ts);
-          return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" })
-            + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          return (
+            d.toLocaleDateString("en-GB", { day: "numeric", month: "short" }) +
+            " " +
+            d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+          );
         }
 
         function renderSosPanel() {
@@ -2471,46 +2566,62 @@
           sosCountBadge.textContent = active.length;
           sosPanel.classList.toggle("hidden", active.length === 0);
 
-          if (!sosAlerts.length) { sosList.innerHTML = ""; return; }
+          if (!sosAlerts.length) {
+            sosList.innerHTML = "";
+            return;
+          }
 
-          sosList.innerHTML = sosAlerts.map((a) => {
-            const resolved = a.status === 2;
-            const hasCoords = a.location_lat && a.location_lon;
-            const locStr = hasCoords
-              ? `${parseFloat(a.location_lat).toFixed(4)}, ${parseFloat(a.location_lon).toFixed(4)}`
-              : "Location unknown";
-            return `<div class="sos-item${resolved ? " resolved" : ""}" data-id="${a.sos_msg_id}">
+          sosList.innerHTML = sosAlerts
+            .map((a) => {
+              const resolved = a.status === 2;
+              const hasCoords = a.location_lat && a.location_lon;
+              const locStr = hasCoords
+                ? `${parseFloat(a.location_lat).toFixed(4)}, ${parseFloat(a.location_lon).toFixed(4)}`
+                : "Location unknown";
+              return `<div class="sos-item${resolved ? " resolved" : ""}" data-id="${a.sos_msg_id}">
               <div class="sos-item-row1">
                 <span class="sos-device-name">${a.device_name || `Device ${a.device_id}`}</span>
                 <span class="sos-time">${fmtSosTime(a.created_at)}</span>
               </div>
               <div class="sos-location"><i class="fas fa-location-dot" style="font-size:8px;margin-right:3px"></i>${locStr}</div>
               <div class="sos-item-row2">
-                ${resolved
-                  ? `<span class="sos-resolved-tag">Resolved ${fmtSosTime(a.resolved_at)}</span>`
-                  : `<button class="sos-resolve-btn" onclick="window.__resolveSos(${a.sos_msg_id})">Resolve</button>`
+                ${
+                  resolved
+                    ? `<span class="sos-resolved-tag">Resolved ${fmtSosTime(a.resolved_at)}</span>`
+                    : `<button class="sos-resolve-btn" onclick="window.__resolveSos(${a.sos_msg_id})">Resolve</button>`
                 }
-                ${hasCoords
-                  ? `<button class="sos-zoom-btn" onclick="map.flyTo([${a.location_lat},${a.location_lon}],16,{duration:1.5})">
+                ${
+                  hasCoords
+                    ? `<button class="sos-zoom-btn" onclick="map.flyTo([${a.location_lat},${a.location_lon}],16,{duration:1.5})">
                        <i class="fas fa-crosshairs"></i> Zoom
                      </button>`
-                  : ""}
+                    : ""
+                }
               </div>
             </div>`;
-          }).join("");
+            })
+            .join("");
         }
 
         window.__resolveSos = async function (sosMsgId) {
           try {
-            const r = await fetch(`${API_BASE}/api/pocstars/sos/${sosMsgId}/resolve`, { method: "POST" });
+            const r = await fetch(
+              `${API_BASE}/api/pocstars/sos/${sosMsgId}/resolve`,
+              { method: "POST" },
+            );
             if (!r.ok) throw new Error((await r.json()).error);
             // Update local cache
             const a = sosAlerts.find((x) => x.sos_msg_id === sosMsgId);
-            if (a) { a.status = 2; a.resolved_at = new Date().toISOString(); }
+            if (a) {
+              a.status = 2;
+              a.resolved_at = new Date().toISOString();
+            }
             renderSosPanel();
             // Revert device marker to normal if no other active SOS for same device
             const deviceId = a?.device_id;
-            const stillActive = sosAlerts.some((x) => x.device_id === deviceId && x.status < 2);
+            const stillActive = sosAlerts.some(
+              (x) => x.device_id === deviceId && x.status < 2,
+            );
             if (!stillActive) {
               const entry = deviceMarkers.get(deviceId);
               if (entry) {
@@ -2525,11 +2636,13 @@
         };
 
         // Minimise toggle
-        document.getElementById("sosPanelMinBtn").addEventListener("click", function () {
-          const collapsed = sosList.style.display === "none";
-          sosList.style.display = collapsed ? "" : "none";
-          this.textContent = collapsed ? "▾" : "▴";
-        });
+        document
+          .getElementById("sosPanelMinBtn")
+          .addEventListener("click", function () {
+            const collapsed = sosList.style.display === "none";
+            sosList.style.display = collapsed ? "" : "none";
+            this.textContent = collapsed ? "▾" : "▴";
+          });
 
         async function loadSosLog() {
           try {
@@ -2543,8 +2656,10 @@
 
         async function loadSeenIds() {
           try {
-            const { ids } = await fetch(`${API_BASE}/api/pocstars/sos/seen-ids`).then(r => r.json());
-            (ids || []).forEach(id => seenSosIds.add(id));
+            const { ids } = await fetch(
+              `${API_BASE}/api/pocstars/sos/seen-ids`,
+            ).then((r) => r.json());
+            (ids || []).forEach((id) => seenSosIds.add(id));
           } catch {}
         }
 
@@ -2565,31 +2680,48 @@
               if (!deviceUids.includes(String(sos.sosFromId))) continue;
 
               // Skip if we've resolved it locally (seenSosIds has it + status=2)
-              const existing = sosAlerts.find((a) => a.sos_msg_id === sos.sosMsgId);
+              const existing = sosAlerts.find(
+                (a) => a.sos_msg_id === sos.sosMsgId,
+              );
               if (existing?.status === 2) continue;
 
-              let lat = null, lon = null, locationLabel = "unknown location";
+              let lat = null,
+                lon = null,
+                locationLabel = "unknown location";
               try {
-                const parsed = typeof sos.sosLocationAt === "string"
-                  ? JSON.parse(sos.sosLocationAt) : sos.sosLocationAt;
+                const parsed =
+                  typeof sos.sosLocationAt === "string"
+                    ? JSON.parse(sos.sosLocationAt)
+                    : sos.sosLocationAt;
                 lat = parsed?.wgs84?.lat;
                 lon = parsed?.wgs84?.lon;
-                if (lat && lon) locationLabel = `coordinates ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+                if (lat && lon)
+                  locationLabel = `coordinates ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
               } catch {}
 
               // Sound + zoom only for IDs we have never seen before (seenSosIds persists across resolves)
               if (!seenSosIds.has(sos.sosMsgId)) {
                 seenSosIds.add(sos.sosMsgId);
                 const deviceName = sos.sosSendName || `Device ${sos.sosFromId}`;
-                showToast(`🚨 SOS — ${deviceName}`, `Received ${fmtTime(Date.now())}`);
-                sosAlert(`SOS alert! SOS alert! ${deviceName} has triggered an SOS alarm at ${locationLabel}. Immediate attention required.`);
-                if (lat && lon) map.flyTo([lat, lon], 16, { duration: 2.5, easeLinearity: 0.3 });
+                showToast(
+                  `🚨 SOS — ${deviceName}`,
+                  `Received ${fmtTime(Date.now())}`,
+                );
+                sosAlert(
+                  `SOS alert! SOS alert! ${deviceName} has triggered an SOS alarm at ${locationLabel}. Immediate attention required.`,
+                );
+                if (lat && lon)
+                  map.flyTo([lat, lon], 16, {
+                    duration: 2.5,
+                    easeLinearity: 0.3,
+                  });
               }
 
               if (lat && lon) {
                 updateDeviceMarker({
                   Uid: String(sos.sosFromId),
-                  Lat: lat, Lng: lon,
+                  Lat: lat,
+                  Lng: lon,
                   Rtime: sos.sosStamp,
                   processStatus: 1,
                   Speed: 0,
@@ -2694,8 +2826,9 @@
 
         async function loadDeviceUids() {
           try {
-            const { devices } = await fetch(`${API_BASE}/api/pocstars/devices`)
-              .then((r) => r.json());
+            const { devices } = await fetch(
+              `${API_BASE}/api/pocstars/devices`,
+            ).then((r) => r.json());
             deviceRegistry.clear();
             (devices || []).forEach((d) => deviceRegistry.set(d.device_id, d));
             deviceUids = (devices || [])
