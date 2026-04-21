@@ -56,6 +56,17 @@ async function init() {
     CREATE INDEX IF NOT EXISTS idx_incidents_state    ON incidents(state);
     CREATE INDEX IF NOT EXISTS idx_incidents_type     ON incidents(type);
     CREATE INDEX IF NOT EXISTS idx_incidents_severity ON incidents(severity);
+
+    CREATE TABLE IF NOT EXISTS devices (
+      device_id   TEXT PRIMARY KEY,
+      name        TEXT,
+      company     TEXT,
+      operator    TEXT,
+      device_type TEXT,
+      notes       TEXT,
+      active      BOOLEAN     DEFAULT true,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    );
   `);
 
   // Add new columns if they don't exist (idempotent migration)
@@ -296,6 +307,40 @@ async function getById(id) {
   return rows[0] ?? null;
 }
 
+// ── Device registry ───────────────────────────────────────────────────────────
+
+async function listDevices() {
+  const { rows } = await pool.query(
+    "SELECT * FROM devices ORDER BY created_at DESC",
+  );
+  return rows;
+}
+
+async function upsertDevice({ device_id, name, company, operator, device_type, notes, active }) {
+  const { rows } = await pool.query(
+    `INSERT INTO devices (device_id, name, company, operator, device_type, notes, active)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (device_id) DO UPDATE SET
+       name        = EXCLUDED.name,
+       company     = EXCLUDED.company,
+       operator    = EXCLUDED.operator,
+       device_type = EXCLUDED.device_type,
+       notes       = EXCLUDED.notes,
+       active      = EXCLUDED.active
+     RETURNING *`,
+    [device_id, name || null, company || null, operator || null, device_type || null, notes || null, active ?? true],
+  );
+  return rows[0];
+}
+
+async function deleteDevice(device_id) {
+  const { rowCount } = await pool.query(
+    "DELETE FROM devices WHERE device_id = $1",
+    [device_id],
+  );
+  return rowCount > 0;
+}
+
 /** Clear all incidents and scrape logs. */
 async function clearAll() {
   await pool.query("DELETE FROM incidents");
@@ -316,4 +361,7 @@ module.exports = {
   getStats,
   getById,
   clearAll,
+  listDevices,
+  upsertDevice,
+  deleteDevice,
 };

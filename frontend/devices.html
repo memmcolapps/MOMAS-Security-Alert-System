@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Device Registry — Epail</title>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+    <script src="config.js"></script>
+    <style>
+      *,
+      *::before,
+      *::after {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      :root {
+        --bg: #0a0a0a;
+        --surface: rgba(0, 0, 0, 0.88);
+        --border: rgba(255, 68, 68, 0.25);
+        --green: #00cc66;
+        --red: #ff4444;
+        --text: #e0e0e0;
+        --muted: #666;
+      }
+
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+        padding: 32px 24px;
+      }
+
+      a.back {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--muted);
+        text-decoration: none;
+        font-size: 12px;
+        margin-bottom: 24px;
+        transition: color 0.2s;
+      }
+      a.back:hover {
+        color: var(--text);
+      }
+
+      .page-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 28px;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .page-header h1 {
+        font-size: 20px;
+        color: var(--green);
+        font-weight: 700;
+      }
+      .page-header p {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 3px;
+      }
+
+      .btn-primary {
+        background: var(--green);
+        color: #000;
+        border: none;
+        padding: 9px 16px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        transition: opacity 0.2s;
+      }
+      .btn-primary:hover {
+        opacity: 0.85;
+      }
+
+      /* ── Add / edit form card ── */
+      .form-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 20px 24px;
+        margin-bottom: 28px;
+        display: none;
+        backdrop-filter: blur(12px);
+      }
+      .form-card.open {
+        display: block;
+      }
+      .form-card h3 {
+        font-size: 13px;
+        color: var(--green);
+        margin-bottom: 16px;
+      }
+
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 14px;
+        margin-bottom: 16px;
+      }
+      .form-group {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+      .form-group label {
+        font-size: 10px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+      }
+      .form-group label .req {
+        color: var(--green);
+        margin-left: 2px;
+      }
+      .form-group input,
+      .form-group select,
+      .form-group textarea {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: var(--text);
+        padding: 7px 10px;
+        border-radius: 5px;
+        font-size: 12px;
+        transition: border-color 0.2s;
+      }
+      .form-group input:focus,
+      .form-group select:focus,
+      .form-group textarea:focus {
+        outline: none;
+        border-color: var(--green);
+      }
+      .form-group textarea {
+        resize: vertical;
+        min-height: 60px;
+      }
+      .form-group select option {
+        background: #111;
+      }
+
+      .form-actions {
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+      }
+      .btn-save {
+        background: var(--green);
+        color: #000;
+        border: none;
+        padding: 8px 18px;
+        border-radius: 5px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .btn-save:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+      .btn-cancel-form {
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--muted);
+        border: none;
+        padding: 8px 14px;
+        border-radius: 5px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+
+      /* ── Device table ── */
+      .table-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        backdrop-filter: blur(12px);
+      }
+      .table-top {
+        padding: 14px 18px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .table-top span {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th {
+        padding: 10px 14px;
+        font-size: 9px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        text-align: left;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        white-space: nowrap;
+      }
+      td {
+        padding: 10px 14px;
+        font-size: 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        vertical-align: middle;
+      }
+      tr:last-child td {
+        border-bottom: none;
+      }
+      tr:hover td {
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .device-id-cell {
+        font-family: monospace;
+        font-size: 11px;
+        color: var(--green);
+      }
+      .badge-active {
+        display: inline-block;
+        padding: 2px 7px;
+        border-radius: 10px;
+        font-size: 9px;
+        font-weight: 700;
+        background: rgba(0, 204, 102, 0.12);
+        color: var(--green);
+        border: 1px solid rgba(0, 204, 102, 0.3);
+      }
+      .badge-inactive {
+        display: inline-block;
+        padding: 2px 7px;
+        border-radius: 10px;
+        font-size: 9px;
+        font-weight: 700;
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--muted);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      .row-actions {
+        display: flex;
+        gap: 8px;
+      }
+      .btn-edit {
+        background: none;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: var(--muted);
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-size: 10px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .btn-edit:hover {
+        border-color: var(--green);
+        color: var(--green);
+      }
+      .btn-delete {
+        background: none;
+        border: 1px solid rgba(255, 68, 68, 0.2);
+        color: rgba(255, 68, 68, 0.5);
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-size: 10px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .btn-delete:hover {
+        border-color: var(--red);
+        color: var(--red);
+      }
+
+      .empty-table {
+        text-align: center;
+        padding: 48px 24px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .empty-table i {
+        font-size: 28px;
+        display: block;
+        margin-bottom: 10px;
+      }
+
+      .spinner {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(0, 204, 102, 0.15);
+        border-top-color: var(--green);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+        vertical-align: middle;
+        margin-right: 6px;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .toast {
+        position: fixed;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.95);
+        border: 1px solid rgba(0, 204, 102, 0.4);
+        color: var(--text);
+        padding: 10px 18px;
+        border-radius: 6px;
+        font-size: 12px;
+        z-index: 999;
+        animation: toast-in 0.25s ease;
+        pointer-events: none;
+      }
+      .toast.error {
+        border-color: rgba(255, 68, 68, 0.5);
+      }
+      @keyframes toast-in {
+        from {
+          opacity: 0;
+          transform: translateX(-50%) translateY(8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateX(-50%) translateY(0);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="back" href="/"><i class="fas fa-arrow-left"></i> Back to map</a>
+
+    <div class="page-header">
+      <div>
+        <h1><i class="fas fa-walkie-talkie"></i> &nbsp;Device Registry</h1>
+        <p>Manage POCSTARS radios and vehicle trackers</p>
+      </div>
+      <button class="btn-primary" id="addBtn">
+        <i class="fas fa-plus"></i> Add device
+      </button>
+    </div>
+
+    <!-- ── Form card ── -->
+    <div class="form-card" id="formCard">
+      <h3 id="formTitle">
+        <i class="fas fa-plus-circle"></i> &nbsp;New device
+      </h3>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Device ID <span class="req">*</span></label>
+          <input type="text" id="f-device_id" placeholder="IMEI or UID" />
+        </div>
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" id="f-name" placeholder="e.g. TK-100 Gate" />
+        </div>
+        <div class="form-group">
+          <label>Company / Group</label>
+          <input type="text" id="f-company" placeholder="e.g. EPAIL Lagos" />
+        </div>
+        <div class="form-group">
+          <label>Assigned Operator</label>
+          <input type="text" id="f-operator" placeholder="e.g. John Doe" />
+        </div>
+        <div class="form-group">
+          <label>Device Type</label>
+          <select id="f-device_type">
+            <option value="">— select —</option>
+            <option value="handheld">Handheld radio</option>
+            <option value="vehicle">Vehicle tracker</option>
+            <option value="fixed">Fixed unit</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Status</label>
+          <select id="f-active">
+            <option value="true">Active</option>
+            <option value="false">Inactive (hidden from map)</option>
+          </select>
+        </div>
+        <div class="form-group" style="grid-column: 1 / -1">
+          <label>Notes</label>
+          <textarea
+            id="f-notes"
+            placeholder="Any additional details…"
+          ></textarea>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn-cancel-form" id="cancelFormBtn">Cancel</button>
+        <button class="btn-save" id="saveBtn">Save device</button>
+      </div>
+    </div>
+
+    <!-- ── Device table ── -->
+    <div class="table-card">
+      <div class="table-top">
+        <span id="deviceCount">Loading…</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Device ID</th>
+            <th>Name</th>
+            <th>Company</th>
+            <th>Operator</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Added</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="deviceTable">
+          <tr>
+            <td colspan="8">
+              <div class="empty-table">
+                <span class="spinner"></span> Loading…
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <script>
+      const API_BASE =
+        window.MOMAS_CONFIG?.apiBase ??
+        "https://momas-security-alert-system.onrender.com";
+
+      let devices = [];
+      let editingId = null;
+
+      const formCard = document.getElementById("formCard");
+      const formTitle = document.getElementById("formTitle");
+      const saveBtn = document.getElementById("saveBtn");
+
+      function $(id) {
+        return document.getElementById(id);
+      }
+
+      function showToast(msg, error = false) {
+        const el = document.createElement("div");
+        el.className = "toast" + (error ? " error" : "");
+        el.textContent = msg;
+        document.body.appendChild(el);
+        setTimeout(() => el.remove(), 3000);
+      }
+
+      function fmtDate(ts) {
+        if (!ts) return "—";
+        return new Date(ts).toLocaleDateString("en-GB", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        });
+      }
+
+      function typeLabel(t) {
+        return (
+          {
+            handheld: "Handheld radio",
+            vehicle: "Vehicle tracker",
+            fixed: "Fixed unit",
+            other: "Other",
+          }[t] || "—"
+        );
+      }
+
+      function renderTable() {
+        const tbody = $("deviceTable");
+        $("deviceCount").textContent =
+          `${devices.length} device${devices.length !== 1 ? "s" : ""} · ${devices.filter((d) => d.active).length} active`;
+
+        if (!devices.length) {
+          tbody.innerHTML = `<tr><td colspan="8"><div class="empty-table">
+            <i class="fas fa-walkie-talkie"></i>
+            No devices yet — add one above
+          </div></td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = devices
+          .map(
+            (d) => `
+          <tr>
+            <td class="device-id-cell">${d.device_id}</td>
+            <td>${d.name || "<span style='color:#444'>—</span>"}</td>
+            <td>${d.company || "<span style='color:#444'>—</span>"}</td>
+            <td>${d.operator || "<span style='color:#444'>—</span>"}</td>
+            <td>${typeLabel(d.device_type)}</td>
+            <td><span class="${d.active ? "badge-active" : "badge-inactive"}">${d.active ? "Active" : "Inactive"}</span></td>
+            <td style="color:#555;font-size:11px">${fmtDate(d.created_at)}</td>
+            <td>
+              <div class="row-actions">
+                <button class="btn-edit" onclick="openEdit('${d.device_id}')">Edit</button>
+                <button class="btn-delete" onclick="deleteDevice('${d.device_id}')">Remove</button>
+              </div>
+            </td>
+          </tr>
+        `,
+          )
+          .join("");
+      }
+
+      async function loadDevices() {
+        try {
+          const r = await fetch(`${API_BASE}/api/pocstars/devices`);
+          const { devices: list } = await r.json();
+          devices = list || [];
+          renderTable();
+        } catch (err) {
+          $("deviceCount").textContent = "Failed to load";
+          showToast("Failed to load devices", true);
+        }
+      }
+
+      function openAdd() {
+        editingId = null;
+        formTitle.innerHTML =
+          '<i class="fas fa-plus-circle"></i> &nbsp;New device';
+        ["device_id", "name", "company", "operator", "notes"].forEach(
+          (f) => ($(`f-${f}`).value = ""),
+        );
+        $("f-device_type").value = "";
+        $("f-active").value = "true";
+        $("f-device_id").disabled = false;
+        formCard.classList.add("open");
+        $("f-device_id").focus();
+      }
+
+      window.openEdit = function (deviceId) {
+        const d = devices.find((x) => x.device_id === deviceId);
+        if (!d) return;
+        editingId = deviceId;
+        formTitle.innerHTML = '<i class="fas fa-pen"></i> &nbsp;Edit device';
+        $("f-device_id").value = d.device_id;
+        $("f-device_id").disabled = true;
+        $("f-name").value = d.name || "";
+        $("f-company").value = d.company || "";
+        $("f-operator").value = d.operator || "";
+        $("f-device_type").value = d.device_type || "";
+        $("f-active").value = String(d.active);
+        $("f-notes").value = d.notes || "";
+        formCard.classList.add("open");
+        $("f-name").focus();
+      };
+
+      function closeForm() {
+        formCard.classList.remove("open");
+        editingId = null;
+        $("f-device_id").disabled = false;
+      }
+
+      saveBtn.addEventListener("click", async () => {
+        const device_id = $("f-device_id").value.trim();
+        if (!device_id) {
+          showToast("Device ID is required", true);
+          $("f-device_id").focus();
+          return;
+        }
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Saving…";
+        try {
+          const payload = {
+            device_id,
+            name: $("f-name").value.trim() || null,
+            company: $("f-company").value.trim() || null,
+            operator: $("f-operator").value.trim() || null,
+            device_type: $("f-device_type").value || null,
+            notes: $("f-notes").value.trim() || null,
+            active: $("f-active").value === "true",
+          };
+          const r = await fetch(`${API_BASE}/api/pocstars/devices`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const body = await r.json();
+          if (!r.ok) throw new Error(body.error || r.status);
+          showToast(editingId ? "Device updated" : "Device added");
+          closeForm();
+          await loadDevices();
+        } catch (err) {
+          showToast(err.message, true);
+        } finally {
+          saveBtn.disabled = false;
+          saveBtn.textContent = "Save device";
+        }
+      });
+
+      window.deleteDevice = async function (deviceId) {
+        if (!confirm(`Remove device ${deviceId}?`)) return;
+        try {
+          const r = await fetch(
+            `${API_BASE}/api/pocstars/devices/${encodeURIComponent(deviceId)}`,
+            { method: "DELETE" },
+          );
+          if (!r.ok) throw new Error((await r.json()).error);
+          showToast("Device removed");
+          await loadDevices();
+        } catch (err) {
+          showToast(err.message, true);
+        }
+      };
+
+      $("addBtn").addEventListener("click", openAdd);
+      $("cancelFormBtn").addEventListener("click", closeForm);
+
+      loadDevices();
+    </script>
+  </body>
+</html>

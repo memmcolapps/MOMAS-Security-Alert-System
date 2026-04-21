@@ -15,6 +15,7 @@ const { scrapeGDELT, isGDELTEnabled } = require("./scrapers/gdelt");
 const { scrapeNewsAPI, isNewsAPIEnabled } = require("./scrapers/newsapi");
 const { scrapeGuardian, isGuardianEnabled } = require("./scrapers/guardian");
 const incidentsRouter = require("./routes/incidents");
+const pocstarsRouter = require("./routes/pocstars");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -25,6 +26,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, "../../frontend")));
 
 app.use("/api/incidents", incidentsRouter);
+app.use("/api/pocstars", pocstarsRouter);
 
 app.get("/api/config", (req, res) =>
   res.json({

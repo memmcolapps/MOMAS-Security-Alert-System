@@ -4,7 +4,10 @@ const axios = require("axios");
 const Parser = require("rss-parser");
 const { classifyMany } = require("../classifier");
 const { geocode, extractState } = require("../geocoder");
-const { buildFingerprint, fingerprintsMatch } = require("../classifier/fingerprint");
+const {
+  buildFingerprint,
+  fingerprintsMatch,
+} = require("../classifier/fingerprint");
 const db = require("../db");
 
 const parser = new Parser({
@@ -12,16 +15,8 @@ const parser = new Parser({
 });
 
 const FEEDS = [
-  { name: "Punch Nigeria", url: "https://punchng.com/feed/" },
-  { name: "Vanguard Nigeria", url: "https://www.vanguardngr.com/feed/" },
-  { name: "Daily Trust", url: "https://dailytrust.com/feed" },
   { name: "Sahara Reporters", url: "https://saharareporters.com/rss.xml" },
   { name: "Channels TV", url: "https://www.channelstv.com/feed/" },
-  { name: "PM News Nigeria", url: "https://pmnewsnigeria.com/feed/" },
-  { name: "Tribune Online", url: "https://tribuneonlineng.com/feed/" },
-  { name: "Blueprint", url: "https://blueprint.ng/feed/" },
-  { name: "Arise News", url: "https://www.arise.tv/feed/" },
-  { name: "Leadership", url: "https://leadership.ng/feed/" },
   {
     name: "Google News — NG Security",
     url: "https://news.google.com/rss/search?q=nigeria+attack+killed+bomb+kidnap&hl=en-NG&gl=NG&ceid=NG:en",
@@ -158,14 +153,22 @@ async function scrapeFeed(feed) {
     return { title, description, item, external_id };
   });
 
-  const knownIds = await db.existingExternalIds(classifyItems.map((ci) => ci.external_id));
+  const knownIds = await db.existingExternalIds(
+    classifyItems.map((ci) => ci.external_id),
+  );
   const newItems = classifyItems.filter((ci) => !knownIds.has(ci.external_id));
 
   console.log(
     `[RSS] ${feed.name}: fetched ${items.length} items, ${knownIds.size} already known, classifying ${newItems.length} new…`,
   );
 
-  if (!newItems.length) return { found: items.length, added: 0, skipped: items.length, error: null };
+  if (!newItems.length)
+    return {
+      found: items.length,
+      added: 0,
+      skipped: items.length,
+      error: null,
+    };
 
   const results = await classifyMany(
     newItems.map((ci) => ({ title: ci.title, description: ci.description })),
@@ -210,7 +213,9 @@ async function scrapeFeed(feed) {
           victims,
         });
         if (merged) {
-          console.log(`[RSS] Merged into existing incident #${existing.id}: ${title.slice(0, 60)}…`);
+          console.log(
+            `[RSS] Merged into existing incident #${existing.id}: ${title.slice(0, 60)}…`,
+          );
         }
         break;
       }
@@ -245,10 +250,15 @@ async function scrapeFeed(feed) {
   return { found: items.length, added, skipped, error: null };
 }
 
-const FEED_CONCURRENCY = Math.max(1, parseInt(process.env.RSS_FEED_CONCURRENCY || "5", 10));
+const FEED_CONCURRENCY = Math.max(
+  1,
+  parseInt(process.env.RSS_FEED_CONCURRENCY || "5", 10),
+);
 
 async function scrapeAll() {
-  console.log(`[RSS] Starting scrape of ${FEEDS.length} feeds (concurrency=${FEED_CONCURRENCY})…`);
+  console.log(
+    `[RSS] Starting scrape of ${FEEDS.length} feeds (concurrency=${FEED_CONCURRENCY})…`,
+  );
   const results = new Array(FEEDS.length);
   let cursor = 0;
 
@@ -275,7 +285,9 @@ async function scrapeAll() {
   }
 
   await Promise.all(
-    Array.from({ length: Math.min(FEED_CONCURRENCY, FEEDS.length) }, () => worker()),
+    Array.from({ length: Math.min(FEED_CONCURRENCY, FEEDS.length) }, () =>
+      worker(),
+    ),
   );
 
   const totalAdded = results.reduce((s, r) => s + (r?.added || 0), 0);

@@ -843,6 +843,99 @@
         line-height: 30px;
       }
 
+      /* ── POCSTARS device markers ── */
+      .device-marker {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: #00cc66;
+        border: 2px solid #0a0a0a;
+        box-shadow: 0 0 6px rgba(0, 204, 102, 0.7);
+      }
+      .device-marker.sos {
+        background: #ff1a1a;
+        box-shadow: 0 0 10px rgba(255, 26, 26, 0.9);
+        animation: sos-pulse 0.9s ease-in-out infinite;
+      }
+      @keyframes sos-pulse {
+        0%, 100% { transform: scale(1); box-shadow: 0 0 10px rgba(255,26,26,0.9); }
+        50% { transform: scale(1.4); box-shadow: 0 0 18px rgba(255,26,26,1); }
+      }
+      .device-label {
+        position: absolute;
+        top: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0,0,0,0.85);
+        color: #00cc66;
+        font-size: 9px;
+        font-weight: 700;
+        padding: 1px 4px;
+        border-radius: 3px;
+        white-space: nowrap;
+      }
+      .device-marker.sos + .device-label,
+      .device-label.sos { color: #ff1a1a; }
+
+      /* ── Device history panel ── */
+      .device-panel {
+        position: absolute;
+        left: 20px;
+        bottom: 20px;
+        z-index: 1000;
+        background: var(--glass);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px 14px;
+        width: 260px;
+        backdrop-filter: blur(12px);
+        display: none;
+      }
+      .device-panel.open { display: block; }
+      .device-panel h4 {
+        font-size: 12px;
+        color: #00cc66;
+        margin-bottom: 8px;
+      }
+      .device-panel label {
+        font-size: 9px;
+        color: #888;
+        display: block;
+        margin-top: 6px;
+        margin-bottom: 2px;
+      }
+      .device-panel input[type="datetime-local"] {
+        width: 100%;
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.1);
+        color: #ddd;
+        font-size: 10px;
+        padding: 4px 6px;
+        border-radius: 4px;
+      }
+      .device-panel .btn-row {
+        display: flex;
+        gap: 6px;
+        margin-top: 10px;
+      }
+      .device-panel button {
+        flex: 1;
+        padding: 6px;
+        font-size: 10px;
+        font-weight: 600;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .btn-history {
+        background: #00cc66;
+        color: #000;
+      }
+      .btn-close-device {
+        background: rgba(255,255,255,0.08);
+        color: #aaa;
+      }
+
       /* ── Live pulsing markers ── */
       .live-marker {
         width: 12px;
@@ -1074,6 +1167,20 @@
       <i class="fas fa-chevron-right" id="toggleIcon"></i>
     </button>
 
+    <!-- ── Device history panel ── -->
+    <div class="device-panel" id="devicePanel">
+      <h4><i class="fas fa-walkie-talkie"></i> <span id="deviceName">Device</span></h4>
+      <div id="deviceDetails" style="font-size:10px;color:#aaa;line-height:1.5"></div>
+      <label>From</label>
+      <input type="datetime-local" id="histFrom" />
+      <label>To (same day, max 24h)</label>
+      <input type="datetime-local" id="histTo" />
+      <div class="btn-row">
+        <button class="btn-history" id="btnHistory">Show track</button>
+        <button class="btn-close-device" id="btnCloseDevice">Close</button>
+      </div>
+    </div>
+
     <!-- ── Stats + Timeline bar ── -->
     <div class="stats-bar" id="statsBar">
       <div class="stats-top">
@@ -1083,10 +1190,12 @@
 
       <div class="stats-grid">
         <div class="stat">
-          <div class="stat-value" style="color: var(--red)" id="stat-red">
-            —
-          </div>
-          <div class="stat-label">Critical Alerts</div>
+          <div class="stat-value" style="color: #00cc66" id="stat-devices-total">—</div>
+          <div class="stat-label">Total Devices</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" style="color: #00cc66" id="stat-devices-live">—</div>
+          <div class="stat-label">Reporting</div>
         </div>
         <div class="stat">
           <div class="stat-value" id="stat-live">—</div>
@@ -1129,6 +1238,7 @@
           Threat Zones
         </button>
         <button class="toggle-btn" data-layer="heat">Heatmap</button>
+        <button class="toggle-btn active" data-layer="devices">📻 Devices</button>
         <button class="toggle-btn" id="liveModeBtn">&#127919; Live Mode</button>
         <button class="toggle-btn" id="exportCsvBtn">
           <i class="fas fa-download"></i> Export CSV
@@ -1663,7 +1773,6 @@
 
           document.getElementById("stat-live").textContent =
             totalCount.toLocaleString();
-          document.getElementById("stat-red").textContent = redCount || "—";
           document.getElementById("stat-states").textContent =
             new Set(allIncidents.map((i) => i.state).filter(Boolean)).size ||
             "—";
@@ -1690,7 +1799,6 @@
     </div>`;
           [
             "stat-live",
-            "stat-red",
             "stat-states",
             "stat-killed",
             "stat-abducted",
@@ -1994,6 +2102,268 @@
         }
         fetchIncidents();
         setInterval(fetchIncidents, REFRESH_MS);
+      })();
+    </script>
+
+    <script>
+      // ════════════════════════════════════════════════════════════════════════════
+      // POCSTARS DEVICE TRACKING
+      // ════════════════════════════════════════════════════════════════════════════
+      (function () {
+        const deviceLayer = L.layerGroup().addTo(map);
+        const historyLayer = L.layerGroup().addTo(map);
+        layerMap.devices = deviceLayer;
+
+        const LOC_POLL_MS = 30_000;
+        const SOS_POLL_MS = 15_000;
+
+        const deviceMarkers = new Map(); // uid -> { marker, data }
+        const activeSos = new Map(); // sosMsgId -> true (to avoid duplicate toasts)
+        const processedSos = new Set();
+        let dispatcherUid = "";
+        let deviceUids = [];
+
+        const fmtTime = (t) => (t ? new Date(t).toLocaleString() : "—");
+
+        function deviceIcon(sos) {
+          return L.divIcon({
+            className: "",
+            html: `<div style="position:relative"><div class="device-marker${sos ? " sos" : ""}"></div></div>`,
+            iconSize: [14, 14],
+            iconAnchor: [7, 7],
+          });
+        }
+
+        function buildPopup(d) {
+          return `
+            <div class="popup-title" style="color:${d.processStatus === 1 ? "#ff1a1a" : "#00cc66"}">
+              📻 Device ${d.Uid}${d.processStatus === 1 ? " — SOS" : ""}
+            </div>
+            <div class="popup-detail"><strong>Speed:</strong> ${d.Speed ?? 0} km/h</div>
+            <div class="popup-detail"><strong>Heading:</strong> ${d.Direction ?? 0}°</div>
+            <div class="popup-detail"><strong>Last seen:</strong> ${fmtTime(d.Rtime)}</div>
+            <div class="popup-detail"><strong>Accuracy:</strong> ${d.Accuracy ?? "—"} m</div>
+            <div class="popup-detail"><strong>Source:</strong> ${d.positionType || "—"}</div>
+            ${d.ExceptionMsg ? `<div class="popup-detail" style="color:#ff8800"><strong>⚠</strong> ${d.ExceptionMsg}</div>` : ""}
+            <div class="popup-foot">
+              <button class="btn-history" style="padding:4px 8px;border:none;border-radius:4px;cursor:pointer;font-size:10px" onclick="window.__openDevicePanel(${d.Uid})">
+                Track history
+              </button>
+            </div>
+          `;
+        }
+
+        function updateDeviceMarker(d) {
+          if (!d.Lat || !d.Lng) return;
+          const sos = d.processStatus === 1;
+          const existing = deviceMarkers.get(d.Uid);
+          if (existing) {
+            existing.marker.setLatLng([d.Lat, d.Lng]);
+            existing.marker.setIcon(deviceIcon(sos));
+            existing.marker.setPopupContent(buildPopup(d));
+            existing.data = d;
+          } else {
+            const marker = L.marker([d.Lat, d.Lng], { icon: deviceIcon(sos) })
+              .bindPopup(buildPopup(d))
+              .addTo(deviceLayer);
+            deviceMarkers.set(d.Uid, { marker, data: d });
+          }
+        }
+
+        function updateDeviceStats() {
+          document.getElementById("stat-devices-total").textContent =
+            deviceUids.length || "—";
+          document.getElementById("stat-devices-live").textContent =
+            deviceMarkers.size || "0";
+        }
+
+        async function fetchLocations() {
+          if (!deviceUids.length) {
+            updateDeviceStats();
+            return;
+          }
+          try {
+            const r = await fetch(
+              `${API_BASE}/api/pocstars/locations?uids=${deviceUids.join(",")}`,
+            );
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const data = await r.json();
+            const arr = Array.isArray(data.data) ? data.data : [];
+            for (const loc of arr) updateDeviceMarker(loc);
+          } catch (err) {
+            console.warn("[POCSTARS] locations failed:", err.message);
+          }
+          updateDeviceStats();
+        }
+
+        async function fetchSos() {
+          if (!dispatcherUid) return;
+          try {
+            const r = await fetch(
+              `${API_BASE}/api/pocstars/sos?targetUid=${dispatcherUid}&status=0&pageNum=1&pageSize=50`,
+            );
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const data = await r.json();
+            const list = data.data?.rows || data.data?.list || [];
+            const currentIds = new Set();
+            for (const sos of list) {
+              if (!deviceUids.includes(String(sos.sosFromId))) continue;
+              currentIds.add(sos.sosMsgId);
+              if (sos.sosStatus === 2) continue;
+              if (!activeSos.has(sos.sosMsgId)) {
+                activeSos.set(sos.sosMsgId, sos);
+                showToast(
+                  `🚨 SOS — ${sos.sosSendName || `Device ${sos.sosFromId}`}`,
+                  `Triggered at ${fmtTime(sos.sosStamp)}`,
+                );
+                try {
+                  const parsed =
+                    typeof sos.sosLocationAt === "string"
+                      ? JSON.parse(sos.sosLocationAt)
+                      : sos.sosLocationAt;
+                  const lat = parsed?.wgs84?.lat;
+                  const lon = parsed?.wgs84?.lon;
+                  if (lat && lon && sos.sosFromId) {
+                    updateDeviceMarker({
+                      Uid: sos.sosFromId,
+                      Lat: lat,
+                      Lng: lon,
+                      Rtime: sos.sosStamp,
+                      processStatus: 1,
+                    });
+                  }
+                } catch {}
+              }
+            }
+            // Clear SOS state from markers where the alert no longer appears
+            for (const [id] of activeSos) {
+              if (!currentIds.has(id)) activeSos.delete(id);
+            }
+          } catch (err) {
+            console.warn("[POCSTARS] sos failed:", err.message);
+          }
+        }
+
+        // ─── Device panel / history ────────────────────────────────────────────
+        const panel = document.getElementById("devicePanel");
+        const histFrom = document.getElementById("histFrom");
+        const histTo = document.getElementById("histTo");
+        let selectedUid = null;
+
+        function toLocalInput(d) {
+          const pad = (n) => String(n).padStart(2, "0");
+          return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        }
+
+        function fmtForApi(iso) {
+          // "2026-04-21T14:30" -> "2026-04-21 14:30:00"
+          return iso.replace("T", " ") + ":00";
+        }
+
+        window.__openDevicePanel = function (uid) {
+          selectedUid = uid;
+          const entry = deviceMarkers.get(uid);
+          document.getElementById("deviceName").textContent = `Device ${uid}`;
+          const d = entry?.data;
+          document.getElementById("deviceDetails").innerHTML = d
+            ? `Speed ${d.Speed ?? 0} km/h · Last seen ${fmtTime(d.Rtime)}`
+            : "";
+          const now = new Date();
+          const dayStart = new Date(now);
+          dayStart.setHours(0, 0, 0, 0);
+          histFrom.value = toLocalInput(dayStart);
+          histTo.value = toLocalInput(now);
+          panel.classList.add("open");
+        };
+
+        document
+          .getElementById("btnCloseDevice")
+          .addEventListener("click", () => {
+            panel.classList.remove("open");
+            historyLayer.clearLayers();
+          });
+
+        document
+          .getElementById("btnHistory")
+          .addEventListener("click", async () => {
+            if (!selectedUid) return;
+            const start = fmtForApi(histFrom.value);
+            const end = fmtForApi(histTo.value);
+            if (start.slice(0, 10) !== end.slice(0, 10)) {
+              showToast("Invalid range", "Start and end must be the same day");
+              return;
+            }
+            historyLayer.clearLayers();
+            try {
+              const r = await fetch(
+                `${API_BASE}/api/pocstars/history?uid=${selectedUid}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+              );
+              if (!r.ok) throw new Error(`HTTP ${r.status}`);
+              const data = await r.json();
+              const arr = Array.isArray(data.data) ? data.data : [];
+              const pts = arr
+                .filter((p) => p.Lat && p.Lng)
+                .map((p) => [p.Lat, p.Lng]);
+              if (!pts.length) {
+                showToast("No track", "No positions found for that window");
+                return;
+              }
+              const line = L.polyline(pts, {
+                color: "#00cc66",
+                weight: 3,
+                opacity: 0.85,
+              }).addTo(historyLayer);
+              L.circleMarker(pts[0], {
+                radius: 5,
+                color: "#00ff88",
+                fillColor: "#00ff88",
+                fillOpacity: 1,
+              })
+                .bindTooltip("Start")
+                .addTo(historyLayer);
+              L.circleMarker(pts[pts.length - 1], {
+                radius: 5,
+                color: "#ff4444",
+                fillColor: "#ff4444",
+                fillOpacity: 1,
+              })
+                .bindTooltip("End")
+                .addTo(historyLayer);
+              map.fitBounds(line.getBounds(), { padding: [40, 40] });
+            } catch (err) {
+              showToast("History failed", err.message);
+            }
+          });
+
+        async function loadDeviceUids() {
+          try {
+            const { devices } = await fetch(`${API_BASE}/api/pocstars/devices`)
+              .then((r) => r.json());
+            deviceUids = (devices || [])
+              .filter((d) => d.active)
+              .map((d) => d.device_id);
+            updateDeviceStats();
+          } catch (err) {
+            console.warn("[POCSTARS] device list failed:", err.message);
+          }
+        }
+
+        // ─── Boot ─────────────────────────────────────────────────────────────
+        (async function init() {
+          try {
+            const cfg = await fetch(`${API_BASE}/api/pocstars/config`).then(
+              (r) => r.json(),
+            );
+            dispatcherUid = cfg.targetUid || "";
+          } catch (err) {
+            console.warn("[POCSTARS] config failed:", err.message);
+          }
+          await loadDeviceUids();
+          fetchLocations();
+          fetchSos();
+          setInterval(fetchLocations, LOC_POLL_MS);
+          setInterval(fetchSos, SOS_POLL_MS);
+        })();
       })();
     </script>
   </body>
