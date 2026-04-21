@@ -1256,9 +1256,6 @@
 
       <div class="layer-controls">
         <button class="toggle-btn active" data-layer="live">Live Alerts</button>
-        <button class="toggle-btn active" data-layer="threat">
-          Threat Zones
-        </button>
         <button class="toggle-btn" data-layer="heat">Heatmap</button>
         <button class="toggle-btn active" data-layer="devices">📻 Devices</button>
         <button class="toggle-btn" id="liveModeBtn">&#127919; Live Mode</button>
@@ -2247,28 +2244,48 @@
               if (sos.sosStatus === 2) continue;
               if (!activeSos.has(sos.sosMsgId)) {
                 activeSos.set(sos.sosMsgId, sos);
-                showToast(
-                  `🚨 SOS — ${sos.sosSendName || `Device ${sos.sosFromId}`}`,
-                  `Triggered at ${fmtTime(sos.sosStamp)}`,
-                );
+                const deviceName = sos.sosSendName || `Device ${sos.sosFromId}`;
+                let locationLabel = "unknown location";
+                let lat = null, lon = null;
                 try {
                   const parsed =
                     typeof sos.sosLocationAt === "string"
                       ? JSON.parse(sos.sosLocationAt)
                       : sos.sosLocationAt;
-                  const lat = parsed?.wgs84?.lat;
-                  const lon = parsed?.wgs84?.lon;
-                  if (lat && lon && sos.sosFromId) {
-                    updateDeviceMarker({
-                      Uid: String(sos.sosFromId),
-                      Lat: lat,
-                      Lng: lon,
-                      Rtime: sos.sosStamp,
-                      processStatus: 1,
-                      Speed: 0,
-                    });
+                  lat = parsed?.wgs84?.lat;
+                  lon = parsed?.wgs84?.lon;
+                  if (lat && lon) {
+                    locationLabel = `coordinates ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
                   }
                 } catch {}
+
+                showToast(
+                  `🚨 SOS — ${deviceName}`,
+                  `Triggered at ${fmtTime(sos.sosStamp)}`,
+                );
+
+                // Voice announcement
+                if ("speechSynthesis" in window) {
+                  window.speechSynthesis.cancel();
+                  const msg = new SpeechSynthesisUtterance(
+                    `SOS alert! SOS alert! ${deviceName} has triggered an SOS alarm at ${locationLabel}. Immediate attention required.`
+                  );
+                  msg.rate  = 0.95;
+                  msg.pitch = 1;
+                  msg.volume = 1;
+                  window.speechSynthesis.speak(msg);
+                }
+
+                if (lat && lon && sos.sosFromId) {
+                  updateDeviceMarker({
+                    Uid: String(sos.sosFromId),
+                    Lat: lat,
+                    Lng: lon,
+                    Rtime: sos.sosStamp,
+                    processStatus: 1,
+                    Speed: 0,
+                  });
+                }
               }
             }
             // Clear SOS state from markers where the alert no longer appears
