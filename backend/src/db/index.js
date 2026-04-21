@@ -349,19 +349,20 @@ async function resolveSosAlert(sos_msg_id) {
 }
 
 async function listSosAlerts() {
-  // Show: unresolved (any date) + today's resolved
+  // Show: unresolved (any date) + resolved today (by our clock, not POCSTARS clock)
   const { rows } = await pool.query(`
     SELECT * FROM sos_alerts
     WHERE status < 2
-       OR triggered_at::date = CURRENT_DATE
-    ORDER BY triggered_at DESC
+       OR resolved_at::date = CURRENT_DATE
+    ORDER BY created_at DESC
   `);
   return rows;
 }
 
-async function knownSosMsgIds() {
-  const { rows } = await pool.query(`SELECT sos_msg_id, status FROM sos_alerts`);
-  return new Map(rows.map((r) => [r.sos_msg_id, r.status]));
+async function allSosMsgIds() {
+  // All IDs ever seen — used for sound dedup regardless of resolution status/date
+  const { rows } = await pool.query(`SELECT sos_msg_id FROM sos_alerts`);
+  return new Set(rows.map((r) => r.sos_msg_id));
 }
 
 // ── Device registry ───────────────────────────────────────────────────────────
@@ -424,5 +425,5 @@ module.exports = {
   insertSosAlert,
   resolveSosAlert,
   listSosAlerts,
-  knownSosMsgIds,
+  allSosMsgIds,
 };

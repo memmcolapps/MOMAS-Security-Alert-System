@@ -2364,6 +2364,7 @@
 
         const deviceMarkers = new Map(); // uid -> { marker, data }
         const deviceRegistry = new Map(); // uid -> device row from DB
+        const seenSosIds = new Set();    // every sosMsgId ever persisted — survives resolve
         let dispatcherUid = "";
         let deviceUids = [];
 
@@ -2468,7 +2469,7 @@
         function renderSosPanel() {
           const active = sosAlerts.filter((a) => a.status < 2);
           sosCountBadge.textContent = active.length;
-          sosPanel.classList.toggle("hidden", sosAlerts.length === 0);
+          sosPanel.classList.toggle("hidden", active.length === 0);
 
           if (!sosAlerts.length) { sosList.innerHTML = ""; return; }
 
@@ -2481,7 +2482,7 @@
             return `<div class="sos-item${resolved ? " resolved" : ""}" data-id="${a.sos_msg_id}">
               <div class="sos-item-row1">
                 <span class="sos-device-name">${a.device_name || `Device ${a.device_id}`}</span>
-                <span class="sos-time">${fmtSosTime(a.triggered_at)}</span>
+                <span class="sos-time">${fmtSosTime(a.created_at)}</span>
               </div>
               <div class="sos-location"><i class="fas fa-location-dot" style="font-size:8px;margin-right:3px"></i>${locStr}</div>
               <div class="sos-item-row2">
@@ -2540,6 +2541,13 @@
           } catch {}
         }
 
+        async function loadSeenIds() {
+          try {
+            const { ids } = await fetch(`${API_BASE}/api/pocstars/sos/seen-ids`).then(r => r.json());
+            (ids || []).forEach(id => seenSosIds.add(id));
+          } catch {}
+        }
+
         async function fetchSos() {
           if (!dispatcherUid) return;
           try {
@@ -2550,16 +2558,13 @@
             const data = await r.json();
             const list = data.data?.rows || [];
 
-            // Reload our DB log to get up-to-date state
+            // Reload panel display
             await loadSosLog();
-
-            // Find genuinely new alerts (not yet in our local cache)
-            const knownIds = new Set(sosAlerts.map((a) => a.sos_msg_id));
 
             for (const sos of list) {
               if (!deviceUids.includes(String(sos.sosFromId))) continue;
 
-              // Check if we've already resolved this locally
+              // Skip if we've resolved it locally (seenSosIds has it + status=2)
               const existing = sosAlerts.find((a) => a.sos_msg_id === sos.sosMsgId);
               if (existing?.status === 2) continue;
 
@@ -2572,10 +2577,11 @@
                 if (lat && lon) locationLabel = `coordinates ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
               } catch {}
 
-              // Only alert (toast/voice/zoom) for brand-new IDs
-              if (!knownIds.has(sos.sosMsgId)) {
+              // Sound + zoom only for IDs we have never seen before (seenSosIds persists across resolves)
+              if (!seenSosIds.has(sos.sosMsgId)) {
+                seenSosIds.add(sos.sosMsgId);
                 const deviceName = sos.sosSendName || `Device ${sos.sosFromId}`;
-                showToast(`🚨 SOS — ${deviceName}`, `Triggered at ${fmtTime(sos.sosStamp)}`);
+                showToast(`🚨 SOS — ${deviceName}`, `Received ${fmtTime(Date.now())}`);
                 sosAlert(`SOS alert! SOS alert! ${deviceName} has triggered an SOS alarm at ${locationLabel}. Immediate attention required.`);
                 if (lat && lon) map.flyTo([lat, lon], 16, { duration: 2.5, easeLinearity: 0.3 });
               }
@@ -2712,6 +2718,7 @@
             console.warn("[POCSTARS] config failed:", err.message);
           }
           await loadDeviceUids();
+          await loadSeenIds();
           await loadSosLog();
           fetchLocations();
           fetchSos();

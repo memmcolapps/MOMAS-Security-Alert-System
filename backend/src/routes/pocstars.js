@@ -55,6 +55,15 @@ router.delete("/devices/:device_id", async (req, res) => {
 
 // ── SOS log ───────────────────────────────────────────────────────────────────
 
+router.get("/sos/seen-ids", async (_req, res) => {
+  try {
+    const ids = await db.allSosMsgIds();
+    res.json({ ids: [...ids] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get("/sos/log", async (_req, res) => {
   try {
     const alerts = await db.listSosAlerts();
