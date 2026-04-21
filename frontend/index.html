@@ -2126,6 +2126,74 @@
 
     <script>
       // ════════════════════════════════════════════════════════════════════════════
+      // SOS AUDIO — primed on first user interaction, then usable any time
+      // ════════════════════════════════════════════════════════════════════════════
+      let _audioCtx = null;
+      let _speechReady = false;
+
+      function _getAudioCtx() {
+        if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (_audioCtx.state === "suspended") _audioCtx.resume();
+        return _audioCtx;
+      }
+
+      function _playBeep() {
+        try {
+          const ctx  = _getAudioCtx();
+          const gain = ctx.createGain();
+          gain.gain.setValueAtTime(0.8, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8);
+          gain.connect(ctx.destination);
+          // Three sharp pulses
+          [0, 0.35, 0.70].forEach((offset) => {
+            const osc = ctx.createOscillator();
+            osc.type = "square";
+            osc.frequency.setValueAtTime(880, ctx.currentTime + offset);
+            osc.connect(gain);
+            osc.start(ctx.currentTime + offset);
+            osc.stop(ctx.currentTime + offset + 0.25);
+          });
+        } catch (e) { console.warn("[SOS beep]", e.message); }
+      }
+
+      function _speak(text) {
+        if (!("speechSynthesis" in window)) return;
+        window.speechSynthesis.cancel();
+        const utter  = new SpeechSynthesisUtterance(text);
+        utter.rate   = 0.95;
+        utter.pitch  = 1;
+        utter.volume = 1;
+        // Ensure voices are loaded
+        const voices = window.speechSynthesis.getVoices();
+        if (voices.length) {
+          window.speechSynthesis.speak(utter);
+        } else {
+          window.speechSynthesis.onvoiceschanged = () => {
+            window.speechSynthesis.onvoiceschanged = null;
+            window.speechSynthesis.speak(utter);
+          };
+        }
+      }
+
+      function sosAlert(text) {
+        _playBeep();
+        // Small delay so beep fires first, then voice follows
+        setTimeout(() => _speak(text), 900);
+      }
+
+      // Prime AudioContext + speech on first user gesture (browser autoplay policy)
+      document.addEventListener("click", function _prime() {
+        document.removeEventListener("click", _prime);
+        _getAudioCtx();
+        if ("speechSynthesis" in window) {
+          const silent = new SpeechSynthesisUtterance(" ");
+          silent.volume = 0;
+          window.speechSynthesis.speak(silent);
+        }
+        _speechReady = true;
+      }, { once: true });
+
+      // ════════════════════════════════════════════════════════════════════════════
       // POCSTARS DEVICE TRACKING
       // ════════════════════════════════════════════════════════════════════════════
       (function () {
@@ -2264,17 +2332,10 @@
                   `Triggered at ${fmtTime(sos.sosStamp)}`,
                 );
 
-                // Voice announcement
-                if ("speechSynthesis" in window) {
-                  window.speechSynthesis.cancel();
-                  const msg = new SpeechSynthesisUtterance(
-                    `SOS alert! SOS alert! ${deviceName} has triggered an SOS alarm at ${locationLabel}. Immediate attention required.`
-                  );
-                  msg.rate  = 0.95;
-                  msg.pitch = 1;
-                  msg.volume = 1;
-                  window.speechSynthesis.speak(msg);
-                }
+                // Voice + beep alert
+                sosAlert(
+                  `SOS alert! SOS alert! ${deviceName} has triggered an SOS alarm at ${locationLabel}. Immediate attention required.`
+                );
 
                 if (lat && lon && sos.sosFromId) {
                   updateDeviceMarker({
