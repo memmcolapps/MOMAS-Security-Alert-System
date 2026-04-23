@@ -1091,6 +1091,117 @@
       .sos-panel.hidden {
         display: none;
       }
+      .sos-item.attention {
+        background: rgba(255, 26, 26, 0.08);
+        box-shadow: inset 3px 0 0 rgba(255, 68, 68, 0.85);
+      }
+      .sos-item.attention .sos-device-name {
+        color: #fff;
+      }
+      .sos-tray {
+        position: absolute;
+        left: 14px;
+        bottom: 18px;
+        z-index: 1002;
+        width: min(360px, calc(100vw - 28px));
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        pointer-events: none;
+      }
+      .sos-tray.hidden {
+        display: none;
+      }
+      .sos-alert-card {
+        pointer-events: auto;
+        background: rgba(7, 7, 7, 0.95);
+        border: 1px solid rgba(255, 68, 68, 0.55);
+        border-radius: 10px;
+        box-shadow: 0 14px 30px rgba(0, 0, 0, 0.36);
+        overflow: hidden;
+      }
+      .sos-alert-card.escalated {
+        border-color: rgba(255, 128, 0, 0.8);
+        box-shadow: 0 14px 34px rgba(255, 68, 0, 0.24);
+      }
+      .sos-alert-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 12px 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      }
+      .sos-alert-kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: 0.8px;
+        text-transform: uppercase;
+        color: #ff6a6a;
+      }
+      .sos-alert-kicker i {
+        color: #ff4444;
+      }
+      .sos-alert-age {
+        font-size: 10px;
+        color: #aaa;
+      }
+      .sos-alert-body {
+        padding: 10px 12px 12px;
+      }
+      .sos-alert-name {
+        font-size: 15px;
+        font-weight: 800;
+        color: #fff;
+        margin-bottom: 4px;
+      }
+      .sos-alert-meta {
+        font-size: 11px;
+        color: #9a9a9a;
+        margin-bottom: 8px;
+      }
+      .sos-alert-location {
+        font-size: 12px;
+        color: #ddd;
+        line-height: 1.4;
+      }
+      .sos-alert-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .sos-alert-btn {
+        border: none;
+        border-radius: 5px;
+        padding: 7px 10px;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .sos-alert-btn.primary {
+        background: #ff4444;
+        color: #000;
+      }
+      .sos-alert-btn.secondary {
+        background: rgba(255, 255, 255, 0.06);
+        color: #ddd;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+      }
+      .sos-alert-summary {
+        pointer-events: auto;
+        align-self: flex-start;
+        background: rgba(0, 0, 0, 0.9);
+        border: 1px solid rgba(255, 68, 68, 0.35);
+        color: #bbb;
+        border-radius: 999px;
+        padding: 5px 10px;
+        font-size: 10px;
+        font-weight: 700;
+      }
 
       /* ── POCSTARS connectivity badge ── */
       .pocstars-status {
@@ -1684,6 +1795,8 @@
       </div>
       <div class="sos-list" id="sosList"></div>
     </div>
+
+    <div class="sos-tray hidden" id="sosTray"></div>
 
     <!-- ── SOS alert modal ── -->
     <div class="sos-modal-backdrop hidden" id="sosModalBackdrop">
@@ -3233,7 +3346,13 @@
         const sosPanel = document.getElementById("sosPanel");
         const sosList = document.getElementById("sosList");
         const sosCountBadge = document.getElementById("sosCountBadge");
+        const sosTray = document.getElementById("sosTray");
         let sosAlerts = []; // local cache from /sos/log
+        let sosAttentionId = null;
+        let sosAttentionTimer = null;
+        const SOS_MODAL_ESCALATE_MS = 60_000;
+        const SOS_REMINDER_MS = 3 * 60 * 1000;
+        const SOS_CRITICAL_MS = 6 * 60 * 1000;
 
         function fmtSosTime(ts) {
           if (!ts) return "—";
@@ -3245,17 +3364,105 @@
           );
         }
 
+        function fmtSosElapsed(ts) {
+          if (!ts) return "—";
+          const sec = Math.max(0, Math.floor((Date.now() - new Date(ts)) / 1000));
+          const min = Math.floor(sec / 60);
+          if (min < 1) return `${sec}s ago`;
+          if (min < 60) return `${min}m ago`;
+          const hr = Math.floor(min / 60);
+          const rem = min % 60;
+          return rem ? `${hr}h ${rem}m ago` : `${hr}h ago`;
+        }
+
+        function getActiveSosAlerts() {
+          return sosAlerts
+            .filter((a) => a.status < 2)
+            .sort(
+              (a, b) =>
+                new Date(b.triggered_at || b.created_at || 0) -
+                new Date(a.triggered_at || a.created_at || 0),
+            );
+        }
+
+        function getUnackedSosAlerts() {
+          return getActiveSosAlerts().filter((a) => a.status === 0);
+        }
+
+        function ensureSosPanelExpanded() {
+          sosList.style.display = "";
+          document.getElementById("sosPanelMinBtn").textContent = "▾";
+        }
+
+        function highlightSosPanelItem(sosMsgId) {
+          sosAttentionId = sosMsgId;
+          clearTimeout(sosAttentionTimer);
+          renderSosPanel();
+          sosAttentionTimer = setTimeout(() => {
+            if (sosAttentionId === sosMsgId) {
+              sosAttentionId = null;
+              renderSosPanel();
+            }
+          }, 8000);
+        }
+
+        function renderSosTray() {
+          const unacked = getUnackedSosAlerts();
+          if (!unacked.length) {
+            sosTray.classList.add("hidden");
+            sosTray.innerHTML = "";
+            return;
+          }
+
+          const cards = unacked.slice(0, 2).map((a) => {
+            const hasCoords = a.location_lat && a.location_lon;
+            const displayName = a.dev_name || a.device_name || `Device ${a.device_id}`;
+            const meta = [a.dev_company, a.dev_operator].filter(Boolean).join(" · ");
+            const locStr = hasCoords
+              ? `${parseFloat(a.location_lat).toFixed(4)}, ${parseFloat(a.location_lon).toFixed(4)}`
+              : "Location unknown";
+            const isEscalated =
+              Date.now() - new Date(a.triggered_at || a.created_at || Date.now()).getTime() >=
+              SOS_MODAL_ESCALATE_MS;
+            return `<div class="sos-alert-card${isEscalated ? " escalated" : ""}">
+              <div class="sos-alert-head">
+                <div class="sos-alert-kicker"><i class="fas fa-triangle-exclamation"></i> Active SOS</div>
+                <div class="sos-alert-age">${fmtSosElapsed(a.triggered_at || a.created_at)}</div>
+              </div>
+              <div class="sos-alert-body">
+                <div class="sos-alert-name">${escHtml(displayName)}</div>
+                ${meta ? `<div class="sos-alert-meta">${escHtml(meta)}</div>` : ""}
+                <div class="sos-alert-location">${escHtml(locStr)}</div>
+                <div class="sos-alert-actions">
+                  <button class="sos-alert-btn primary" data-sos-action="ack" data-sos-id="${a.sos_msg_id}">Acknowledge</button>
+                  <button class="sos-alert-btn secondary" data-sos-action="open" data-sos-id="${a.sos_msg_id}">Open details</button>
+                  ${hasCoords ? `<button class="sos-alert-btn secondary" data-sos-action="zoom" data-sos-id="${a.sos_msg_id}">Zoom</button>` : ""}
+                </div>
+              </div>
+            </div>`;
+          });
+
+          const moreCount = unacked.length - Math.min(unacked.length, 2);
+          const summary = moreCount > 0
+            ? `<button class="sos-alert-summary" data-sos-action="open-latest">+${moreCount} more active SOS</button>`
+            : "";
+
+          sosTray.innerHTML = `${cards.join("")}${summary}`;
+          sosTray.classList.remove("hidden");
+        }
+
         function renderSosPanel() {
-          const active = sosAlerts.filter((a) => a.status < 2);
+          const active = getActiveSosAlerts();
           sosCountBadge.textContent = active.length;
           sosPanel.classList.toggle("hidden", active.length === 0);
+          renderSosTray();
 
           if (!sosAlerts.length) {
             sosList.innerHTML = "";
             return;
           }
 
-          sosList.innerHTML = sosAlerts
+          sosList.innerHTML = active
             .map((a) => {
               const resolved = a.status === 2;
               const acked = a.status === 1;
@@ -3268,7 +3475,8 @@
               const subLine = subParts.length
                 ? `<div class="sos-location" style="opacity:.85">${subParts.join(" · ")}</div>`
                 : "";
-              return `<div class="sos-item${resolved ? " resolved" : ""}" data-id="${a.sos_msg_id}">
+              const attention = sosAttentionId === a.sos_msg_id ? " attention" : "";
+              return `<div class="sos-item${resolved ? " resolved" : ""}${attention}" data-id="${a.sos_msg_id}">
               <div class="sos-item-row1">
                 <span class="sos-device-name">${displayName}</span>
                 <span class="sos-time">${fmtSosTime(a.created_at)}</span>
@@ -3301,6 +3509,38 @@
         let sosModalIdx = 0;
         let sosElapsedTimer = null;
         const sosEscalationTimers = new Map(); // sos_msg_id -> timeout id
+
+        function _clearSosEscalation(sosMsgId) {
+          const timers = sosEscalationTimers.get(sosMsgId);
+          if (!timers) return;
+          Object.values(timers).forEach((tid) => clearTimeout(tid));
+          sosEscalationTimers.delete(sosMsgId);
+        }
+
+        function _scheduleSosEscalations(sos) {
+          _clearSosEscalation(sos.sos_msg_id);
+          const timers = {};
+          timers.modal = setTimeout(() => {
+            const current = sosAlerts.find((a) => a.sos_msg_id === sos.sos_msg_id);
+            if (current && current.status === 0) _openSosModal(current);
+          }, SOS_MODAL_ESCALATE_MS);
+          timers.reminder = setTimeout(() => {
+            const current = sosAlerts.find((a) => a.sos_msg_id === sos.sos_msg_id);
+            const name = current?.dev_name || current?.device_name || `Device ${current?.device_id || sos.device_id}`;
+            if (current && current.status === 0) {
+              sosAlert(`Unacknowledged SOS! ${name} is still waiting for response.`);
+            }
+          }, SOS_REMINDER_MS);
+          timers.critical = setTimeout(() => {
+            const current = sosAlerts.find((a) => a.sos_msg_id === sos.sos_msg_id);
+            const name = current?.dev_name || current?.device_name || `Device ${current?.device_id || sos.device_id}`;
+            if (current && current.status === 0) {
+              sosAlert(`Critical! SOS from ${name} has been unacknowledged for over 6 minutes.`);
+              _openSosModal(current);
+            }
+          }, SOS_CRITICAL_MS);
+          sosEscalationTimers.set(sos.sos_msg_id, timers);
+        }
 
         function _sosModalReg(deviceId) {
           return deviceRegistry.get(String(deviceId));
@@ -3401,20 +3641,17 @@
         }
 
         function _openSosModal(sos) {
+          const freshQueue = getActiveSosAlerts();
+          activeSosQueue.splice(0, activeSosQueue.length, ...freshQueue);
           const existing = activeSosQueue.findIndex((s) => s.sos_msg_id === sos.sos_msg_id);
-          if (existing >= 0) {
-            activeSosQueue[existing] = sos;
-            sosModalIdx = existing;
-          } else {
-            activeSosQueue.push(sos);
-            sosModalIdx = activeSosQueue.length - 1;
-          }
+          sosModalIdx = existing >= 0 ? existing : 0;
           _renderSosModal();
           sosModalBackdrop.classList.remove("hidden");
         }
 
         function _closeSosModal() {
           clearInterval(sosElapsedTimer);
+          activeSosQueue.splice(0, activeSosQueue.length);
           sosModalBackdrop.classList.add("hidden");
         }
 
@@ -3424,24 +3661,28 @@
           if (a) _openSosModal(a);
         };
 
+        async function _acknowledgeSos(sosMsgId) {
+          const r = await fetch(`${API_BASE}/api/pocstars/sos/${sosMsgId}/acknowledge`, {
+            method: "POST",
+          });
+          const body = await r.json();
+          if (!r.ok) throw new Error(body.error || "Acknowledge failed");
+          _applyAlertUpdate(body.alert);
+          _clearSosEscalation(sosMsgId);
+          const unacked = activeSosQueue.filter((s) => s.status === 0);
+          if (!sosModalBackdrop.classList.contains("hidden")) {
+            if (!unacked.length) setTimeout(_closeSosModal, 800);
+            else _renderSosModal();
+          }
+          return body.alert;
+        }
+
         // Acknowledge
         document.getElementById("sosModalAck").addEventListener("click", async () => {
           const sosMsgId = parseInt(document.getElementById("sosModalAck").dataset.msgId, 10);
           if (!sosMsgId) return;
           try {
-            const r = await fetch(`${API_BASE}/api/pocstars/sos/${sosMsgId}/acknowledge`, { method: "POST" });
-            if (!r.ok) throw new Error((await r.json()).error);
-            const { alert } = await r.json();
-            _applyAlertUpdate(alert);
-            // Clear escalation
-            if (sosEscalationTimers.has(sosMsgId)) {
-              clearTimeout(sosEscalationTimers.get(sosMsgId));
-              sosEscalationTimers.delete(sosMsgId);
-            }
-            // Auto-close if nothing else unacknowledged
-            const unacked = activeSosQueue.filter((s) => s.status === 0);
-            if (!unacked.length) setTimeout(_closeSosModal, 1200);
-            else _renderSosModal();
+            await _acknowledgeSos(sosMsgId);
           } catch (err) {
             showToast("Acknowledge failed", err.message);
           }
@@ -3470,6 +3711,7 @@
             if (!r.ok) throw new Error((await r.json()).error);
             const { alert } = await r.json();
             _applyAlertUpdate(alert);
+            _clearSosEscalation(sosMsgId);
             // Remove from queue
             const qi = activeSosQueue.findIndex((s) => s.sos_msg_id === sosMsgId);
             if (qi >= 0) activeSosQueue.splice(qi, 1);
@@ -3499,6 +3741,41 @@
           if (sosModalIdx < activeSosQueue.length - 1) { sosModalIdx++; _renderSosModal(); }
         });
 
+        sosTray.addEventListener("click", async (e) => {
+          const btn = e.target.closest("[data-sos-action]");
+          if (!btn) return;
+          const action = btn.dataset.sosAction;
+          const sosMsgId = parseInt(btn.dataset.sosId || "", 10);
+          const target =
+            action === "open-latest"
+              ? getUnackedSosAlerts()[0]
+              : sosAlerts.find((a) => a.sos_msg_id === sosMsgId);
+          if (!target) return;
+
+          if (action === "ack") {
+            btn.disabled = true;
+            try {
+              await _acknowledgeSos(target.sos_msg_id);
+            } catch (err) {
+              showToast("Acknowledge failed", err.message);
+            } finally {
+              btn.disabled = false;
+            }
+            return;
+          }
+
+          ensureSosPanelExpanded();
+          highlightSosPanelItem(target.sos_msg_id);
+          if (action === "zoom" && target.location_lat && target.location_lon) {
+            map.flyTo([target.location_lat, target.location_lon], 16, {
+              duration: 1.6,
+              easeLinearity: 0.3,
+            });
+            return;
+          }
+          _openSosModal(target);
+        });
+
         // Apply an updated alert row (from resolve/acknowledge response or SSE)
         function _applyAlertUpdate(alert) {
           const idx = sosAlerts.findIndex((a) => a.sos_msg_id === alert.sos_msg_id);
@@ -3523,17 +3800,21 @@
               }
             }
           }
+          if (alert.status >= 1) _clearSosEscalation(alert.sos_msg_id);
         }
 
-        // Trigger audio + map + modal for a newly received SOS (DB-format row)
+        // Trigger audio + map + tray for a newly received SOS (DB-format row)
         function _handleIncomingSos(sos) {
-          const name = sos.device_name || `Device ${sos.device_id}`;
+          const name = sos.dev_name || sos.device_name || `Device ${sos.device_id}`;
           const hasCoords = sos.location_lat && sos.location_lon;
           const locLabel = hasCoords
             ? `coordinates ${parseFloat(sos.location_lat).toFixed(4)}, ${parseFloat(sos.location_lon).toFixed(4)}`
             : "unknown location";
 
           sosAlert(`SOS alert! SOS alert! ${name} has triggered an SOS alarm at ${locLabel}. Immediate attention required.`);
+          ensureSosPanelExpanded();
+          highlightSosPanelItem(sos.sos_msg_id);
+          renderSosPanel();
 
           if (hasCoords) {
             map.flyTo([sos.location_lat, sos.location_lon], 16, { duration: 2.5, easeLinearity: 0.3 });
@@ -3547,25 +3828,8 @@
             });
           }
 
-          _openSosModal(sos);
-
-          // Escalation: re-alert in 3 minutes if still unacknowledged
-          if (sosEscalationTimers.has(sos.sos_msg_id)) clearTimeout(sosEscalationTimers.get(sos.sos_msg_id));
-          const tid = setTimeout(async () => {
-            const current = sosAlerts.find((a) => a.sos_msg_id === sos.sos_msg_id);
-            if (current && current.status === 0) {
-              sosAlert(`Unacknowledged SOS! ${name} is still waiting for response.`);
-              // Re-arm once more (6-min total window)
-              const tid2 = setTimeout(() => {
-                const c2 = sosAlerts.find((a) => a.sos_msg_id === sos.sos_msg_id);
-                if (c2 && c2.status === 0) {
-                  sosAlert(`Critical! SOS from ${name} has been unacknowledged for over 6 minutes.`);
-                }
-              }, 3 * 60 * 1000);
-              sosEscalationTimers.set(sos.sos_msg_id, tid2);
-            }
-          }, 3 * 60 * 1000);
-          sosEscalationTimers.set(sos.sos_msg_id, tid);
+          _scheduleSosEscalations(sos);
+          if (getUnackedSosAlerts().length > 1) _openSosModal(sos);
 
           // Notify other tabs via BroadcastChannel
           if (sosBc) sosBc.postMessage({ type: "sos_new", sos });
@@ -3785,6 +4049,8 @@
                 // Another tab already played audio; just update our UI
                 const idx = sosAlerts.findIndex((a) => a.sos_msg_id === sos.sos_msg_id);
                 if (idx < 0) sosAlerts.unshift(sos);
+                ensureSosPanelExpanded();
+                highlightSosPanelItem(sos.sos_msg_id);
                 renderSosPanel();
               }
             }
