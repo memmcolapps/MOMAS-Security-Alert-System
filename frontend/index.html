@@ -166,7 +166,7 @@
         margin-right: 5px;
       }
       .sev-RED {
-        background: var(--red);
+        background: var(--amber);
         color: #fff;
       }
       .sev-ORANGE {
@@ -1363,10 +1363,10 @@
         animation: ripple 2s ease-out infinite;
       }
       .live-marker.sev-RED {
-        background: var(--red);
+        background: var(--amber);
       }
       .live-marker.sev-RED::before {
-        background: var(--red);
+        background: var(--amber);
       }
       .live-marker.sev-ORANGE {
         background: var(--orange);
@@ -1407,7 +1407,7 @@
         width: 100%;
         height: 100%;
         border-radius: 50%;
-        background: var(--red);
+        background: var(--amber);
         animation: ripple 2s ease-out infinite 0.75s;
       }
     </style>
@@ -1502,8 +1502,8 @@
       <div class="legend-section">
         <div class="legend-section-title">Incident severity</div>
           <div class="legend-item">
-            <div class="legend-dot" style="background: var(--red)"></div>
-            <span class="sev-pill sev-RED">RED</span> Critical (30+ killed)
+            <div class="legend-dot" style="background: var(--amber)"></div>
+            <span class="sev-pill sev-RED">AMBER</span> Critical (30+ killed)
           </div>
         <div class="legend-item">
           <div class="legend-dot" style="background: var(--orange)"></div>
@@ -1575,7 +1575,7 @@
         <div class="panel-filters">
           <select class="filter-select" id="filterSeverity">
             <option value="">All Severities</option>
-            <option value="RED">🔴 RED — Critical</option>
+            <option value="RED">🟠 AMBER — Critical</option>
             <option value="ORANGE">🟠 ORANGE — Serious</option>
             <option value="YELLOW">🩵 TEAL — Moderate</option>
             <option value="BLUE">🔵 BLUE — Low</option>
@@ -2006,11 +2006,21 @@
       // MARKERS
       // ════════════════════════════════════════════════════════════════════════════
         const SEV_COLORS = {
-          RED: "#ff1a1a",
+          RED: "#ffb300",
           ORANGE: "#ff6600",
           YELLOW: "#00bbaa",
           BLUE: "#3399ff",
         };
+      const SEV_LABELS = {
+        RED: "AMBER",
+        ORANGE: "ORANGE",
+        YELLOW: "TEAL",
+        BLUE: "BLUE",
+      };
+
+      function severityLabel(severity) {
+        return SEV_LABELS[severity] || severity || "UNKNOWN";
+      }
       const TYPE_ICONS = {
         bombing: "fa-bomb",
         kidnapping: "fa-user-secret",
@@ -2097,7 +2107,7 @@
     <div class="popup-detail"><strong>Type:</strong> ${(inc.type || "").replace(/_/g, " ")}</div>
     ${killed}${abducted}
     <div class="popup-foot">
-      <span class="sev-pill sev-${inc.severity}">${inc.severity}</span>
+      <span class="sev-pill sev-${inc.severity}">${severityLabel(inc.severity)}</span>
       &nbsp;<span style="font-size:10px;color:#666">${inc.source || ""}</span>
       ${inc.verified ? '<span class="verified-badge" style="margin-left:4px">ACLED</span>' : ""}
       ${tierBadgeHtml(inc.source, inc.verified)}
@@ -2224,7 +2234,7 @@
     <div class="alert-row1">
       <i class="fas ${icon} alert-icon" style="color:${c}"></i>
       <div class="alert-title">${inc.title}</div>
-      <span class="sev-pill sev-${inc.severity}">${inc.severity}</span>
+      <span class="sev-pill sev-${inc.severity}">${severityLabel(inc.severity)}</span>
     </div>
     <div class="alert-row2">
       <span class="alert-location">${[inc.location, inc.state].filter(Boolean).join(", ") || "Nigeria"}</span>
@@ -2541,7 +2551,7 @@
           const kwMatch = kwLower.some((k) => k && text.includes(k));
           if (stateMatch || kwMatch)
             showToast(
-              `🚨 ${inc.severity} — ${inc.state || "Nigeria"}`,
+              `🚨 ${severityLabel(inc.severity)} — ${inc.state || "Nigeria"}`,
               inc.title.slice(0, 100),
             );
         }
@@ -2673,7 +2683,7 @@
           const sev = inc.severity || "YELLOW";
           const where = [inc.location, inc.state].filter(Boolean).join(", ") || "Nigeria";
           showToast(
-            `🟢 New ${sev} alert — ${where}`,
+            `🟢 New ${severityLabel(sev)} alert — ${where}`,
             (inc.title || "").slice(0, 110),
           );
           _scheduleIncidentRefresh();
