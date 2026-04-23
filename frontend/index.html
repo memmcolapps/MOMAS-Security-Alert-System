@@ -2638,6 +2638,37 @@
         .addEventListener("click", exportCSV);
 
       // ════════════════════════════════════════════════════════════════════════════
+      // INCIDENT SSE — real-time push from backend (no waiting for poll)
+      // ════════════════════════════════════════════════════════════════════════════
+      let _incidentRefreshTimer = null;
+      function _scheduleIncidentRefresh() {
+        if (_incidentRefreshTimer) return; // already pending
+        _incidentRefreshTimer = setTimeout(() => {
+          _incidentRefreshTimer = null;
+          fetchIncidents();
+        }, 1500); // debounce: coalesce burst of new incidents into one re-fetch
+      }
+
+      function connectIncidentsSSE() {
+        const es = new EventSource(`${API_BASE}/api/incidents/events`);
+        es.addEventListener("incident_new", (e) => {
+          let inc;
+          try { inc = JSON.parse(e.data); } catch { return; }
+          const sev = inc.severity || "YELLOW";
+          const where = [inc.location, inc.state].filter(Boolean).join(", ") || "Nigeria";
+          showToast(
+            `🟢 New ${sev} alert — ${where}`,
+            (inc.title || "").slice(0, 110),
+          );
+          _scheduleIncidentRefresh();
+        });
+        es.onerror = () => {
+          // browser auto-reconnects; nothing to do here
+        };
+        return es;
+      }
+
+      // ════════════════════════════════════════════════════════════════════════════
       // INIT — fetch runtime config then start
       // ════════════════════════════════════════════════════════════════════════════
       (async () => {
@@ -2651,7 +2682,8 @@
         }
         setPanelState(false);
         fetchIncidents();
-        setInterval(fetchIncidents, REFRESH_MS);
+        setInterval(fetchIncidents, REFRESH_MS); // periodic sync (default 30 min — SSE handles real-time)
+        connectIncidentsSSE();
       })();
     </script>
 

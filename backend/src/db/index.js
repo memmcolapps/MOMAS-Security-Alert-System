@@ -1,6 +1,7 @@
 "use strict";
 
 const { Pool } = require("pg");
+const { bus } = require("../events");
 
 const pool = new Pool({
   connectionString:
@@ -110,7 +111,7 @@ async function init() {
 
 // ── Queries ───────────────────────────────────────────────────────────────────
 
-/** Insert one incident. Returns true if inserted, false if duplicate. */
+/** Insert one incident. Returns the inserted row, or null on duplicate. */
 async function insertIncident(p) {
   const result = await pool.query(
     `
@@ -119,7 +120,7 @@ async function insertIncident(p) {
        type, severity, fatalities, victims, source, source_url, source_type, verified)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
     ON CONFLICT (external_id) DO NOTHING
-    RETURNING id
+    RETURNING *
   `,
     [
       p.external_id,
@@ -140,7 +141,9 @@ async function insertIncident(p) {
       p.verified,
     ],
   );
-  return result.rowCount > 0;
+  const row = result.rows[0] || null;
+  if (row) bus.emit("incident:new", row);
+  return row;
 }
 
 /** Log a scrape run. */

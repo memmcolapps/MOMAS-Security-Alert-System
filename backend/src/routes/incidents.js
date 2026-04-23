@@ -3,12 +3,43 @@
 const express = require('express');
 const router  = express.Router();
 const db      = require('../db');
+const { bus } = require('../events');
 const { scrapeAll }       = require('../scrapers/rss');
 const { fetchHAPI }       = require('../scrapers/hapi');
 const { scrapeReliefWeb } = require('../scrapers/reliefweb');
 const { scrapeGDELT }     = require('../scrapers/gdelt');
 const { scrapeNewsAPI }   = require('../scrapers/newsapi');
 const { scrapeGuardian }  = require('../scrapers/guardian');
+const { scrapeTelegram } = require('../scrapers/telegram');
+
+// ── SSE: real-time incident push ──────────────────────────────────────────────
+const sseClients = new Set();
+
+bus.on('incident:new', (row) => {
+  const msg = `event: incident_new\ndata: ${JSON.stringify(row)}\n\n`;
+  for (const res of sseClients) {
+    try { res.write(msg); } catch {}
+  }
+});
+
+router.get('/events', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+  res.write(':ok\n\n');
+
+  sseClients.add(res);
+  const hb = setInterval(() => {
+    try { res.write(':heartbeat\n\n'); } catch {}
+  }, 25_000);
+
+  req.on('close', () => {
+    clearInterval(hb);
+    sseClients.delete(res);
+  });
+});
 
 // ── Simple TTL cache (2-minute window, cleared on scrape) ─────────────────────
 const _cache = new Map();
@@ -90,6 +121,7 @@ router.post('/scrape', async (req, res) => {
     const d = parseInt(req.body?.days_back) || 7;
     await Promise.all([
       scrapeAll(),
+      scrapeTelegram(),
       fetchHAPI(d),
       scrapeReliefWeb(d),
       scrapeGDELT(d),
