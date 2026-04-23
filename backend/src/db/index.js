@@ -255,7 +255,7 @@ async function findMatchingIncidents({ date, state, type }) {
      WHERE date >= $1::DATE - INTERVAL '1 day'
        AND date <= $1::DATE + INTERVAL '1 day'
        AND type = $2
-       AND (state IS NULL OR state = $3 OR $3 IS NULL)
+       AND (state IS NULL OR LOWER(state) = $3 OR $3 IS NULL)
      ORDER BY date DESC, report_count DESC`,
     [date, type, state?.toLowerCase() || null],
   );
