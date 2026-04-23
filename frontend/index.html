@@ -2807,11 +2807,26 @@
         let deviceUids = [];
 
         const fmtTime = (t) => (t ? new Date(t).toLocaleString() : "—");
+        const escHtml = (value) =>
+          String(value).replace(/[&<>"']/g, (ch) =>
+            ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]),
+          );
 
         function typeIcon(deviceType) {
           if (deviceType === "vehicle") return "fa-car";
           if (deviceType === "fixed") return "fa-map-pin";
           return "fa-walkie-talkie"; // handheld + default
+        }
+
+        function deviceTypeLabel(deviceType) {
+          return (
+            {
+              handheld: "Handheld radio",
+              vehicle: "Vehicle tracker",
+              fixed: "Fixed unit",
+              other: "Other",
+            }[deviceType] || deviceType || "—"
+          );
         }
 
         function deviceIcon(uid, sos) {
@@ -2830,16 +2845,41 @@
         }
 
         function buildPopup(d) {
+          const reg = deviceRegistry.get(String(d.Uid));
+          const displayName = reg?.name || `Device ${d.Uid}`;
+          const details = [];
+          if (reg?.company) {
+            details.push(
+              `<div class="popup-detail"><strong>Company:</strong> ${escHtml(reg.company)}</div>`,
+            );
+          }
+          if (reg?.operator) {
+            details.push(
+              `<div class="popup-detail"><strong>Operator:</strong> ${escHtml(reg.operator)}</div>`,
+            );
+          }
+          if (reg?.device_type) {
+            details.push(
+              `<div class="popup-detail"><strong>Type:</strong> ${escHtml(deviceTypeLabel(reg.device_type))}</div>`,
+            );
+          }
+          if (reg?.notes) {
+            details.push(
+              `<div class="popup-detail"><strong>Notes:</strong> ${escHtml(reg.notes)}</div>`,
+            );
+          }
           return `
             <div class="popup-title" style="color:${d.processStatus === 1 ? "#ff1a1a" : "#00cc66"}">
-              📻 Device ${d.Uid}${d.processStatus === 1 ? " — SOS" : ""}
+              📻 ${escHtml(displayName)}${d.processStatus === 1 ? " — SOS" : ""}
             </div>
+            <div class="popup-detail"><strong>ID:</strong> ${escHtml(d.Uid)}</div>
+            ${details.join("")}
             <div class="popup-detail"><strong>Speed:</strong> ${d.Speed ?? 0} km/h</div>
             <div class="popup-detail"><strong>Heading:</strong> ${d.Direction ?? 0}°</div>
             <div class="popup-detail"><strong>Last seen:</strong> ${fmtTime(d.Rtime)}</div>
             <div class="popup-detail"><strong>Accuracy:</strong> ${d.Accuracy ?? "—"} m</div>
-            <div class="popup-detail"><strong>Source:</strong> ${d.positionType || "—"}</div>
-            ${d.ExceptionMsg ? `<div class="popup-detail" style="color:#ff8800"><strong>⚠</strong> ${d.ExceptionMsg}</div>` : ""}
+            <div class="popup-detail"><strong>Source:</strong> ${escHtml(d.positionType || "—")}</div>
+            ${d.ExceptionMsg ? `<div class="popup-detail" style="color:#ff8800"><strong>⚠</strong> ${escHtml(d.ExceptionMsg)}</div>` : ""}
             <div class="popup-foot">
               <button class="btn-history" style="padding:4px 8px;border:none;border-radius:4px;cursor:pointer;font-size:10px" onclick="window.__openDevicePanel(${d.Uid})">
                 Track history
