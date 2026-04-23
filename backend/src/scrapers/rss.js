@@ -17,6 +17,12 @@ const parser = new Parser({
 const FEEDS = [
   { name: "Sahara Reporters", url: "https://saharareporters.com/rss.xml" },
   { name: "Channels TV", url: "https://www.channelstv.com/feed/" },
+  { name: "Punch", url: "https://punchng.com/feed/" },
+  { name: "Vanguard", url: "https://www.vanguardngr.com/feed/" },
+  { name: "Premium Times", url: "https://www.premiumtimesng.com/feed/" },
+  { name: "TheCable", url: "https://www.thecable.ng/feed/" },
+  { name: "Guardian Nigeria", url: "https://guardian.ng/feed/" },
+  { name: "Daily Trust", url: "https://dailytrust.com/feed/" },
   {
     name: "Google News — NG Security",
     url: "https://news.google.com/rss/search?q=nigeria+attack+killed+bomb+kidnap&hl=en-NG&gl=NG&ceid=NG:en",
@@ -44,6 +50,50 @@ const FEEDS = [
   {
     name: "Google News — Delta/Rivers",
     url: "https://news.google.com/rss/search?q=delta+rivers+bayelsa+cult+attack+killing+pipeline&hl=en-NG&gl=NG&ceid=NG:en",
+  },
+  {
+    name: "Google News — North-West Raids",
+    url: "https://news.google.com/rss/search?q=zamfara+sokoto+kebbi+niger+raid+bandits+village+attack&hl=en-NG&gl=NG&ceid=NG:en",
+  },
+  {
+    name: "Google News — Kaduna Axis",
+    url: "https://news.google.com/rss/search?q=kaduna+birnin+gwari+chikun+kajuru+attack+kidnap+gunmen&hl=en-NG&gl=NG&ceid=NG:en",
+  },
+  {
+    name: "Google News — Plateau/Benue Fresh Attacks",
+    url: "https://news.google.com/rss/search?q=plateau+benue+fresh+attack+village+killed+gunmen&hl=en-NG&gl=NG&ceid=NG:en&tbs=qdr:d",
+  },
+  {
+    name: "Google News — North-East Ambush",
+    url: "https://news.google.com/rss/search?q=borno+yobe+adamawa+ambush+soldiers+terrorists+attack&hl=en-NG&gl=NG&ceid=NG:en",
+  },
+  {
+    name: "Google News — Kidnap Watch",
+    url: "https://news.google.com/rss/search?q=nigeria+school+kidnap+abducted+hostages+released+ransom&hl=en-NG&gl=NG&ceid=NG:en&tbs=qdr:d",
+  },
+  {
+    name: "Google News — Herder/Farmer Clashes",
+    url: "https://news.google.com/rss/search?q=nigeria+herdsmen+farmers+clash+killed+village&hl=en-NG&gl=NG&ceid=NG:en",
+  },
+  {
+    name: "Google News — South-South Security",
+    url: "https://news.google.com/rss/search?q=rivers+bayelsa+delta+akwa+ibom+pipeline+cult+attack+security&hl=en-NG&gl=NG&ceid=NG:en",
+  },
+  {
+    name: "Google News — South-West Security",
+    url: "https://news.google.com/rss/search?q=lagos+ogun+oyo+ondo+osun+ekiti+kidnap+attack+gunmen&hl=en-NG&gl=NG&ceid=NG:en",
+  },
+  {
+    name: "Google News — FCT/Nasarawa/Niger",
+    url: "https://news.google.com/rss/search?q=abuja+fct+nasarawa+niger+kidnap+attack+security&hl=en-NG&gl=NG&ceid=NG:en",
+  },
+  {
+    name: "Google News — Communal Violence",
+    url: "https://news.google.com/rss/search?q=nigeria+communal+clash+violence+village+killed&hl=en-NG&gl=NG&ceid=NG:en",
+  },
+  {
+    name: "Google News — Bomb/IED Watch",
+    url: "https://news.google.com/rss/search?q=nigeria+ied+blast+explosion+bomb+market+attack&hl=en-NG&gl=NG&ceid=NG:en&tbs=qdr:d",
   },
 ];
 
@@ -252,7 +302,7 @@ async function scrapeFeed(feed) {
 
 const FEED_CONCURRENCY = Math.max(
   1,
-  parseInt(process.env.RSS_FEED_CONCURRENCY || "5", 10),
+  parseInt(process.env.RSS_FEED_CONCURRENCY || "8", 10),
 );
 
 async function scrapeAll() {

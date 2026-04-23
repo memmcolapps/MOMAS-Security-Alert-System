@@ -11,6 +11,17 @@ const GDELT_URL = 'https://api.gdeltproject.org/api/v2/doc/doc';
 const QUERY_GROUPS = [
   'theme:KILL',
   'theme:KIDNAP',
+  'theme:ATTACK',
+  'theme:SUICIDE_BOMB',
+  'theme:TERROR',
+  'theme:WB_2432_CONFLICT',
+  '"gunmen"',
+  '"bandits"',
+  '"herdsmen"',
+  '"ambush"',
+  '"massacre"',
+  '"clash"',
+  '"abducted"',
 ];
 
 const QUERY_DELAY_MS = 15000;

@@ -15,6 +15,9 @@ const QUERIES = [
   'boko haram ISWAP attack nigeria',
   'nigeria bomb explosion blast IED',
   'nigeria bandit massacre violence',
+  'nigeria ambush village raid gunmen',
+  'nigeria herdsmen farmers clash killed',
+  'plateau benue kaduna zamfara attack killed',
 ];
 
 const QUERY_DELAY_MS = 1500; // polite pause between calls

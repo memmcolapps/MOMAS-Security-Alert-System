@@ -22,8 +22,12 @@ const db = require("../db");
 // scripts/probe-telegram.js and only includes handles confirmed to return
 // messages. Run that script to test new handles before adding them.
 const DEFAULT_CHANNELS = [
-  "PeoplesGazette", // Peoples Gazette — investigative/breaking news
-  "thecableng",     // The Cable — Nigerian news
+  "PeoplesGazette",  // Peoples Gazette — investigative/breaking news
+  "thecableng",      // The Cable — Nigerian news
+  "channelsforum",   // Channels forum mirror with preview enabled
+  "zagazolamakama",  // security-oriented channel with preview enabled
+  "naijanewsroom",   // general breaking news
+  "naijabreakingnews", // general breaking news
 ];
 
 function getChannels() {

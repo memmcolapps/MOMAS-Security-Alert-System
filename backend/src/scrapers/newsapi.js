@@ -10,7 +10,7 @@ const db = require('../db');
 // Free tier: 100 req/day. With 30-min scrape cycles (48/day) we use 1 broad
 // query per run = 48 req/day, leaving headroom for manual scrapes.
 const QUERY =
-  'nigeria (attack OR killed OR bomb OR explosion OR kidnap OR abduct OR bandits OR gunmen OR massacre OR terrorism OR shooting OR clash)';
+  'nigeria (attack OR killed OR bomb OR explosion OR kidnap OR abduct OR bandits OR gunmen OR massacre OR terrorism OR shooting OR clash OR ambush OR herdsmen OR communal OR village raid OR hostage)';
 
 function isEnabled() {
   return !!process.env.NEWSAPI_KEY;
