@@ -1659,6 +1659,22 @@
             <div class="sos-modal-status-badge" id="sosModalStatusBadge">ACTIVE</div>
           </div>
           <div class="sos-modal-details">
+            <div class="sos-modal-detail-row" id="sosModalCompanyRow" style="display:none">
+              <i class="fas fa-building"></i>
+              <span id="sosModalCompany"></span>
+            </div>
+            <div class="sos-modal-detail-row" id="sosModalOperatorRow" style="display:none">
+              <i class="fas fa-user"></i>
+              <span id="sosModalOperator"></span>
+            </div>
+            <div class="sos-modal-detail-row" id="sosModalTypeRow" style="display:none">
+              <i class="fas fa-tag"></i>
+              <span id="sosModalType"></span>
+            </div>
+            <div class="sos-modal-detail-row" id="sosModalNotesRow" style="display:none">
+              <i class="fas fa-note-sticky"></i>
+              <span id="sosModalNotes"></span>
+            </div>
             <div class="sos-modal-detail-row">
               <i class="fas fa-location-dot"></i>
               <span id="sosModalLocation">Location unknown</span>
@@ -2901,11 +2917,17 @@
               const locStr = hasCoords
                 ? `${parseFloat(a.location_lat).toFixed(4)}, ${parseFloat(a.location_lon).toFixed(4)}`
                 : "Location unknown";
+              const displayName = a.dev_name || a.device_name || `Device ${a.device_id}`;
+              const subParts = [a.dev_company, a.dev_operator].filter(Boolean);
+              const subLine = subParts.length
+                ? `<div class="sos-location" style="opacity:.85">${subParts.join(" · ")}</div>`
+                : "";
               return `<div class="sos-item${resolved ? " resolved" : ""}" data-id="${a.sos_msg_id}">
               <div class="sos-item-row1">
-                <span class="sos-device-name">${a.device_name || `Device ${a.device_id}`}</span>
+                <span class="sos-device-name">${displayName}</span>
                 <span class="sos-time">${fmtSosTime(a.created_at)}</span>
               </div>
+              ${subLine}
               <div class="sos-location"><i class="fas fa-location-dot" style="font-size:8px;margin-right:3px"></i>${locStr}</div>
               <div class="sos-item-row2">
                 ${resolved
@@ -2943,12 +2965,33 @@
           if (!sos) { _closeSosModal(); return; }
 
           const reg = _sosModalReg(sos.device_id);
-          const fa = typeIcon(reg?.device_type);
+          // Prefer fields the backend joined from the devices registry, then local cache
+          const devType     = sos.dev_type     || reg?.device_type || null;
+          const devName     = sos.dev_name     || reg?.name        || null;
+          const devCompany  = sos.dev_company  || reg?.company     || null;
+          const devOperator = sos.dev_operator || reg?.operator    || null;
+          const devNotes    = sos.dev_notes    || reg?.notes       || null;
+
+          const fa = typeIcon(devType);
           document.getElementById("sosModalIcon").innerHTML = `<i class="fas ${fa}"></i>`;
           document.getElementById("sosModalDeviceName").textContent =
-            sos.device_name || reg?.name || `Device ${sos.device_id}`;
+            devName || sos.device_name || `Device ${sos.device_id}`;
           document.getElementById("sosModalDeviceId").textContent =
             `ID: ${sos.device_id}`;
+
+          const setRow = (rowId, valId, val) => {
+            const row = document.getElementById(rowId);
+            if (val) {
+              row.style.display = "";
+              document.getElementById(valId).textContent = val;
+            } else {
+              row.style.display = "none";
+            }
+          };
+          setRow("sosModalCompanyRow",  "sosModalCompany",  devCompany);
+          setRow("sosModalOperatorRow", "sosModalOperator", devOperator);
+          setRow("sosModalTypeRow",     "sosModalType",     devType);
+          setRow("sosModalNotesRow",    "sosModalNotes",    devNotes);
 
           const hasCoords = sos.location_lat && sos.location_lon;
           document.getElementById("sosModalLocation").textContent = hasCoords
@@ -3286,11 +3329,22 @@
         window.__openDevicePanel = function (uid) {
           selectedUid = uid;
           const entry = deviceMarkers.get(uid);
-          document.getElementById("deviceName").textContent = `Device ${uid}`;
+          const reg = deviceRegistry.get(String(uid));
+          document.getElementById("deviceName").textContent =
+            reg?.name || `Device ${uid}`;
           const d = entry?.data;
-          document.getElementById("deviceDetails").innerHTML = d
-            ? `Speed ${d.Speed ?? 0} km/h · Last seen ${fmtTime(d.Rtime)}`
-            : "";
+          const esc = (s) =>
+            String(s).replace(/[&<>"']/g, (c) =>
+              ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]),
+            );
+          const lines = [];
+          lines.push(`ID: ${esc(uid)}`);
+          if (reg?.company)     lines.push(`<i class="fas fa-building" style="width:10px"></i> ${esc(reg.company)}`);
+          if (reg?.operator)    lines.push(`<i class="fas fa-user" style="width:10px"></i> ${esc(reg.operator)}`);
+          if (reg?.device_type) lines.push(`<i class="fas fa-tag" style="width:10px"></i> ${esc(reg.device_type)}`);
+          if (reg?.notes)       lines.push(`<i class="fas fa-note-sticky" style="width:10px"></i> ${esc(reg.notes)}`);
+          if (d) lines.push(`Speed ${d.Speed ?? 0} km/h · Last seen ${fmtTime(d.Rtime)}`);
+          document.getElementById("deviceDetails").innerHTML = lines.join("<br>");
           const now = new Date();
           const dayStart = new Date(now);
           dayStart.setHours(0, 0, 0, 0);

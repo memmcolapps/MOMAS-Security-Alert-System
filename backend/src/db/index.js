@@ -338,44 +338,68 @@ async function getById(id) {
 
 // ── SOS alerts ────────────────────────────────────────────────────────────────
 
+// SELECT clause shared by all SOS reads — joins registered device fields
+const SOS_WITH_DEVICE_COLS = `
+  s.*,
+  d.name        AS dev_name,
+  d.company     AS dev_company,
+  d.operator    AS dev_operator,
+  d.device_type AS dev_type,
+  d.notes       AS dev_notes
+`;
+
+async function _getSosWithDevice(sos_msg_id) {
+  const { rows } = await pool.query(
+    `SELECT ${SOS_WITH_DEVICE_COLS}
+       FROM sos_alerts s
+       LEFT JOIN devices d ON d.device_id = s.device_id
+      WHERE s.sos_msg_id = $1`,
+    [sos_msg_id],
+  );
+  return rows[0] ?? null;
+}
+
 async function insertSosAlert({ sos_msg_id, device_id, device_name, triggered_at, location_lat, location_lon, location_raw }) {
   const { rows } = await pool.query(
     `INSERT INTO sos_alerts (sos_msg_id, device_id, device_name, triggered_at, location_lat, location_lon, location_raw)
      VALUES ($1,$2,$3,$4,$5,$6,$7)
      ON CONFLICT (sos_msg_id) DO NOTHING
-     RETURNING *`,
+     RETURNING sos_msg_id`,
     [sos_msg_id, device_id, device_name, triggered_at, location_lat ?? null, location_lon ?? null, location_raw ?? null],
   );
-  return rows[0] ?? null; // null = already existed (duplicate)
+  if (!rows[0]) return null; // duplicate
+  return _getSosWithDevice(rows[0].sos_msg_id);
 }
 
 async function acknowledgeSosAlert(sos_msg_id) {
-  const { rows } = await pool.query(
+  const { rowCount } = await pool.query(
     `UPDATE sos_alerts SET status=1, acknowledged_at=NOW()
-     WHERE sos_msg_id=$1 AND status=0
-     RETURNING *`,
+     WHERE sos_msg_id=$1 AND status=0`,
     [sos_msg_id],
   );
-  return rows[0] ?? null;
+  if (!rowCount) return null;
+  return _getSosWithDevice(sos_msg_id);
 }
 
 async function resolveSosAlert(sos_msg_id) {
-  const { rows } = await pool.query(
+  const { rowCount } = await pool.query(
     `UPDATE sos_alerts SET status=2, resolved_at=NOW()
-     WHERE sos_msg_id=$1 AND status < 2
-     RETURNING *`,
+     WHERE sos_msg_id=$1 AND status < 2`,
     [sos_msg_id],
   );
-  return rows[0] ?? null;
+  if (!rowCount) return null;
+  return _getSosWithDevice(sos_msg_id);
 }
 
 async function listSosAlerts() {
   // Show: unresolved (any date) + resolved today (by our clock, not POCSTARS clock)
   const { rows } = await pool.query(`
-    SELECT * FROM sos_alerts
-    WHERE status < 2
-       OR resolved_at::date = CURRENT_DATE
-    ORDER BY created_at DESC
+    SELECT ${SOS_WITH_DEVICE_COLS}
+      FROM sos_alerts s
+      LEFT JOIN devices d ON d.device_id = s.device_id
+     WHERE s.status < 2
+        OR s.resolved_at::date = CURRENT_DATE
+     ORDER BY s.created_at DESC
   `);
   return rows;
 }
