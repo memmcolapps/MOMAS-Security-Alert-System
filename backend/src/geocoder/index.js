@@ -263,6 +263,33 @@ const PLACES = [
 // Build a sorted list (longest names first so they match before substrings)
 const SORTED_PLACES = [...PLACES].sort((a, b) => b.name.length - a.name.length);
 
+function toTitleCase(name) {
+  return String(name)
+    .split(" ")
+    .map((part) =>
+      part
+        .split("-")
+        .map((piece) =>
+          piece ? piece.charAt(0).toUpperCase() + piece.slice(1) : piece,
+        )
+        .join("-"),
+    )
+    .join(" ");
+}
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
 /**
  * Attempt to resolve a location string to coordinates.
  * Returns { lat, lon, state, matched } or null.
@@ -299,4 +326,33 @@ function extractState(text) {
   return null;
 }
 
-module.exports = { geocode, extractState, STATE_NAMES };
+function reverseGeocode(lat, lon) {
+  const numLat = Number(lat);
+  const numLon = Number(lon);
+  if (!Number.isFinite(numLat) || !Number.isFinite(numLon)) return null;
+
+  let best = null;
+  for (const place of PLACES) {
+    const distanceKm = haversineKm(numLat, numLon, place.lat, place.lon);
+    if (!best || distanceKm < best.distance_km) {
+      best = {
+        name: toTitleCase(place.name),
+        state: place.state,
+        lat: place.lat,
+        lon: place.lon,
+        distance_km: distanceKm,
+      };
+    }
+  }
+  if (!best) return null;
+  return {
+    ...best,
+    distance_km: Number(best.distance_km.toFixed(1)),
+    label:
+      best.distance_km <= 5
+        ? `${best.name}, ${best.state}`
+        : `Near ${best.name}, ${best.state}`,
+  };
+}
+
+module.exports = { geocode, extractState, reverseGeocode, STATE_NAMES };

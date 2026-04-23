@@ -11,6 +11,7 @@ const { scrapeGDELT }     = require('../scrapers/gdelt');
 const { scrapeNewsAPI }   = require('../scrapers/newsapi');
 const { scrapeGuardian }  = require('../scrapers/guardian');
 const { scrapeTelegram } = require('../scrapers/telegram');
+const { reverseGeocode } = require('../geocoder');
 
 // ── SSE: real-time incident push ──────────────────────────────────────────────
 const sseClients = new Set();
@@ -101,6 +102,13 @@ router.get('/recent', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+router.get('/reverse-geocode', (req, res) => {
+  const { lat, lon } = req.query;
+  const result = reverseGeocode(lat, lon);
+  if (!result) return res.status(400).json({ error: 'valid lat and lon are required' });
+  res.json(result);
 });
 
 // ── GET /api/incidents/:id ────────────────────────────────────────────────────

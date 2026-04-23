@@ -603,8 +603,34 @@
       .layer-controls {
         display: flex;
         justify-content: center;
+        align-items: center;
+        flex-wrap: wrap;
         gap: 6px;
         margin-top: 8px;
+      }
+      .layer-label {
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+        color: #777;
+      }
+      .layer-select {
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 68, 68, 0.35);
+        color: #e0e0e0;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 10px;
+        min-width: 110px;
+      }
+      .layer-select:focus {
+        outline: none;
+        border-color: #ff4444;
+      }
+      .layer-select option {
+        background: #101010;
+        color: #e0e0e0;
       }
       .toggle-btn {
         background: rgba(255, 68, 68, 0.12);
@@ -624,6 +650,28 @@
       .toggle-btn.active {
         background: #ff4444;
         color: #000;
+      }
+      .map-utility-btn {
+        width: 30px;
+        height: 30px;
+        border: 1px solid rgba(255, 68, 68, 0.45);
+        border-radius: 4px;
+        background: rgba(0, 0, 0, 0.9);
+        color: #ff4444;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        font-size: 13px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+      }
+      .map-utility-btn:hover {
+        background: rgba(255, 68, 68, 0.16);
+      }
+      .leaflet-control-scale-line {
+        background: rgba(0, 0, 0, 0.88);
+        border: 1px solid rgba(255, 68, 68, 0.4);
+        color: #ddd;
       }
 
       /* ── Popups ── */
@@ -1794,6 +1842,12 @@
       </div>
 
       <div class="layer-controls">
+        <span class="layer-label">Basemap</span>
+        <select class="layer-select" id="basemapSelect" title="Change basemap">
+          <option value="dark">Dark</option>
+          <option value="streets">Streets</option>
+          <option value="satellite">Satellite</option>
+        </select>
         <button class="toggle-btn active" data-layer="live">Live Alerts</button>
         <button class="toggle-btn" data-layer="heat">Heatmap</button>
         <button class="toggle-btn active" data-layer="devices">
@@ -1826,19 +1880,55 @@
       // Nigeria bounds: SW [4.3, 2.7] → NE [13.9, 14.7]
       const NIGERIA_BOUNDS = L.latLngBounds([4.3, 2.7], [13.9, 14.7]);
       const NIGERIA_CENTER = [9.0, 8.5];
+      const STATE_BOUNDARY_URL =
+        "https://raw.githubusercontent.com/wmgeolab/geoBoundaries/9469f09/releaseData/gbOpen/NGA/ADM1/geoBoundaries-NGA-ADM1_simplified.geojson";
+      const LGA_BOUNDARY_URL =
+        "https://raw.githubusercontent.com/wmgeolab/geoBoundaries/9469f09/releaseData/gbOpen/NGA/ADM2/geoBoundaries-NGA-ADM2_simplified.geojson";
+      const STATE_BOUNDARY_ZOOM = 7;
+      const LGA_BOUNDARY_ZOOM = 9;
 
       const map = L.map("map", {
         zoomControl: false,
         attributionControl: false,
         minZoom: 5,
-        maxZoom: 18,
+        maxZoom: 20,
         maxBounds: NIGERIA_BOUNDS.pad(0.3),
         maxBoundsViscosity: 0.85,
       }).fitBounds(NIGERIA_BOUNDS);
-      L.tileLayer(
-        "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-        { maxZoom: 16 },
-      ).addTo(map);
+      map.createPane("boundaryPane");
+      map.getPane("boundaryPane").style.zIndex = 350;
+      map.getPane("boundaryPane").style.pointerEvents = "none";
+      map.createPane("threatPane");
+      map.getPane("threatPane").style.zIndex = 360;
+      map.getPane("threatPane").style.pointerEvents = "none";
+      const baseLayers = {
+        dark: L.tileLayer(
+          "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+          { maxZoom: 20, maxNativeZoom: 20 },
+        ),
+        streets: L.tileLayer(
+          "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+          { maxZoom: 20, maxNativeZoom: 19 },
+        ),
+        satellite: L.tileLayer(
+          "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+          { maxZoom: 20, maxNativeZoom: 19 },
+        ),
+      };
+      let activeBaseLayer = null;
+
+      function setBasemap(name) {
+        const nextLayer = baseLayers[name] || baseLayers.dark;
+        if (activeBaseLayer === nextLayer) return;
+        if (activeBaseLayer) map.removeLayer(activeBaseLayer);
+        activeBaseLayer = nextLayer;
+        activeBaseLayer.addTo(map);
+        if (typeof activeBaseLayer.bringToBack === "function") {
+          activeBaseLayer.bringToBack();
+        }
+      }
+
+      setBasemap("dark");
 
       // Nigeria country outline for visual context
       fetch(
@@ -1853,6 +1943,7 @@
           );
           if (!nigeria) return;
           L.geoJSON(nigeria, {
+            pane: "boundaryPane",
             style: {
               color: "rgba(255,68,68,0.35)",
               weight: 1.5,
@@ -1863,6 +1954,25 @@
           }).addTo(map);
         });
       L.control.zoom({ position: "topleft" }).addTo(map);
+      L.control.scale({ position: "bottomleft", imperial: false }).addTo(map);
+
+      const RecenterControl = L.Control.extend({
+        options: { position: "topleft" },
+        onAdd() {
+          const container = L.DomUtil.create("div", "leaflet-bar");
+          const button = L.DomUtil.create("button", "map-utility-btn", container);
+          button.type = "button";
+          button.title = "Recenter Nigeria";
+          button.innerHTML = '<i class="fas fa-location-crosshairs"></i>';
+          L.DomEvent.disableClickPropagation(container);
+          L.DomEvent.on(button, "click", (e) => {
+            L.DomEvent.stop(e);
+            map.fitBounds(NIGERIA_BOUNDS, { padding: [20, 20] });
+          });
+          return container;
+        },
+      });
+      map.addControl(new RecenterControl());
 
       const liveLayer = L.markerClusterGroup({
         maxClusterRadius: 50,
@@ -1888,6 +1998,12 @@
         threat: threatLayer,
         heat: heatLayer,
       };
+      const threatCircles = [];
+      let stateBoundaryLayer = null;
+      let lgaBoundaryLayer = null;
+      let stateBoundaryPromise = null;
+      let lgaBoundaryPromise = null;
+      const geoContextCache = new Map();
 
       // ════════════════════════════════════════════════════════════════════════════
       // DATE RANGE STATE — default: today only
@@ -2021,6 +2137,11 @@
       function severityLabel(severity) {
         return SEV_LABELS[severity] || severity || "UNKNOWN";
       }
+      function escHtml(value) {
+        return String(value).replace(/[&<>"']/g, (ch) =>
+          ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]),
+        );
+      }
       const TYPE_ICONS = {
         bombing: "fa-bomb",
         kidnapping: "fa-user-secret",
@@ -2076,18 +2197,158 @@
         return [lat + r * Math.sin(angle), lon + r * Math.cos(angle)];
       }
 
-      function makeLiveMarker(inc) {
-        if (!inc.lat || !inc.lon) return null;
-        const color = SEV_COLORS[inc.severity] || SEV_COLORS.BLUE;
-        const icon = L.divIcon({
-          className: "",
-          html: `<div class="live-marker sev-${inc.severity}"></div>`,
-          iconSize: [12, 12],
-          iconAnchor: [6, 6],
-        });
-        const [jLat, jLon] = jitteredCoord(inc.lat, inc.lon);
-        const m = L.marker([jLat, jLon], { icon });
+      function boundaryStyle(kind) {
+        return kind === "states"
+          ? {
+              color: "rgba(255,255,255,0.28)",
+              weight: 1.2,
+              fillOpacity: 0,
+              opacity: 0.8,
+            }
+          : {
+              color: "rgba(255,255,255,0.16)",
+              weight: 0.7,
+              fillOpacity: 0,
+              opacity: 0.7,
+            };
+      }
 
+      async function ensureBoundaryLayer(kind) {
+        const existing = kind === "states" ? stateBoundaryLayer : lgaBoundaryLayer;
+        if (existing) return existing;
+
+        const currentPromise = kind === "states" ? stateBoundaryPromise : lgaBoundaryPromise;
+        if (currentPromise) return currentPromise;
+
+        const url = kind === "states" ? STATE_BOUNDARY_URL : LGA_BOUNDARY_URL;
+        const promise = fetch(url)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => {
+            if (!data) return null;
+            const layer = L.geoJSON(data, {
+              pane: "boundaryPane",
+              style: boundaryStyle(kind),
+              interactive: false,
+            });
+            if (kind === "states") stateBoundaryLayer = layer;
+            else lgaBoundaryLayer = layer;
+            return layer;
+          })
+          .catch(() => null)
+          .finally(() => {
+            if (kind === "states") stateBoundaryPromise = null;
+            else lgaBoundaryPromise = null;
+          });
+
+        if (kind === "states") stateBoundaryPromise = promise;
+        else lgaBoundaryPromise = promise;
+        return promise;
+      }
+
+      async function updateBoundaryVisibility() {
+        const zoom = map.getZoom();
+        const showStates = zoom >= STATE_BOUNDARY_ZOOM;
+        const showLgas = zoom >= LGA_BOUNDARY_ZOOM;
+
+        if (showStates) {
+          const layer = await ensureBoundaryLayer("states");
+          if (layer && map.getZoom() >= STATE_BOUNDARY_ZOOM && !map.hasLayer(layer)) {
+            layer.addTo(map);
+          }
+        } else if (stateBoundaryLayer && map.hasLayer(stateBoundaryLayer)) {
+          map.removeLayer(stateBoundaryLayer);
+        }
+
+        if (showLgas) {
+          const layer = await ensureBoundaryLayer("lgas");
+          if (layer && map.getZoom() >= LGA_BOUNDARY_ZOOM && !map.hasLayer(layer)) {
+            layer.addTo(map);
+          }
+        } else if (lgaBoundaryLayer && map.hasLayer(lgaBoundaryLayer)) {
+          map.removeLayer(lgaBoundaryLayer);
+        }
+      }
+
+      function threatStyleForZoom(zoom, severity) {
+        if (zoom >= 11) {
+          return {
+            radius: 7000,
+            opacity: 0.03,
+            fillOpacity: 0.008,
+            weight: 0.6,
+            color: SEV_COLORS[severity] || "#aaa",
+            fillColor: SEV_COLORS[severity] || "#aaa",
+          };
+        }
+        if (zoom >= 9) {
+          return {
+            radius: 12000,
+            opacity: 0.06,
+            fillOpacity: 0.016,
+            weight: 0.8,
+            color: SEV_COLORS[severity] || "#aaa",
+            fillColor: SEV_COLORS[severity] || "#aaa",
+          };
+        }
+        return {
+          radius: 20000,
+          opacity: 0.12,
+          fillOpacity: 0.04,
+          weight: 1,
+          color: SEV_COLORS[severity] || "#aaa",
+          fillColor: SEV_COLORS[severity] || "#aaa",
+        };
+      }
+
+      function heatOpacityForZoom(zoom) {
+        if (zoom >= 12) return 0.05;
+        if (zoom >= 10) return 0.15;
+        if (zoom >= 8) return 0.3;
+        return 0.55;
+      }
+
+      function applyMapPresentation() {
+        const zoom = map.getZoom();
+        threatCircles.forEach(({ circle, severity }) => {
+          const nextStyle = threatStyleForZoom(zoom, severity);
+          circle.setRadius(nextStyle.radius);
+          circle.setStyle(nextStyle);
+        });
+        if (heatLayer._canvas) {
+          heatLayer._canvas.style.opacity = String(heatOpacityForZoom(zoom));
+        }
+      }
+
+      function coordKey(lat, lon) {
+        return `${Number(lat).toFixed(4)},${Number(lon).toFixed(4)}`;
+      }
+
+      async function fetchGeoContext(lat, lon) {
+        if (!lat || !lon) return null;
+        const key = coordKey(lat, lon);
+        if (geoContextCache.has(key)) return geoContextCache.get(key);
+        const promise = fetch(
+          `${API_BASE}/api/incidents/reverse-geocode?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`,
+        )
+          .then(async (r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        geoContextCache.set(key, promise);
+        const result = await promise;
+        geoContextCache.set(key, result);
+        return result;
+      }
+
+      function geoContextLineHtml(geoContext) {
+        if (!geoContext) return "";
+        const distance =
+          typeof geoContext.distance_km === "number"
+            ? `<span style="color:#777"> · ${geoContext.distance_km} km</span>`
+            : "";
+        return `<div class="popup-detail"><strong>Nearest:</strong> ${escHtml(geoContext.label || geoContext.name || "—")}${distance}</div>`;
+      }
+
+      function buildIncidentPopup(inc, geoContext) {
+        const color = SEV_COLORS[inc.severity] || SEV_COLORS.BLUE;
         const killed =
           inc.fatalities > 0
             ? `<div class="popup-detail"><strong>Killed:</strong> ${inc.fatalities}</div>`
@@ -2099,22 +2360,39 @@
         const srcLink = inc.source_url
           ? `<a href="${inc.source_url}" target="_blank" style="color:#ff8844;font-size:10px;">View source ↗</a>`
           : "";
-
-        m.bindPopup(`
-    <div class="popup-title" style="color:${color}">${inc.title}</div>
-    <div class="popup-detail"><strong>Date:</strong> ${inc.date}</div>
-    <div class="popup-detail"><strong>Location:</strong> ${[inc.location, inc.state].filter(Boolean).join(", ") || "Nigeria"}</div>
-    <div class="popup-detail"><strong>Type:</strong> ${(inc.type || "").replace(/_/g, " ")}</div>
+        return `
+    <div class="popup-title" style="color:${color}">${escHtml(inc.title || "Untitled incident")}</div>
+    <div class="popup-detail"><strong>Date:</strong> ${escHtml(inc.date || "—")}</div>
+    <div class="popup-detail"><strong>Location:</strong> ${escHtml([inc.location, inc.state].filter(Boolean).join(", ") || "Nigeria")}</div>
+    ${geoContextLineHtml(geoContext)}
+    <div class="popup-detail"><strong>Type:</strong> ${escHtml((inc.type || "").replace(/_/g, " ") || "—")}</div>
     ${killed}${abducted}
     <div class="popup-foot">
       <span class="sev-pill sev-${inc.severity}">${severityLabel(inc.severity)}</span>
-      &nbsp;<span style="font-size:10px;color:#666">${inc.source || ""}</span>
+      &nbsp;<span style="font-size:10px;color:#666">${escHtml(inc.source || "")}</span>
       ${inc.verified ? '<span class="verified-badge" style="margin-left:4px">ACLED</span>' : ""}
       ${tierBadgeHtml(inc.source, inc.verified)}
-      ${inc.description ? `<div style="margin-top:5px;font-size:10px;color:#888">${inc.description.slice(0, 180)}${inc.description.length > 180 ? "…" : ""}</div>` : ""}
+      ${inc.description ? `<div style="margin-top:5px;font-size:10px;color:#888">${escHtml(inc.description.slice(0, 180))}${inc.description.length > 180 ? "…" : ""}</div>` : ""}
       ${srcLink ? `<div style="margin-top:5px">${srcLink}</div>` : ""}
     </div>
-  `);
+  `;
+      }
+
+      function makeLiveMarker(inc) {
+        if (!inc.lat || !inc.lon) return null;
+        const icon = L.divIcon({
+          className: "",
+          html: `<div class="live-marker sev-${inc.severity}"></div>`,
+          iconSize: [12, 12],
+          iconAnchor: [6, 6],
+        });
+        const [jLat, jLon] = jitteredCoord(inc.lat, inc.lon);
+        const m = L.marker([jLat, jLon], { icon });
+        m.bindPopup(buildIncidentPopup(inc));
+        m.on("popupopen", async () => {
+          const geoContext = await fetchGeoContext(inc.lat, inc.lon);
+          if (m.isPopupOpen()) m.setPopupContent(buildIncidentPopup(inc, geoContext));
+        });
         return m;
       }
 
@@ -2123,6 +2401,7 @@
       function renderIncidents(incidents) {
         liveLayer.clearLayers();
         threatLayer.clearLayers();
+        threatCircles.length = 0;
         // Reset jitter state so repeated renders don't accumulate offsets
         Object.keys(_coordCount).forEach((k) => delete _coordCount[k]);
         const heatPoints = [];
@@ -2133,14 +2412,11 @@
           if (!m) continue;
           m.addTo(liveLayer);
           // Threat zone circle
-          L.circle([inc.lat, inc.lon], {
-            radius: 20000,
-            fillColor: SEV_COLORS[inc.severity] || "#aaa",
-            color: SEV_COLORS[inc.severity] || "#aaa",
-            weight: 1,
-            opacity: 0.12,
-            fillOpacity: 0.04,
-          }).addTo(threatLayer);
+          const circle = L.circle(
+            [inc.lat, inc.lon],
+            Object.assign({ pane: "threatPane" }, threatStyleForZoom(map.getZoom(), inc.severity)),
+          ).addTo(threatLayer);
+          threatCircles.push({ circle, severity: inc.severity });
           heatPoints.push([
             inc.lat,
             inc.lon,
@@ -2149,7 +2425,16 @@
           n++;
         }
         heatLayer.setLatLngs(heatPoints);
+        applyMapPresentation();
       }
+
+      map.on("zoomend", () => {
+        updateBoundaryVisibility();
+        applyMapPresentation();
+      });
+      heatLayer.on("add", () => requestAnimationFrame(applyMapPresentation));
+      updateBoundaryVisibility();
+      applyMapPresentation();
 
       // ════════════════════════════════════════════════════════════════════════════
       // ALERTS PANEL
@@ -2422,6 +2707,11 @@
       document
         .getElementById("panelCloseBtn")
         .addEventListener("click", () => setPanelState(false));
+      document
+        .getElementById("basemapSelect")
+        .addEventListener("change", function () {
+          setBasemap(this.value);
+        });
 
       // ════════════════════════════════════════════════════════════════════════════
       // LAYER TOGGLES
@@ -2434,6 +2724,7 @@
           this.classList.contains("active")
             ? map.addLayer(layer)
             : map.removeLayer(layer);
+          applyMapPresentation();
         });
       });
 
@@ -2844,7 +3135,7 @@
           });
         }
 
-        function buildPopup(d) {
+        function buildPopup(d, geoContext) {
           const reg = deviceRegistry.get(String(d.Uid));
           const displayName = reg?.name || `Device ${d.Uid}`;
           const details = [];
@@ -2874,6 +3165,7 @@
             </div>
             <div class="popup-detail"><strong>ID:</strong> ${escHtml(d.Uid)}</div>
             ${details.join("")}
+            ${geoContextLineHtml(geoContext)}
             <div class="popup-detail"><strong>Speed:</strong> ${d.Speed ?? 0} km/h</div>
             <div class="popup-detail"><strong>Heading:</strong> ${d.Direction ?? 0}°</div>
             <div class="popup-detail"><strong>Last seen:</strong> ${fmtTime(d.Rtime)}</div>
@@ -2902,6 +3194,10 @@
               icon: deviceIcon(d.Uid, sos),
             })
               .bindPopup(buildPopup(d))
+              .on("popupopen", async () => {
+                const geoContext = await fetchGeoContext(d.Lat, d.Lng);
+                if (marker.isPopupOpen()) marker.setPopupContent(buildPopup(d, geoContext));
+              })
               .addTo(deviceLayer);
             deviceMarkers.set(d.Uid, { marker, data: d });
           }
