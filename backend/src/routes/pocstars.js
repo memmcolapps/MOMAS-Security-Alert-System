@@ -15,6 +15,77 @@ const formUrlencoded = (obj) =>
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join("&");
 
+// ── SSE + health tracking ─────────────────────────────────────────────────────
+
+const sseClients = new Set();
+let lastPocstarsOk = null;
+let lastPocstarsErr = null;
+
+function broadcastSse(event, data) {
+  const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of sseClients) {
+    try { res.write(msg); } catch {}
+  }
+}
+
+// Helper: fetch SOS records from POCSTARS with up to 3 retries
+async function fetchPocstarsSos(targetUid, extra = {}) {
+  const params = { targetUid, status: 0, pageNum: 1, pageSize: 50, ...extra };
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const { data } = await axios.get(`${SOS_BASE}/sos/mg/records`, { params, timeout: 8000 });
+      lastPocstarsOk = Date.now();
+      lastPocstarsErr = null;
+      return data;
+    } catch (err) {
+      lastErr = err;
+      lastPocstarsErr = err.message;
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+// Helper: persist and broadcast a batch of POCSTARS SOS rows
+async function persistAndBroadcast(rows) {
+  for (const s of rows) {
+    let lat = null, lon = null, locationRaw = null;
+    try {
+      const loc = typeof s.sosLocationAt === "string" ? JSON.parse(s.sosLocationAt) : s.sosLocationAt;
+      lat = loc?.wgs84?.lat ?? null;
+      lon = loc?.wgs84?.lon ?? null;
+      locationRaw = s.sosLocationAt;
+    } catch {}
+    const inserted = await db.insertSosAlert({
+      sos_msg_id:   s.sosMsgId,
+      device_id:    String(s.sosFromId),
+      device_name:  s.sosSendName || null,
+      triggered_at: new Date(s.sosStamp),
+      location_lat: lat,
+      location_lon: lon,
+      location_raw: locationRaw,
+    });
+    if (inserted) broadcastSse("sos_new", inserted);
+  }
+}
+
+// Server-side poll: drives SSE for all connected clients independently
+async function serverPollSos() {
+  if (!sseClients.size) return;
+  try {
+    const data = await fetchPocstarsSos(DEFAULT_TARGET_UID);
+    const rows = data?.data?.rows || [];
+    await persistAndBroadcast(rows);
+    // Broadcast health update
+    broadcastSse("pocstars_health", { ok: true, ts: lastPocstarsOk });
+  } catch (err) {
+    broadcastSse("pocstars_health", { ok: false, err: err.message, ts: Date.now() });
+  }
+}
+
+setInterval(serverPollSos, 12_000);
+
 // ── Device registry CRUD ──────────────────────────────────────────────────────
 
 router.get("/devices", async (_req, res) => {
@@ -53,6 +124,27 @@ router.delete("/devices/:device_id", async (req, res) => {
   }
 });
 
+// ── SOS SSE stream ────────────────────────────────────────────────────────────
+
+router.get("/sos/events", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  res.write(":ok\n\n");
+
+  sseClients.add(res);
+  const hb = setInterval(() => {
+    try { res.write(":heartbeat\n\n"); } catch {}
+  }, 25_000);
+
+  req.on("close", () => {
+    clearInterval(hb);
+    sseClients.delete(res);
+  });
+});
+
 // ── SOS log ───────────────────────────────────────────────────────────────────
 
 router.get("/sos/seen-ids", async (_req, res) => {
@@ -67,7 +159,20 @@ router.get("/sos/seen-ids", async (_req, res) => {
 router.get("/sos/log", async (_req, res) => {
   try {
     const alerts = await db.listSosAlerts();
-    res.json({ alerts });
+    res.json({ alerts, pocstarsLastOk: lastPocstarsOk, pocstarsLastErr: lastPocstarsErr });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/sos/:sosMsgId/acknowledge", async (req, res) => {
+  const sosMsgId = parseInt(req.params.sosMsgId, 10);
+  if (!sosMsgId) return res.status(400).json({ error: "invalid sosMsgId" });
+  try {
+    const alert = await db.acknowledgeSosAlert(sosMsgId);
+    if (!alert) return res.status(404).json({ error: "alert not found or already acknowledged" });
+    broadcastSse("sos_updated", alert);
+    res.json({ alert });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -79,6 +184,7 @@ router.post("/sos/:sosMsgId/resolve", async (req, res) => {
   try {
     const alert = await db.resolveSosAlert(sosMsgId);
     if (!alert) return res.status(404).json({ error: "alert not found or already resolved" });
+    broadcastSse("sos_updated", alert);
     res.json({ alert });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -147,37 +253,16 @@ router.get("/history", async (req, res) => {
 router.get("/sos", async (req, res) => {
   const targetUid = req.query.targetUid || DEFAULT_TARGET_UID;
   if (!targetUid) return res.status(400).json({ error: "targetUid required" });
-  const params = {
-    targetUid,
-    pageNum: req.query.pageNum || 1,
-    pageSize: req.query.pageSize || 50,
-  };
-  if (req.query.status !== undefined) params.status = req.query.status;
-  if (req.query.cgId) params.cgId = req.query.cgId;
+  const extra = {};
+  if (req.query.status !== undefined) extra.status = req.query.status;
+  if (req.query.cgId) extra.cgId = req.query.cgId;
+  if (req.query.pageNum) extra.pageNum = req.query.pageNum;
+  if (req.query.pageSize) extra.pageSize = req.query.pageSize;
+
   try {
-    const { data } = await axios.get(`${SOS_BASE}/sos/mg/records`, { params, timeout: 8000 });
-
-    // Persist any new alerts we haven't seen before
+    const data = await fetchPocstarsSos(targetUid, extra);
     const rows = data?.data?.rows || [];
-    for (const s of rows) {
-      let lat = null, lon = null, locationRaw = null;
-      try {
-        const loc = typeof s.sosLocationAt === "string" ? JSON.parse(s.sosLocationAt) : s.sosLocationAt;
-        lat = loc?.wgs84?.lat ?? null;
-        lon = loc?.wgs84?.lon ?? null;
-        locationRaw = s.sosLocationAt;
-      } catch {}
-      await db.insertSosAlert({
-        sos_msg_id:   s.sosMsgId,
-        device_id:    String(s.sosFromId),
-        device_name:  s.sosSendName || null,
-        triggered_at: new Date(s.sosStamp),
-        location_lat: lat,
-        location_lon: lon,
-        location_raw: locationRaw,
-      });
-    }
-
+    await persistAndBroadcast(rows);
     res.json(data);
   } catch (err) {
     res.status(err.response?.status || 502).json({

@@ -1044,6 +1044,248 @@
         display: none;
       }
 
+      /* ── POCSTARS connectivity badge ── */
+      .pocstars-status {
+        font-size: 9px;
+        margin-left: 6px;
+        cursor: default;
+        transition: color 0.4s;
+      }
+      .pocstars-status.ok   { color: #00cc66; }
+      .pocstars-status.err  { color: #ff4444; animation: blink-err 1.2s infinite; }
+      .pocstars-status.unknown { color: #555; }
+      @keyframes blink-err {
+        0%, 100% { opacity: 1; }
+        50%       { opacity: 0.3; }
+      }
+
+      /* ── SOS modal ── */
+      .sos-modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 2000;
+        background: rgba(0, 0, 0, 0.82);
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 48px;
+        backdrop-filter: blur(4px);
+      }
+      .sos-modal-backdrop.hidden {
+        display: none;
+      }
+      .sos-modal {
+        width: 420px;
+        max-width: calc(100vw - 32px);
+        background: #0f0f0f;
+        border: 1px solid rgba(255, 26, 26, 0.6);
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 0 40px rgba(255, 26, 26, 0.35), 0 8px 32px rgba(0,0,0,0.8);
+        animation: sos-modal-in 0.22s ease-out;
+      }
+      @keyframes sos-modal-in {
+        from { transform: translateY(-18px); opacity: 0; }
+        to   { transform: translateY(0);     opacity: 1; }
+      }
+      .sos-modal-topbar {
+        background: #ff1a1a;
+        padding: 10px 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        animation: sos-bar-pulse 1.8s ease-in-out infinite;
+      }
+      @keyframes sos-bar-pulse {
+        0%, 100% { background: #ff1a1a; }
+        50%       { background: #cc0000; }
+      }
+      .sos-modal-topbar-left {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 800;
+        color: #fff;
+        letter-spacing: 1.5px;
+      }
+      .sos-modal-topbar-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: #fff;
+        animation: sos-dot-blink 0.7s ease-in-out infinite;
+      }
+      @keyframes sos-dot-blink {
+        0%, 100% { opacity: 1; }
+        50%       { opacity: 0.2; }
+      }
+      .sos-modal-elapsed {
+        font-size: 11px;
+        font-weight: 600;
+        color: rgba(255,255,255,0.85);
+        font-variant-numeric: tabular-nums;
+      }
+      .sos-modal-body {
+        padding: 18px 18px 10px;
+      }
+      .sos-modal-device-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .sos-modal-icon {
+        width: 42px;
+        height: 42px;
+        border-radius: 8px;
+        background: rgba(255, 26, 26, 0.15);
+        border: 1px solid rgba(255, 26, 26, 0.4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        color: #ff4444;
+        flex-shrink: 0;
+      }
+      .sos-modal-device-info {
+        flex: 1;
+        min-width: 0;
+      }
+      .sos-modal-device-name {
+        font-size: 16px;
+        font-weight: 700;
+        color: #fff;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .sos-modal-device-id {
+        font-size: 10px;
+        color: #666;
+        margin-top: 2px;
+      }
+      .sos-modal-status-badge {
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: 1px;
+        padding: 3px 8px;
+        border-radius: 4px;
+        background: rgba(255, 26, 26, 0.15);
+        border: 1px solid rgba(255, 26, 26, 0.5);
+        color: #ff4444;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+      .sos-modal-status-badge.acknowledged {
+        background: rgba(0, 180, 80, 0.12);
+        border-color: rgba(0, 180, 80, 0.4);
+        color: #00cc66;
+      }
+      .sos-modal-details {
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 6px;
+        padding: 10px 12px;
+        margin-bottom: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .sos-modal-detail-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11px;
+        color: #aaa;
+      }
+      .sos-modal-detail-row i {
+        width: 14px;
+        text-align: center;
+        color: #555;
+        font-size: 10px;
+      }
+      .sos-modal-queue-nav {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        margin-bottom: 14px;
+        font-size: 11px;
+        color: #666;
+      }
+      .sos-modal-nav-btn {
+        background: rgba(255,255,255,0.07);
+        border: 1px solid rgba(255,255,255,0.1);
+        color: #aaa;
+        width: 26px;
+        height: 26px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.15s;
+      }
+      .sos-modal-nav-btn:hover:not(:disabled) {
+        background: rgba(255,255,255,0.14);
+        color: #fff;
+      }
+      .sos-modal-nav-btn:disabled {
+        opacity: 0.3;
+        cursor: default;
+      }
+      .sos-modal-actions {
+        display: flex;
+        gap: 8px;
+        padding: 0 18px 18px;
+      }
+      .sos-modal-btn {
+        flex: 1;
+        padding: 9px 10px;
+        font-size: 11px;
+        font-weight: 700;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        transition: all 0.18s;
+        letter-spacing: 0.3px;
+      }
+      .sos-modal-btn-zoom {
+        background: rgba(255,255,255,0.07);
+        border: 1px solid rgba(255,255,255,0.12);
+        color: #aaa;
+        flex: 0 0 auto;
+        padding: 9px 13px;
+      }
+      .sos-modal-btn-zoom:hover {
+        background: rgba(255,255,255,0.13);
+        color: #ddd;
+      }
+      .sos-modal-btn-ack {
+        background: #00993d;
+        color: #fff;
+      }
+      .sos-modal-btn-ack:hover {
+        background: #00b347;
+      }
+      .sos-modal-btn-resolve {
+        background: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.1);
+        color: #888;
+      }
+      .sos-modal-btn-resolve:hover {
+        background: rgba(255,255,255,0.12);
+        color: #ccc;
+      }
+      .sos-modal-btn-resolve.confirm-mode {
+        background: rgba(255, 170, 0, 0.15);
+        border-color: rgba(255, 170, 0, 0.5);
+        color: #ffaa00;
+      }
+
       /* ── Device history panel ── */
       .device-panel {
         position: absolute;
@@ -1386,12 +1628,60 @@
           <i class="fas fa-circle-exclamation"></i>
           SOS Alerts
           <span class="sos-count-badge" id="sosCountBadge">0</span>
+          <span class="pocstars-status unknown" id="pocstarsStatus" title="POCSTARS feed">●</span>
         </div>
         <button class="sos-minimize-btn" id="sosPanelMinBtn" title="Minimise">
           ▾
         </button>
       </div>
       <div class="sos-list" id="sosList"></div>
+    </div>
+
+    <!-- ── SOS alert modal ── -->
+    <div class="sos-modal-backdrop hidden" id="sosModalBackdrop">
+      <div class="sos-modal">
+        <div class="sos-modal-topbar">
+          <div class="sos-modal-topbar-left">
+            <div class="sos-modal-topbar-dot"></div>
+            SOS ALERT
+          </div>
+          <span class="sos-modal-elapsed" id="sosModalElapsed"></span>
+        </div>
+        <div class="sos-modal-body">
+          <div class="sos-modal-device-row">
+            <div class="sos-modal-icon" id="sosModalIcon">
+              <i class="fas fa-walkie-talkie"></i>
+            </div>
+            <div class="sos-modal-device-info">
+              <div class="sos-modal-device-name" id="sosModalDeviceName">—</div>
+              <div class="sos-modal-device-id" id="sosModalDeviceId">—</div>
+            </div>
+            <div class="sos-modal-status-badge" id="sosModalStatusBadge">ACTIVE</div>
+          </div>
+          <div class="sos-modal-details">
+            <div class="sos-modal-detail-row">
+              <i class="fas fa-location-dot"></i>
+              <span id="sosModalLocation">Location unknown</span>
+            </div>
+            <div class="sos-modal-detail-row">
+              <i class="fas fa-clock"></i>
+              Triggered <span id="sosModalTriggered">—</span>
+            </div>
+          </div>
+          <div class="sos-modal-queue-nav" id="sosModalQueueNav" style="display:none">
+            <button class="sos-modal-nav-btn" id="sosModalPrev">&#8249;</button>
+            <span id="sosModalQueueLabel">1 / 1</span>
+            <button class="sos-modal-nav-btn" id="sosModalNext">&#8250;</button>
+          </div>
+        </div>
+        <div class="sos-modal-actions">
+          <button class="sos-modal-btn sos-modal-btn-zoom" id="sosModalZoom" style="display:none">
+            <i class="fas fa-crosshairs"></i> Zoom
+          </button>
+          <button class="sos-modal-btn sos-modal-btn-ack" id="sosModalAck">Acknowledge</button>
+          <button class="sos-modal-btn sos-modal-btn-resolve" id="sosModalResolve">Resolve</button>
+        </div>
+      </div>
     </div>
 
     <!-- ── Device history panel ── -->
@@ -2574,6 +2864,7 @@
           sosList.innerHTML = sosAlerts
             .map((a) => {
               const resolved = a.status === 2;
+              const acked = a.status === 1;
               const hasCoords = a.location_lat && a.location_lon;
               const locStr = hasCoords
                 ? `${parseFloat(a.location_lat).toFixed(4)}, ${parseFloat(a.location_lon).toFixed(4)}`
@@ -2585,17 +2876,18 @@
               </div>
               <div class="sos-location"><i class="fas fa-location-dot" style="font-size:8px;margin-right:3px"></i>${locStr}</div>
               <div class="sos-item-row2">
-                ${
-                  resolved
-                    ? `<span class="sos-resolved-tag">Resolved ${fmtSosTime(a.resolved_at)}</span>`
-                    : `<button class="sos-resolve-btn" onclick="window.__resolveSos(${a.sos_msg_id})">Resolve</button>`
+                ${resolved
+                  ? `<span class="sos-resolved-tag">Resolved ${fmtSosTime(a.resolved_at)}</span>`
+                  : acked
+                  ? `<span class="sos-resolved-tag" style="color:#00994d">Acked ${fmtSosTime(a.acknowledged_at)}</span>
+                     <button class="sos-resolve-btn" onclick="window.__openSosModal(${a.sos_msg_id})">Open</button>`
+                  : `<button class="sos-resolve-btn" onclick="window.__openSosModal(${a.sos_msg_id})">Open</button>`
                 }
-                ${
-                  hasCoords
-                    ? `<button class="sos-zoom-btn" onclick="map.flyTo([${a.location_lat},${a.location_lon}],16,{duration:1.5})">
-                       <i class="fas fa-crosshairs"></i> Zoom
-                     </button>`
-                    : ""
+                ${hasCoords
+                  ? `<button class="sos-zoom-btn" onclick="map.flyTo([${a.location_lat},${a.location_lon}],16,{duration:1.5})">
+                     <i class="fas fa-crosshairs"></i> Zoom
+                   </button>`
+                  : ""
                 }
               </div>
             </div>`;
@@ -2603,25 +2895,204 @@
             .join("");
         }
 
-        window.__resolveSos = async function (sosMsgId) {
+        // ─── SOS modal ────────────────────────────────────────────────────────
+        const sosModalBackdrop = document.getElementById("sosModalBackdrop");
+        const activeSosQueue = []; // DB-format SOS rows awaiting action
+        let sosModalIdx = 0;
+        let sosElapsedTimer = null;
+        const sosEscalationTimers = new Map(); // sos_msg_id -> timeout id
+
+        function _sosModalReg(deviceId) {
+          return deviceRegistry.get(String(deviceId));
+        }
+
+        function _renderSosModal() {
+          const sos = activeSosQueue[sosModalIdx];
+          if (!sos) { _closeSosModal(); return; }
+
+          const reg = _sosModalReg(sos.device_id);
+          const fa = typeIcon(reg?.device_type);
+          document.getElementById("sosModalIcon").innerHTML = `<i class="fas ${fa}"></i>`;
+          document.getElementById("sosModalDeviceName").textContent =
+            sos.device_name || reg?.name || `Device ${sos.device_id}`;
+          document.getElementById("sosModalDeviceId").textContent =
+            `ID: ${sos.device_id}`;
+
+          const hasCoords = sos.location_lat && sos.location_lon;
+          document.getElementById("sosModalLocation").textContent = hasCoords
+            ? `${parseFloat(sos.location_lat).toFixed(5)}, ${parseFloat(sos.location_lon).toFixed(5)}`
+            : "Location unknown";
+          document.getElementById("sosModalTriggered").textContent =
+            fmtSosTime(sos.triggered_at || sos.created_at);
+
+          const badge = document.getElementById("sosModalStatusBadge");
+          const ackBtn = document.getElementById("sosModalAck");
+          if (sos.status >= 1) {
+            badge.textContent = sos.status === 2 ? "RESOLVED" : "ACKNOWLEDGED";
+            badge.className = "sos-modal-status-badge acknowledged";
+            ackBtn.style.display = "none";
+          } else {
+            badge.textContent = "UNACKNOWLEDGED";
+            badge.className = "sos-modal-status-badge";
+            ackBtn.style.display = "";
+          }
+
+          const zoomBtn = document.getElementById("sosModalZoom");
+          if (hasCoords) {
+            zoomBtn.style.display = "";
+            zoomBtn.dataset.lat = sos.location_lat;
+            zoomBtn.dataset.lon = sos.location_lon;
+          } else {
+            zoomBtn.style.display = "none";
+          }
+
+          document.getElementById("sosModalAck").dataset.msgId = sos.sos_msg_id;
+          document.getElementById("sosModalResolve").dataset.msgId = sos.sos_msg_id;
+          // Reset resolve confirm state
+          const resolveBtn = document.getElementById("sosModalResolve");
+          resolveBtn.textContent = "Resolve";
+          resolveBtn.classList.remove("confirm-mode");
+          resolveBtn._confirming = false;
+
+          // Queue nav
+          const nav = document.getElementById("sosModalQueueNav");
+          if (activeSosQueue.length > 1) {
+            nav.style.display = "flex";
+            document.getElementById("sosModalQueueLabel").textContent =
+              `${sosModalIdx + 1} / ${activeSosQueue.length}`;
+            document.getElementById("sosModalPrev").disabled = sosModalIdx === 0;
+            document.getElementById("sosModalNext").disabled =
+              sosModalIdx === activeSosQueue.length - 1;
+          } else {
+            nav.style.display = "none";
+          }
+
+          // Elapsed counter
+          clearInterval(sosElapsedTimer);
+          sosElapsedTimer = setInterval(() => {
+            const ref = sos.triggered_at || sos.created_at;
+            if (!ref) return;
+            const sec = Math.floor((Date.now() - new Date(ref)) / 1000);
+            const m = Math.floor(sec / 60), s = sec % 60;
+            document.getElementById("sosModalElapsed").textContent =
+              `${m}m ${String(s).padStart(2, "0")}s`;
+          }, 1000);
+        }
+
+        function _openSosModal(sos) {
+          const existing = activeSosQueue.findIndex((s) => s.sos_msg_id === sos.sos_msg_id);
+          if (existing >= 0) {
+            activeSosQueue[existing] = sos;
+            sosModalIdx = existing;
+          } else {
+            activeSosQueue.push(sos);
+            sosModalIdx = activeSosQueue.length - 1;
+          }
+          _renderSosModal();
+          sosModalBackdrop.classList.remove("hidden");
+        }
+
+        function _closeSosModal() {
+          clearInterval(sosElapsedTimer);
+          sosModalBackdrop.classList.add("hidden");
+        }
+
+        // Expose for panel "Open" button
+        window.__openSosModal = function (sosMsgId) {
+          const a = sosAlerts.find((x) => x.sos_msg_id === sosMsgId);
+          if (a) _openSosModal(a);
+        };
+
+        // Acknowledge
+        document.getElementById("sosModalAck").addEventListener("click", async () => {
+          const sosMsgId = parseInt(document.getElementById("sosModalAck").dataset.msgId, 10);
+          if (!sosMsgId) return;
           try {
-            const r = await fetch(
-              `${API_BASE}/api/pocstars/sos/${sosMsgId}/resolve`,
-              { method: "POST" },
-            );
+            const r = await fetch(`${API_BASE}/api/pocstars/sos/${sosMsgId}/acknowledge`, { method: "POST" });
             if (!r.ok) throw new Error((await r.json()).error);
-            // Update local cache
-            const a = sosAlerts.find((x) => x.sos_msg_id === sosMsgId);
-            if (a) {
-              a.status = 2;
-              a.resolved_at = new Date().toISOString();
+            const { alert } = await r.json();
+            _applyAlertUpdate(alert);
+            // Clear escalation
+            if (sosEscalationTimers.has(sosMsgId)) {
+              clearTimeout(sosEscalationTimers.get(sosMsgId));
+              sosEscalationTimers.delete(sosMsgId);
             }
-            renderSosPanel();
-            // Revert device marker to normal if no other active SOS for same device
-            const deviceId = a?.device_id;
-            const stillActive = sosAlerts.some(
-              (x) => x.device_id === deviceId && x.status < 2,
-            );
+            // Auto-close if nothing else unacknowledged
+            const unacked = activeSosQueue.filter((s) => s.status === 0);
+            if (!unacked.length) setTimeout(_closeSosModal, 1200);
+            else _renderSosModal();
+          } catch (err) {
+            showToast("Acknowledge failed", err.message);
+          }
+        });
+
+        // Resolve (two-step confirm)
+        document.getElementById("sosModalResolve").addEventListener("click", async function () {
+          if (!this._confirming) {
+            this._confirming = true;
+            this.textContent = "Confirm resolve?";
+            this.classList.add("confirm-mode");
+            setTimeout(() => {
+              if (this._confirming) {
+                this._confirming = false;
+                this.textContent = "Resolve";
+                this.classList.remove("confirm-mode");
+              }
+            }, 3000);
+            return;
+          }
+          const sosMsgId = parseInt(this.dataset.msgId, 10);
+          if (!sosMsgId) return;
+          this._confirming = false;
+          try {
+            const r = await fetch(`${API_BASE}/api/pocstars/sos/${sosMsgId}/resolve`, { method: "POST" });
+            if (!r.ok) throw new Error((await r.json()).error);
+            const { alert } = await r.json();
+            _applyAlertUpdate(alert);
+            // Remove from queue
+            const qi = activeSosQueue.findIndex((s) => s.sos_msg_id === sosMsgId);
+            if (qi >= 0) activeSosQueue.splice(qi, 1);
+            if (!activeSosQueue.length) {
+              _closeSosModal();
+            } else {
+              sosModalIdx = Math.min(sosModalIdx, activeSosQueue.length - 1);
+              _renderSosModal();
+            }
+          } catch (err) {
+            showToast("Resolve failed", err.message);
+          }
+        });
+
+        // Zoom
+        document.getElementById("sosModalZoom").addEventListener("click", function () {
+          const lat = parseFloat(this.dataset.lat);
+          const lon = parseFloat(this.dataset.lon);
+          if (lat && lon) map.flyTo([lat, lon], 16, { duration: 1.8, easeLinearity: 0.3 });
+        });
+
+        // Queue navigation
+        document.getElementById("sosModalPrev").addEventListener("click", () => {
+          if (sosModalIdx > 0) { sosModalIdx--; _renderSosModal(); }
+        });
+        document.getElementById("sosModalNext").addEventListener("click", () => {
+          if (sosModalIdx < activeSosQueue.length - 1) { sosModalIdx++; _renderSosModal(); }
+        });
+
+        // Apply an updated alert row (from resolve/acknowledge response or SSE)
+        function _applyAlertUpdate(alert) {
+          const idx = sosAlerts.findIndex((a) => a.sos_msg_id === alert.sos_msg_id);
+          if (idx >= 0) sosAlerts[idx] = alert;
+          else sosAlerts.unshift(alert);
+
+          const qi = activeSosQueue.findIndex((s) => s.sos_msg_id === alert.sos_msg_id);
+          if (qi >= 0) activeSosQueue[qi] = alert;
+
+          renderSosPanel();
+
+          // Revert marker if fully resolved
+          if (alert.status === 2) {
+            const deviceId = alert.device_id;
+            const stillActive = sosAlerts.some((x) => x.device_id === deviceId && x.status < 2);
             if (!stillActive) {
               const entry = deviceMarkers.get(deviceId);
               if (entry) {
@@ -2630,12 +3101,66 @@
                 entry.marker.setPopupContent(buildPopup(entry.data));
               }
             }
-          } catch (err) {
-            showToast("Resolve failed", err.message);
           }
-        };
+        }
 
-        // Minimise toggle
+        // Trigger audio + map + modal for a newly received SOS (DB-format row)
+        function _handleIncomingSos(sos) {
+          const name = sos.device_name || `Device ${sos.device_id}`;
+          const hasCoords = sos.location_lat && sos.location_lon;
+          const locLabel = hasCoords
+            ? `coordinates ${parseFloat(sos.location_lat).toFixed(4)}, ${parseFloat(sos.location_lon).toFixed(4)}`
+            : "unknown location";
+
+          sosAlert(`SOS alert! SOS alert! ${name} has triggered an SOS alarm at ${locLabel}. Immediate attention required.`);
+
+          if (hasCoords) {
+            map.flyTo([sos.location_lat, sos.location_lon], 16, { duration: 2.5, easeLinearity: 0.3 });
+            updateDeviceMarker({
+              Uid: String(sos.device_id),
+              Lat: sos.location_lat,
+              Lng: sos.location_lon,
+              Rtime: sos.triggered_at,
+              processStatus: 1,
+              Speed: 0,
+            });
+          }
+
+          _openSosModal(sos);
+
+          // Escalation: re-alert in 3 minutes if still unacknowledged
+          if (sosEscalationTimers.has(sos.sos_msg_id)) clearTimeout(sosEscalationTimers.get(sos.sos_msg_id));
+          const tid = setTimeout(async () => {
+            const current = sosAlerts.find((a) => a.sos_msg_id === sos.sos_msg_id);
+            if (current && current.status === 0) {
+              sosAlert(`Unacknowledged SOS! ${name} is still waiting for response.`);
+              // Re-arm once more (6-min total window)
+              const tid2 = setTimeout(() => {
+                const c2 = sosAlerts.find((a) => a.sos_msg_id === sos.sos_msg_id);
+                if (c2 && c2.status === 0) {
+                  sosAlert(`Critical! SOS from ${name} has been unacknowledged for over 6 minutes.`);
+                }
+              }, 3 * 60 * 1000);
+              sosEscalationTimers.set(sos.sos_msg_id, tid2);
+            }
+          }, 3 * 60 * 1000);
+          sosEscalationTimers.set(sos.sos_msg_id, tid);
+
+          // Notify other tabs via BroadcastChannel
+          if (sosBc) sosBc.postMessage({ type: "sos_new", sos });
+        }
+
+        // Connectivity indicator
+        function _setPocstarsStatus(ok) {
+          const el = document.getElementById("pocstarsStatus");
+          if (!el) return;
+          el.className = `pocstars-status ${ok ? "ok" : "err"}`;
+          el.title = ok
+            ? `POCSTARS connected — last OK ${fmtTime(Date.now())}`
+            : `POCSTARS unreachable`;
+        }
+
+        // ─── Minimise toggle ──────────────────────────────────────────────────
         document
           .getElementById("sosPanelMinBtn")
           .addEventListener("click", function () {
@@ -2648,9 +3173,10 @@
           try {
             const r = await fetch(`${API_BASE}/api/pocstars/sos/log`);
             if (!r.ok) return;
-            const { alerts } = await r.json();
+            const { alerts, pocstarsLastOk } = await r.json();
             sosAlerts = alerts || [];
             renderSosPanel();
+            if (pocstarsLastOk) _setPocstarsStatus(true);
           } catch {}
         }
 
@@ -2673,63 +3199,39 @@
             const data = await r.json();
             const list = data.data?.rows || [];
 
-            // Reload panel display
+            _setPocstarsStatus(true);
             await loadSosLog();
 
             for (const sos of list) {
               if (!deviceUids.includes(String(sos.sosFromId))) continue;
 
-              // Skip if we've resolved it locally (seenSosIds has it + status=2)
-              const existing = sosAlerts.find(
-                (a) => a.sos_msg_id === sos.sosMsgId,
-              );
+              const existing = sosAlerts.find((a) => a.sos_msg_id === sos.sosMsgId);
               if (existing?.status === 2) continue;
 
-              let lat = null,
-                lon = null,
-                locationLabel = "unknown location";
-              try {
-                const parsed =
-                  typeof sos.sosLocationAt === "string"
-                    ? JSON.parse(sos.sosLocationAt)
-                    : sos.sosLocationAt;
-                lat = parsed?.wgs84?.lat;
-                lon = parsed?.wgs84?.lon;
-                if (lat && lon)
-                  locationLabel = `coordinates ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
-              } catch {}
-
-              // Sound + zoom only for IDs we have never seen before (seenSosIds persists across resolves)
               if (!seenSosIds.has(sos.sosMsgId)) {
                 seenSosIds.add(sos.sosMsgId);
-                const deviceName = sos.sosSendName || `Device ${sos.sosFromId}`;
-                showToast(
-                  `🚨 SOS — ${deviceName}`,
-                  `Received ${fmtTime(Date.now())}`,
-                );
-                sosAlert(
-                  `SOS alert! SOS alert! ${deviceName} has triggered an SOS alarm at ${locationLabel}. Immediate attention required.`,
-                );
-                if (lat && lon)
-                  map.flyTo([lat, lon], 16, {
-                    duration: 2.5,
-                    easeLinearity: 0.3,
-                  });
-              }
-
-              if (lat && lon) {
-                updateDeviceMarker({
-                  Uid: String(sos.sosFromId),
-                  Lat: lat,
-                  Lng: lon,
-                  Rtime: sos.sosStamp,
-                  processStatus: 1,
-                  Speed: 0,
-                });
+                // Use DB row if available, else synthesise from POCSTARS response
+                const dbRow = existing || {
+                  sos_msg_id: sos.sosMsgId,
+                  device_id: String(sos.sosFromId),
+                  device_name: sos.sosSendName || null,
+                  triggered_at: sos.sosStamp,
+                  location_lat: null,
+                  location_lon: null,
+                  status: 0,
+                };
+                try {
+                  const parsed = typeof sos.sosLocationAt === "string"
+                    ? JSON.parse(sos.sosLocationAt) : sos.sosLocationAt;
+                  dbRow.location_lat = dbRow.location_lat ?? parsed?.wgs84?.lat ?? null;
+                  dbRow.location_lon = dbRow.location_lon ?? parsed?.wgs84?.lon ?? null;
+                } catch {}
+                _handleIncomingSos(dbRow);
               }
             }
           } catch (err) {
-            console.warn("[POCSTARS] sos failed:", err.message);
+            console.warn("[POCSTARS] sos poll failed:", err.message);
+            _setPocstarsStatus(false);
           }
         }
 
@@ -2840,6 +3342,57 @@
           }
         }
 
+        // ─── BroadcastChannel (multi-tab sync) ────────────────────────────────
+        const sosBc = "BroadcastChannel" in window ? new BroadcastChannel("sos_alerts") : null;
+        if (sosBc) {
+          sosBc.onmessage = (e) => {
+            if (e.data.type === "sos_new") {
+              const sos = e.data.sos;
+              if (!seenSosIds.has(sos.sos_msg_id)) {
+                seenSosIds.add(sos.sos_msg_id);
+                // Another tab already played audio; just update our UI
+                const idx = sosAlerts.findIndex((a) => a.sos_msg_id === sos.sos_msg_id);
+                if (idx < 0) sosAlerts.unshift(sos);
+                renderSosPanel();
+              }
+            }
+          };
+        }
+
+        // ─── SSE subscription ─────────────────────────────────────────────────
+        function connectSosSSE() {
+          const es = new EventSource(`${API_BASE}/api/pocstars/sos/events`);
+
+          es.addEventListener("sos_new", (e) => {
+            const sos = JSON.parse(e.data);
+            if (!deviceUids.includes(String(sos.device_id))) return;
+            if (seenSosIds.has(sos.sos_msg_id)) return;
+            seenSosIds.add(sos.sos_msg_id);
+            const idx = sosAlerts.findIndex((a) => a.sos_msg_id === sos.sos_msg_id);
+            if (idx < 0) sosAlerts.unshift(sos);
+            else sosAlerts[idx] = sos;
+            renderSosPanel();
+            _handleIncomingSos(sos);
+          });
+
+          es.addEventListener("sos_updated", (e) => {
+            const alert = JSON.parse(e.data);
+            _applyAlertUpdate(alert);
+            // Refresh modal if it's showing this alert
+            const qi = activeSosQueue.findIndex((s) => s.sos_msg_id === alert.sos_msg_id);
+            if (qi >= 0) { activeSosQueue[qi] = alert; _renderSosModal(); }
+          });
+
+          es.addEventListener("pocstars_health", (e) => {
+            const h = JSON.parse(e.data);
+            _setPocstarsStatus(h.ok);
+          });
+
+          es.onerror = () => _setPocstarsStatus(false);
+
+          return es;
+        }
+
         // ─── Boot ─────────────────────────────────────────────────────────────
         (async function init() {
           try {
@@ -2857,6 +3410,7 @@
           fetchSos();
           setInterval(fetchLocations, LOC_POLL_MS);
           setInterval(fetchSos, SOS_POLL_MS);
+          connectSosSSE();
         })();
       })();
     </script>

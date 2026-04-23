@@ -97,6 +97,14 @@ async function init() {
     console.warn("[DB] Column migration note:", err.message);
   }
 
+  try {
+    await pool.query(`
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ;
+    `);
+  } catch (err) {
+    console.warn("[DB] SOS migration note:", err.message);
+  }
+
   console.log("[DB] PostgreSQL schema ready");
 }
 
@@ -338,6 +346,16 @@ async function insertSosAlert({ sos_msg_id, device_id, device_name, triggered_at
   return rows[0] ?? null; // null = already existed (duplicate)
 }
 
+async function acknowledgeSosAlert(sos_msg_id) {
+  const { rows } = await pool.query(
+    `UPDATE sos_alerts SET status=1, acknowledged_at=NOW()
+     WHERE sos_msg_id=$1 AND status=0
+     RETURNING *`,
+    [sos_msg_id],
+  );
+  return rows[0] ?? null;
+}
+
 async function resolveSosAlert(sos_msg_id) {
   const { rows } = await pool.query(
     `UPDATE sos_alerts SET status=2, resolved_at=NOW()
@@ -423,6 +441,7 @@ module.exports = {
   upsertDevice,
   deleteDevice,
   insertSosAlert,
+  acknowledgeSosAlert,
   resolveSosAlert,
   listSosAlerts,
   allSosMsgIds,
