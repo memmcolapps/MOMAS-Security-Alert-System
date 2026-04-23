@@ -166,8 +166,8 @@
         margin-right: 5px;
       }
       .sev-RED {
-        background: var(--amber);
-        color: #000;
+        background: var(--red);
+        color: #fff;
       }
       .sev-ORANGE {
         background: var(--orange);
@@ -1363,10 +1363,10 @@
         animation: ripple 2s ease-out infinite;
       }
       .live-marker.sev-RED {
-        background: var(--amber);
+        background: var(--red);
       }
       .live-marker.sev-RED::before {
-        background: var(--amber);
+        background: var(--red);
       }
       .live-marker.sev-ORANGE {
         background: var(--orange);
@@ -1407,7 +1407,7 @@
         width: 100%;
         height: 100%;
         border-radius: 50%;
-        background: var(--amber);
+        background: var(--red);
         animation: ripple 2s ease-out infinite 0.75s;
       }
     </style>
@@ -1501,10 +1501,10 @@
       </div>
       <div class="legend-section">
         <div class="legend-section-title">Incident severity</div>
-        <div class="legend-item">
-          <div class="legend-dot" style="background: var(--amber)"></div>
-          <span class="sev-pill sev-RED">AMBER</span> Critical (30+ killed)
-        </div>
+          <div class="legend-item">
+            <div class="legend-dot" style="background: var(--red)"></div>
+            <span class="sev-pill sev-RED">RED</span> Critical (30+ killed)
+          </div>
         <div class="legend-item">
           <div class="legend-dot" style="background: var(--orange)"></div>
           <span class="sev-pill sev-ORANGE">ORANGE</span> Serious (10–29)
@@ -1879,7 +1879,7 @@
           0.3: "#3399ff",
           0.55: "#00bbaa",
           0.75: "#ff6600",
-          1.0: "#ffb300",
+          1.0: "#ff1a1a",
         },
       });
 
@@ -2005,12 +2005,12 @@
       // ════════════════════════════════════════════════════════════════════════════
       // MARKERS
       // ════════════════════════════════════════════════════════════════════════════
-      const SEV_COLORS = {
-        RED: "#ffb300",
-        ORANGE: "#ff6600",
-        YELLOW: "#00bbaa",
-        BLUE: "#3399ff",
-      };
+        const SEV_COLORS = {
+          RED: "#ff1a1a",
+          ORANGE: "#ff6600",
+          YELLOW: "#00bbaa",
+          BLUE: "#3399ff",
+        };
       const TYPE_ICONS = {
         bombing: "fa-bomb",
         kidnapping: "fa-user-secret",
