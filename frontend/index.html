@@ -2873,15 +2873,29 @@
       let _liveModeIdx = 0;
 
       function startLiveMode() {
-        const targets = allIncidents.filter(
-          (i) =>
-            (i.severity === "RED" || i.severity === "ORANGE") && i.lat && i.lon,
-        );
+        const incidentTargets = allIncidents
+          .filter(
+            (i) =>
+              (i.severity === "RED" || i.severity === "ORANGE") &&
+              i.lat &&
+              i.lon,
+          )
+          .map((inc) => ({
+            kind: "incident",
+            lat: inc.lat,
+            lon: inc.lon,
+            zoom: 9,
+          }));
+        const deviceTargets =
+          typeof window.__getLiveModeDeviceTargets === "function"
+            ? window.__getLiveModeDeviceTargets()
+            : [];
+        const targets = [...incidentTargets, ...deviceTargets];
         if (!targets.length) return;
         _liveModeIdx = 0;
         _liveModeInterval = setInterval(() => {
-          const inc = targets[_liveModeIdx % targets.length];
-          map.flyTo([inc.lat, inc.lon], 9, {
+          const target = targets[_liveModeIdx % targets.length];
+          map.flyTo([target.lat, target.lon], target.zoom || 9, {
             duration: 2.5,
             easeLinearity: 0.3,
           });
@@ -3209,6 +3223,18 @@
         const seenSosIds = new Set(); // every sosMsgId ever persisted — survives resolve
         let dispatcherUid = "";
         let deviceUids = [];
+
+        window.__getLiveModeDeviceTargets = function () {
+          return [...deviceMarkers.values()]
+            .map((entry) => entry?.data)
+            .filter((d) => d?.Lat && d?.Lng)
+            .map((d) => ({
+              kind: "device",
+              lat: d.Lat,
+              lon: d.Lng,
+              zoom: d.processStatus === 1 ? 16 : 13,
+            }));
+        };
 
         const fmtTime = (t) => (t ? new Date(t).toLocaleString() : "—");
         const escHtml = (value) =>
