@@ -7,7 +7,7 @@ import { escapeHtml, severityColors, severityLabels, typeIcons } from "../lib/do
 const NIGERIA_BOUNDS = L.latLngBounds([4.3, 2.7], [13.9, 14.7]);
 const NIGERIA_CENTER = [9.0, 8.5];
 
-function incidentPopup(incident) {
+export function incidentPopup(incident) {
   const color = severityColors[incident.severity] || severityColors.BLUE;
   const killed = incident.fatalities ?? incident.killed ?? 0;
   const abducted = incident.victims ?? incident.abducted ?? 0;
@@ -28,7 +28,7 @@ function incidentPopup(incident) {
   `;
 }
 
-function devicePopup(device, registry) {
+export function devicePopup(device, registry) {
   const row = registry.get(String(device.Uid)) || {};
   const name = row.name || `Device ${device.Uid}`;
   return `
@@ -50,6 +50,7 @@ export function OperationsMap({
   activeLayers,
   basemap,
   onIncidentFocus,
+  focusTarget,
 }) {
   const mapNode = useRef(null);
   const mapRef = useRef(null);
@@ -213,6 +214,21 @@ export function OperationsMap({
     syncLayer(heatLayer, activeLayers.heat);
     syncLayer(deviceLayer, activeLayers.devices);
   }, [activeLayers]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !focusTarget) return;
+    const lat = Number(focusTarget.lat);
+    const lon = Number(focusTarget.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+    map.flyTo([lat, lon], focusTarget.zoom ?? 13, { duration: 1.4 });
+    if (focusTarget.popupHtml) {
+      L.popup({ closeButton: false, className: "tour-popup" })
+        .setLatLng([lat, lon])
+        .setContent(focusTarget.popupHtml)
+        .openOn(map);
+    }
+  }, [focusTarget]);
 
   return <div ref={mapNode} className="ops-map" />;
 }

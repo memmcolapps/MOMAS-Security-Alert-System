@@ -13,6 +13,13 @@ export function AppHeader() {
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
   const user = meQuery.data?.user;
   const isAdmin = user?.platform_role === "admin";
+  const org = user?.memberships?.[0] || null;
+  const accessSummary = org
+    ? org.all_states
+      ? "all states"
+      : `${org.state_count || 0} state${org.state_count === 1 ? "" : "s"}`
+    : null;
+  const avatarLetter = (org?.name || user?.name || user?.email || "?").trim()[0]?.toUpperCase();
 
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
@@ -37,8 +44,20 @@ export function AppHeader() {
     <header className="fixed left-0 right-0 top-0 z-[1100] border-b border-white/10 bg-black/70 backdrop-blur">
       <div className="flex h-12 items-center gap-4 px-4 text-neutral-200">
         <Link to="/" className="flex items-center gap-2 text-[12px] font-bold tracking-wide text-ops-red">
-          <ShieldAlert size={16} /> EPAIL
+          <ShieldAlert size={16} />
+          <span>EPAIL <span className="text-neutral-400">Intelligence</span></span>
         </Link>
+
+        {org ? (
+          <span className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-0.5 text-[10px] font-bold text-neutral-300 sm:inline-flex">
+            <span className="h-1.5 w-1.5 rounded-full bg-ops-green" />
+            {org.name}
+          </span>
+        ) : isAdmin ? (
+          <span className="hidden items-center gap-2 rounded-full border border-ops-red/40 bg-red-500/10 px-2.5 py-0.5 text-[10px] font-bold text-ops-red sm:inline-flex">
+            Platform admin
+          </span>
+        ) : null}
 
         <nav className="flex items-center gap-1 text-[11px] font-bold">
           <NavItem to="/" icon={Map} label="Map" active={path === "/"} />
@@ -55,7 +74,7 @@ export function AppHeader() {
               className="inline-flex items-center gap-2 rounded border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] hover:bg-white/[0.07]"
             >
               <span className="grid h-5 w-5 place-items-center rounded-full bg-ops-red text-[10px] font-bold text-black">
-                {(user.name || user.email || "?").trim()[0]?.toUpperCase()}
+                {avatarLetter}
               </span>
               <span className="hidden max-w-[180px] truncate text-neutral-300 sm:inline">{user.email}</span>
               <ChevronDown size={12} className="text-neutral-500" />
@@ -66,9 +85,14 @@ export function AppHeader() {
             <div className="absolute right-4 mt-2 w-56 rounded-md border border-white/10 bg-black/95 p-2 shadow-xl backdrop-blur">
               <div className="border-b border-white/10 px-2 pb-2 text-[11px] text-neutral-400">
                 <div className="truncate font-bold text-neutral-200">{user?.name || user?.email}</div>
-                <div className="truncate text-neutral-500">
-                  {isAdmin ? "Platform admin" : user?.email && user.email !== user?.name ? user.email : "Org user"}
-                </div>
+                <div className="truncate text-neutral-500">{user?.email}</div>
+                {org ? (
+                  <div className="mt-1 truncate text-[10px] text-neutral-500">
+                    <span className="text-neutral-300">{org.name}</span> · {org.role} · {accessSummary}
+                  </div>
+                ) : isAdmin ? (
+                  <div className="mt-1 text-[10px] text-ops-red">Platform admin · all states</div>
+                ) : null}
               </div>
               <button
                 className="mt-1 inline-flex w-full items-center gap-2 rounded px-2 py-1.5 text-[11px] text-neutral-300 hover:bg-white/10"

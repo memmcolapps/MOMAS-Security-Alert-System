@@ -542,6 +542,26 @@ async function upsertDevice({ device_id, name, company, operator, device_type, n
   return rows[0];
 }
 
+async function getDevice(device_id) {
+  const { rows } = await pool.query("SELECT * FROM devices WHERE device_id = $1", [device_id]);
+  return rows[0] ?? null;
+}
+
+async function updateDeviceFields(device_id, { name, operator, device_type, notes, active }) {
+  const { rows } = await pool.query(
+    `UPDATE devices SET
+       name        = COALESCE($2, name),
+       operator    = COALESCE($3, operator),
+       device_type = COALESCE($4, device_type),
+       notes       = COALESCE($5, notes),
+       active      = COALESCE($6, active)
+     WHERE device_id = $1
+     RETURNING *`,
+    [device_id, name ?? null, operator ?? null, device_type ?? null, notes ?? null, active ?? null],
+  );
+  return rows[0] ?? null;
+}
+
 async function deleteDevice(device_id) {
   const { rowCount } = await pool.query(
     "DELETE FROM devices WHERE device_id = $1",
@@ -572,10 +592,14 @@ async function getUserById(id) {
 
 async function getMembershipsForUser(userId) {
   const { rows } = await pool.query(
-    `SELECT m.organization_id, m.role, o.name, o.slug, o.status, o.all_states
+    `SELECT m.organization_id, m.role,
+            o.name, o.slug, o.status, o.all_states,
+            COUNT(os.state)::int AS state_count
        FROM organization_memberships m
        JOIN organizations o ON o.id = m.organization_id
+       LEFT JOIN organization_states os ON os.organization_id = o.id
       WHERE m.user_id = $1
+      GROUP BY m.organization_id, m.role, o.name, o.slug, o.status, o.all_states
       ORDER BY o.name`,
     [userId],
   );
@@ -749,6 +773,8 @@ export {
   clearAll,
   listDevices,
   upsertDevice,
+  getDevice,
+  updateDeviceFields,
   deleteDevice,
   getUserByEmail,
   getUserById,

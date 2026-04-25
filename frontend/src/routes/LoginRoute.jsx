@@ -30,8 +30,8 @@ export function LoginRoute() {
             <Shield size={20} />
           </div>
           <div>
-            <h1 className="text-base font-bold text-ops-red">EPAIL Login</h1>
-            <p className="text-[11px] text-neutral-500">EPAIL and company workspace access</p>
+            <h1 className="text-base font-bold text-ops-red">EPAIL Intelligence</h1>
+            <p className="text-[11px] text-neutral-500">Sign in to your EPAIL or company workspace</p>
           </div>
         </div>
         <label className="mb-3 flex flex-col gap-1">

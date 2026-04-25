@@ -135,11 +135,17 @@ export function DevicesRoute() {
           <h1 className="flex items-center gap-2 text-xl font-bold text-ops-green">
             <Radio size={21} /> Device Registry
           </h1>
-          <p className="mt-1 text-[11px] text-neutral-500">Manage POCSTARS radios and vehicle trackers</p>
+          <p className="mt-1 text-[11px] text-neutral-500">
+            {isPlatformAdmin
+              ? "Manage POCSTARS radios and vehicle trackers"
+              : "View your assigned devices and update operational details"}
+          </p>
         </div>
-        <button className="inline-flex items-center gap-2 rounded-md bg-ops-green px-4 py-2 text-xs font-bold text-black hover:opacity-85" onClick={openAdd}>
-          <Plus size={14} /> Add device
-        </button>
+        {isPlatformAdmin ? (
+          <button className="inline-flex items-center gap-2 rounded-md bg-ops-green px-4 py-2 text-xs font-bold text-black hover:opacity-85" onClick={openAdd}>
+            <Plus size={14} /> Add device
+          </button>
+        ) : null}
       </header>
 
       {formOpen ? (
@@ -260,11 +266,13 @@ export function DevicesRoute() {
                         <button className="rounded border border-white/10 px-2 py-1 text-[10px] text-neutral-500 hover:border-ops-green hover:text-ops-green" onClick={() => openEdit(device)}>
                           Edit
                         </button>
-                        <button className="inline-flex items-center gap-1 rounded border border-red-500/20 px-2 py-1 text-[10px] text-red-400/70 hover:border-ops-red hover:text-ops-red" onClick={() => {
-                          if (window.confirm(`Remove device ${device.device_id}?`)) deleteMutation.mutate(device.device_id);
-                        }}>
-                          <Trash2 size={11} /> Remove
-                        </button>
+                        {isPlatformAdmin ? (
+                          <button className="inline-flex items-center gap-1 rounded border border-red-500/20 px-2 py-1 text-[10px] text-red-400/70 hover:border-ops-red hover:text-ops-red" onClick={() => {
+                            if (window.confirm(`Remove device ${device.device_id}?`)) deleteMutation.mutate(device.device_id);
+                          }}>
+                            <Trash2 size={11} /> Remove
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>

@@ -5,17 +5,23 @@ import {
   ChevronRight,
   Crosshair,
   Download,
+  Pause,
+  Play,
   Radio,
   RefreshCw,
   SatelliteDish,
+  SkipForward,
   Siren,
+  Tv,
+  X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
-import { OperationsMap } from "../components/OperationsMap";
+import { useEffect, useMemo, useState } from "react";
+import { OperationsMap, devicePopup, incidentPopup } from "../components/OperationsMap";
 import {
   acknowledgeSos,
   getIncidents,
   getLocations,
+  getMe,
   getSosLog,
   listDevices,
   resolveSos,
@@ -64,6 +70,9 @@ function downloadCSV(rows) {
 
 export function OperationsRoute() {
   const queryClient = useQueryClient();
+  const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
+  const orgName = meQuery.data?.user?.memberships?.[0]?.name;
+  const opsLabel = orgName ? `EPAIL Intelligence · ${orgName}` : "EPAIL Intelligence";
   const today = todayISO();
   const [[from, to], setRange] = useState(() => rangeForMode("today", today));
   const [activeMode, setActiveMode] = useState("today");
@@ -147,6 +156,75 @@ export function OperationsRoute() {
     setRange(nextRange);
   }
 
+  // ── Live Mode (auto tour) ──
+  const [liveMode, setLiveMode] = useState(false);
+  const [tourPaused, setTourPaused] = useState(false);
+  const [tourIndex, setTourIndex] = useState(0);
+  const [focusTarget, setFocusTarget] = useState(null);
+
+  const tourStops = useMemo(() => {
+    const incidentStops = visibleIncidents
+      .filter((incident) => Number.isFinite(Number(incident.lat)) && Number.isFinite(Number(incident.lon)))
+      .slice()
+      .sort((a, b) => {
+        const ad = new Date(a.date || a.created_at || 0).getTime();
+        const bd = new Date(b.date || b.created_at || 0).getTime();
+        return bd - ad;
+      })
+      .map((incident) => ({
+        kind: "incident",
+        id: `inc-${incident.id || `${incident.date}-${incident.title}`}`,
+        lat: Number(incident.lat),
+        lon: Number(incident.lon),
+        label: incident.title || incident.type || "Incident",
+        popupHtml: incidentPopup(incident),
+      }));
+    const registry = new Map(devices.map((device) => [String(device.device_id), device]));
+    const deviceStops = locations
+      .filter((location) => {
+        const reg = registry.get(String(location.Uid));
+        return reg?.active && Number.isFinite(Number(location.Lat)) && Number.isFinite(Number(location.Lng));
+      })
+      .map((location) => ({
+        kind: "device",
+        id: `dev-${location.Uid}`,
+        lat: Number(location.Lat),
+        lon: Number(location.Lng),
+        label: registry.get(String(location.Uid))?.name || location.Uid,
+        popupHtml: devicePopup(location, registry),
+      }));
+    return [...incidentStops, ...deviceStops];
+  }, [visibleIncidents, devices, locations]);
+
+  useEffect(() => {
+    if (!liveMode || tourPaused || !tourStops.length) return undefined;
+    const stop = tourStops[tourIndex % tourStops.length];
+    setFocusTarget({ ...stop, key: `${stop.id}-${Date.now()}` });
+    const timer = window.setTimeout(() => {
+      setTourIndex((idx) => (idx + 1) % tourStops.length);
+    }, 6000);
+    return () => window.clearTimeout(timer);
+  }, [liveMode, tourPaused, tourIndex, tourStops]);
+
+  useEffect(() => {
+    if (liveMode && tourIndex >= tourStops.length) setTourIndex(0);
+  }, [liveMode, tourStops.length, tourIndex]);
+
+  function startLiveMode() {
+    setTourIndex(0);
+    setTourPaused(false);
+    setLiveMode(true);
+  }
+  function stopLiveMode() {
+    setLiveMode(false);
+    setTourPaused(false);
+    setFocusTarget(null);
+  }
+  function skipTour() {
+    setTourIndex((idx) => (idx + 1) % Math.max(tourStops.length, 1));
+  }
+  const currentStop = tourStops.length ? tourStops[tourIndex % tourStops.length] : null;
+
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-ops-bg text-neutral-200">
       <OperationsMap
@@ -155,9 +233,35 @@ export function OperationsRoute() {
         locations={locations}
         activeLayers={activeLayers}
         basemap={basemap}
+        focusTarget={focusTarget}
       />
 
-      <section className="glass-panel absolute left-3 top-16 z-[1000] max-w-[260px] rounded-md px-3 py-2">
+      {liveMode ? (
+        <section className="glass-panel absolute left-1/2 top-16 z-[1000] flex -translate-x-1/2 items-center gap-3 rounded-md border border-ops-red/40 px-3 py-2 text-[11px] text-neutral-200">
+          <span className="inline-flex items-center gap-1.5 font-bold text-ops-red">
+            <span className="live-dot" /> LIVE
+          </span>
+          <span className="max-w-[220px] truncate text-neutral-300">
+            {currentStop?.label || "—"}
+          </span>
+          <span className="text-[10px] text-neutral-500">
+            {tourStops.length ? `${(tourIndex % tourStops.length) + 1} / ${tourStops.length}` : "0 / 0"}
+          </span>
+          <div className="ml-2 flex items-center gap-1">
+            <button onClick={() => setTourPaused((value) => !value)} className="rounded p-1 text-neutral-400 hover:text-neutral-100" title={tourPaused ? "Resume" : "Pause"}>
+              {tourPaused ? <Play size={13} /> : <Pause size={13} />}
+            </button>
+            <button onClick={skipTour} className="rounded p-1 text-neutral-400 hover:text-neutral-100" title="Skip">
+              <SkipForward size={13} />
+            </button>
+            <button onClick={stopLiveMode} className="rounded p-1 text-neutral-400 hover:text-ops-red" title="Exit live mode">
+              <X size={13} />
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      <section className="glass-panel absolute left-16 top-16 z-[1000] max-w-[260px] rounded-md px-3 py-2">
         <div className="inline-flex items-center gap-1 rounded border border-ops-red bg-red-500/10 px-1.5 py-0.5 text-[8px] font-bold tracking-widest text-ops-red">
           <span className="live-dot" /> LIVE MONITORING
         </div>
@@ -331,7 +435,7 @@ export function OperationsRoute() {
         }`}
       >
         <div className="mb-2 flex items-baseline justify-between">
-          <span className="text-[11px] font-bold text-ops-red">EPAIL Security Operations</span>
+          <span className="text-[11px] font-bold text-ops-red">{opsLabel}</span>
           <span className="text-[10px] text-neutral-500">{from || "All"} to {to || "present"}</span>
           <button className="text-neutral-600 hover:text-neutral-300" onClick={() => setStatsMinimized(!statsMinimized)}>
             {statsMinimized ? "▴" : "▾"}
@@ -370,6 +474,14 @@ export function OperationsRoute() {
                   {key === "live" ? "Live Alerts" : key === "heat" ? "Heatmap" : "Devices"}
                 </button>
               ))}
+              <button
+                className="rounded border border-ops-line bg-red-500/10 px-2 py-1 text-[10px] font-bold text-ops-red hover:bg-red-500/20 disabled:opacity-50"
+                onClick={liveMode ? stopLiveMode : startLiveMode}
+                disabled={!liveMode && !tourStops.length}
+                title={tourStops.length ? `Tour ${tourStops.length} pins` : "No pins to tour"}
+              >
+                <Tv size={12} className="mr-1 inline" /> {liveMode ? "Exit Live" : "Live Mode"}
+              </button>
               <button className="rounded border border-ops-line bg-red-500/10 px-2 py-1 text-[10px] font-bold text-ops-red hover:bg-red-500/20" onClick={() => downloadCSV(visibleIncidents)}>
                 <Download size={12} className="mr-1 inline" /> Export CSV
               </button>

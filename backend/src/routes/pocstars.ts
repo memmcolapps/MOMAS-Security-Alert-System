@@ -152,20 +152,38 @@ router.get("/devices", async (c) => {
 });
 
 router.post("/devices", async (c) => {
+  const user = c.get("user");
   const body = await c.req.json().catch(() => ({}));
-  const { device_id, name, company, operator, device_type, notes, active } = body;
+  const { device_id, name, operator, device_type, notes, active } = body;
   if (!device_id?.trim()) return c.json({ error: "device_id is required" }, 400);
 
   try {
-    const device = await db.upsertDevice({
-      device_id: device_id.trim(),
+    if (user?.platform_role === "admin") {
+      const device = await db.upsertDevice({
+        device_id: device_id.trim(),
+        name,
+        operator,
+        device_type,
+        notes,
+        organization_id: body.organization_id || null,
+        active: active ?? true,
+      });
+      return c.json({ device });
+    }
+
+    // Non-admin: can only update operational fields on devices in their own org.
+    // Cannot create new devices, cannot change organization assignment.
+    const orgId = orgScope(c).organizationId;
+    const existing = await db.getDevice(device_id.trim());
+    if (!existing) return c.json({ error: "Device not found" }, 404);
+    if (existing.organization_id !== orgId) return c.json({ error: "forbidden" }, 403);
+
+    const device = await db.updateDeviceFields(device_id.trim(), {
       name,
-      company,
       operator,
       device_type,
       notes,
-      organization_id: body.organization_id || orgScope(c).organizationId || null,
-      active: active ?? true,
+      active,
     });
     return c.json({ device });
   } catch (error) {
@@ -174,6 +192,8 @@ router.post("/devices", async (c) => {
 });
 
 router.delete("/devices/:device_id", async (c) => {
+  const user = c.get("user");
+  if (user?.platform_role !== "admin") return c.json({ error: "forbidden" }, 403);
   try {
     const deleted = await db.deleteDevice(c.req.param("device_id"));
     if (!deleted) return c.json({ error: "Device not found" }, 404);

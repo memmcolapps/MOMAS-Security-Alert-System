@@ -177,6 +177,10 @@ textarea {
   color: #ff1a1a;
 }
 
+.leaflet-top {
+  top: 3rem;
+}
+
 .leaflet-popup-content-wrapper {
   background: rgba(0, 0, 0, 0.95);
   color: #e0e0e0;
