@@ -1,4 +1,4 @@
-import { config } from "./config";
+import { config } from "./app-config";
 
 async function request(path, options = {}) {
   const response = await fetch(`${config.apiBase}${path}`, {

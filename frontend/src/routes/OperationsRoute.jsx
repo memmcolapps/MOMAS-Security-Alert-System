@@ -22,7 +22,7 @@ import {
   resolveSos,
   triggerScrape,
 } from "../lib/api";
-import { config } from "../lib/config";
+import { config } from "../lib/app-config";
 import {
   NIGERIAN_STATES,
   rangeForMode,
