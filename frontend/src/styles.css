@@ -1,0 +1,270 @@
+@import "leaflet/dist/leaflet.css";
+@import "leaflet.markercluster/dist/MarkerCluster.css";
+@import "leaflet.markercluster/dist/MarkerCluster.Default.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --red: #ff4444;
+  --amber: #ffb300;
+  --orange: #ff6600;
+  --yellow: #00bbaa;
+  --blue: #3399ff;
+  --green: #00cc66;
+  --glass: rgba(0, 0, 0, 0.88);
+  --border: rgba(255, 68, 68, 0.36);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  overflow: hidden;
+  background: #0a0a0a;
+  color: #e0e0e0;
+}
+
+button,
+select,
+input,
+textarea {
+  font: inherit;
+}
+
+.ops-map {
+  width: 100vw;
+  height: 100vh;
+  background: #050505;
+}
+
+.glass-panel {
+  background: var(--glass);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+}
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--red);
+  animation: pulse-dot 1.5s infinite;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.2;
+  }
+}
+
+.live-marker {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  position: relative;
+}
+
+.live-marker::before {
+  content: "";
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  animation: ripple 2s ease-out infinite;
+}
+
+.live-marker.sev-RED,
+.live-marker.sev-RED::before,
+.live-marker.sev-RED::after {
+  background: var(--amber);
+}
+
+.live-marker.sev-ORANGE,
+.live-marker.sev-ORANGE::before {
+  background: var(--orange);
+}
+
+.live-marker.sev-YELLOW,
+.live-marker.sev-YELLOW::before {
+  background: var(--yellow);
+}
+
+.live-marker.sev-BLUE,
+.live-marker.sev-BLUE::before {
+  background: var(--blue);
+}
+
+.live-marker.sev-RED {
+  width: 14px;
+  height: 14px;
+}
+
+.live-marker.sev-RED::after {
+  content: "";
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  animation: ripple 2s ease-out infinite 0.75s;
+}
+
+@keyframes ripple {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(3.5);
+    opacity: 0;
+  }
+}
+
+.device-pin {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--green);
+  border: 2px solid rgba(0, 0, 0, 0.6);
+  box-shadow: 0 0 7px rgba(0, 204, 102, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #000;
+  font-size: 11px;
+}
+
+.device-pin.sos {
+  background: #ff1a1a;
+  color: #fff;
+  box-shadow: 0 0 12px rgba(255, 26, 26, 0.9);
+  animation: sos-pulse 0.9s ease-in-out infinite;
+}
+
+@keyframes sos-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.3);
+  }
+}
+
+.device-label {
+  position: absolute;
+  top: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.85);
+  color: var(--green);
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.device-label.sos {
+  color: #ff1a1a;
+}
+
+.leaflet-popup-content-wrapper {
+  background: rgba(0, 0, 0, 0.95);
+  color: #e0e0e0;
+  border: 1px solid rgba(255, 68, 68, 0.5);
+  border-radius: 8px;
+}
+
+.leaflet-popup-content {
+  margin: 13px;
+  font-size: 12px;
+  line-height: 1.6;
+  max-width: 290px;
+}
+
+.leaflet-popup-tip {
+  background: rgba(0, 0, 0, 0.95);
+}
+
+.marker-cluster-small,
+.marker-cluster-medium,
+.marker-cluster-large {
+  background-color: rgba(255, 68, 68, 0.15) !important;
+  border: 1px solid rgba(255, 68, 68, 0.4) !important;
+}
+
+.marker-cluster-small div,
+.marker-cluster-medium div,
+.marker-cluster-large div {
+  background-color: rgba(255, 68, 68, 0.65) !important;
+  color: #fff !important;
+  font-weight: 700;
+  font-size: 11px;
+  line-height: 30px;
+}
+
+.leaflet-control-scale-line {
+  background: rgba(0, 0, 0, 0.88);
+  border: 1px solid rgba(255, 68, 68, 0.4);
+  color: #ddd;
+}
+
+.map-utility-btn {
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(255, 68, 68, 0.45);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.9);
+  color: #ff4444;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 3px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgba(255, 68, 68, 0.3);
+  border-radius: 2px;
+}
+
+.device-page {
+  min-height: 100vh;
+  overflow: auto;
+}
+
+.field-input {
+  width: 100%;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 8px 10px;
+  color: #e0e0e0;
+  font-size: 12px;
+  outline: none;
+}
+
+.field-input:focus {
+  border-color: var(--green);
+}
+
+.field-input:disabled {
+  opacity: 0.55;
+}
+
+.field-input option {
+  background: #111;
+}

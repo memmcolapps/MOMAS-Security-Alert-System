@@ -5,6 +5,7 @@
 
 # Generated at build time from .env / Vercel env vars
 config.js
+dist/
 
 # Dependencies
 node_modules/

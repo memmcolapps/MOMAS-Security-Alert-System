@@ -12,6 +12,7 @@ frontend/.env
 
 # Generated frontend config (built from env at deploy time)
 frontend/config.js
+frontend/dist/
 
 # Logs
 *.log
