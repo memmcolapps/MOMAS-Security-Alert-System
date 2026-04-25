@@ -1,10 +1,8 @@
-'use strict';
-
-const axios = require('axios');
-const { classifyMany } = require('../classifier');
-const { geocode, extractState } = require('../geocoder');
-const { buildFingerprint, fingerprintsMatch } = require('../classifier/fingerprint');
-const db = require('../db');
+import axios from "axios";
+import { classifyMany } from "../classifier";
+import { geocode, extractState } from "../geocoder";
+import { buildFingerprint, fingerprintsMatch } from "../classifier/fingerprint";
+import * as db from "../db";
 
 const GDELT_URL = 'https://api.gdeltproject.org/api/v2/doc/doc';
 
@@ -251,7 +249,7 @@ async function fetchOneQuery(query, daysBack, retries = 3) {
 async function fetchGDELTArticles(daysBack = 7) {
   const probe = await probeRateLimit();
   if (!probe.ok) {
-    const err = new Error(`GDELT rate-limited (probe did not clear within ${PROBE_MAX_WAIT_MS / 1000}s)`);
+    const err: any = new Error(`GDELT rate-limited (probe did not clear within ${PROBE_MAX_WAIT_MS / 1000}s)`);
     err.code = 'RATE_LIMITED';
     throw err;
   }
@@ -422,4 +420,4 @@ function isGDELTEnabled() {
   return process.env.GDELT_ENABLED !== 'false';
 }
 
-module.exports = { scrapeGDELT, isGDELTEnabled };
+export { scrapeGDELT, isGDELTEnabled };

@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Cheap regex gate that runs before the LLM. Returns true only when text
  * plausibly describes a Nigerian security incident — at least one security
@@ -99,4 +97,4 @@ function looksLikeSecurityIncident(title, description = '') {
   return SECURITY_RE.test(text);
 }
 
-module.exports = { looksLikeSecurityIncident };
+export { looksLikeSecurityIncident };

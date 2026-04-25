@@ -1,10 +1,8 @@
-'use strict';
-
-const axios = require('axios');
-const { classifyMany } = require('../classifier');
-const { geocode, extractState } = require('../geocoder');
-const { buildFingerprint, fingerprintsMatch } = require('../classifier/fingerprint');
-const db = require('../db');
+import axios from "axios";
+import { classifyMany } from "../classifier";
+import { geocode, extractState } from "../geocoder";
+import { buildFingerprint, fingerprintsMatch } from "../classifier/fingerprint";
+import * as db from "../db";
 
 const RELIEFWEB_URL = 'https://api.reliefweb.int/v2/reports';
 const APPNAME = process.env.RELIEFWEB_APPNAME || 'momas-security-alert';
@@ -193,4 +191,4 @@ function isReliefWebEnabled() {
   return process.env.RELIEFWEB_ENABLED !== 'false';
 }
 
-module.exports = { scrapeReliefWeb, isReliefWebEnabled };
+export { scrapeReliefWeb, isReliefWebEnabled };

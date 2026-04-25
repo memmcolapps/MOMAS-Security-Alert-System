@@ -1,11 +1,9 @@
-'use strict';
-
-const axios = require('axios');
-const { classifyMany } = require('../classifier');
-const { geocode, extractState } = require('../geocoder');
-const { looksLikeSecurityIncident } = require('../classifier/prefilter');
-const { buildFingerprint, fingerprintsMatch } = require('../classifier/fingerprint');
-const db = require('../db');
+import axios from "axios";
+import { classifyMany } from "../classifier";
+import { geocode, extractState } from "../geocoder";
+import { looksLikeSecurityIncident } from "../classifier/prefilter";
+import { buildFingerprint, fingerprintsMatch } from "../classifier/fingerprint";
+import * as db from "../db";
 
 // Guardian API is free with no hard rate limit — run multiple focused queries.
 // Each targets a different incident type so results don't heavily overlap.
@@ -191,4 +189,6 @@ async function scrapeGuardian(daysBack = 2) {
   return allResults;
 }
 
-module.exports = { scrapeGuardian, isGuardianEnabled: isEnabled };
+const isGuardianEnabled = isEnabled;
+
+export { scrapeGuardian, isGuardianEnabled };

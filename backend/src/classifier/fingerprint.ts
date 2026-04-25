@@ -1,5 +1,3 @@
-"use strict";
-
 /**
  * Fingerprint-based incident deduplication.
  *
@@ -13,7 +11,7 @@
  * real-world event reported by different sources.
  */
 
-const crypto = require("crypto");
+import crypto from "node:crypto";
 
 // Words that carry signal for event identity
 const SIGNAL_WORDS = new Set([
@@ -120,4 +118,4 @@ function fingerprintsMatch(fp1, fp2) {
   return true;
 }
 
-module.exports = { buildFingerprint, fingerprintsMatch, keywordSignature };
+export { buildFingerprint, fingerprintsMatch, keywordSignature };

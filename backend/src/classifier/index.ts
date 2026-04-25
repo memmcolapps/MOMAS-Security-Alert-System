@@ -1,5 +1,3 @@
-"use strict";
-
 /**
  * Incident classifier for Nigeria security events.
  *
@@ -11,9 +9,9 @@
  * treat null as "skip this item" — there is no regex fallback.
  */
 
-const axios = require("axios");
-const crypto = require("crypto");
-const { looksLikeSecurityIncident } = require("./prefilter");
+import axios from "axios";
+import crypto from "node:crypto";
+import { looksLikeSecurityIncident } from "./prefilter";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = process.env.GROQ_MODEL || "meta-llama/llama-4-scout-17b-16e-instruct";
@@ -404,4 +402,4 @@ async function classifyMany(items) {
   return results;
 }
 
-module.exports = { classify, classifyMany, isGroqEnabled };
+export { classify, classifyMany, isGroqEnabled };

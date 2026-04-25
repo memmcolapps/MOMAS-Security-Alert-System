@@ -1,11 +1,9 @@
-'use strict';
-
-const axios = require('axios');
-const { classifyMany } = require('../classifier');
-const { geocode, extractState } = require('../geocoder');
-const { looksLikeSecurityIncident } = require('../classifier/prefilter');
-const { buildFingerprint, fingerprintsMatch } = require('../classifier/fingerprint');
-const db = require('../db');
+import axios from "axios";
+import { classifyMany } from "../classifier";
+import { geocode, extractState } from "../geocoder";
+import { looksLikeSecurityIncident } from "../classifier/prefilter";
+import { buildFingerprint, fingerprintsMatch } from "../classifier/fingerprint";
+import * as db from "../db";
 
 // Free tier: 100 req/day. With 30-min scrape cycles (48/day) we use 1 broad
 // query per run = 48 req/day, leaving headroom for manual scrapes.
@@ -163,4 +161,6 @@ async function scrapeNewsAPI(daysBack = 2) {
   return [{ found: raw.length, added }];
 }
 
-module.exports = { scrapeNewsAPI, isNewsAPIEnabled: isEnabled };
+const isNewsAPIEnabled = isEnabled;
+
+export { scrapeNewsAPI, isNewsAPIEnabled };

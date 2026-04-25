@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Nigerian place name geocoder.
  * Resolves a location string to { lat, lon, state } using
@@ -355,4 +353,4 @@ function reverseGeocode(lat, lon) {
   };
 }
 
-module.exports = { geocode, extractState, reverseGeocode, STATE_NAMES };
+export { geocode, extractState, reverseGeocode, STATE_NAMES };

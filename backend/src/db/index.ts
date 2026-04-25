@@ -1,7 +1,5 @@
-"use strict";
-
-const { Pool } = require("pg");
-const { bus } = require("../events");
+import { Pool } from "pg";
+import { bus } from "../events";
 
 const pool = new Pool({
   connectionString:
@@ -172,7 +170,7 @@ async function getIncidents({
   to,
   limit = 100,
   offset = 0,
-} = {}) {
+}: any = {}) {
   const conds = ["1=1"];
   const vals = [];
   let i = 1;
@@ -214,7 +212,7 @@ async function getIncidents({
 }
 
 /** Count + aggregate incidents matching the same filters. */
-async function countIncidents({ state, type, severity, from, to } = {}) {
+async function countIncidents({ state, type, severity, from, to }: any = {}) {
   const conds = ["1=1"];
   const vals = [];
   let i = 1;
@@ -451,7 +449,7 @@ async function clearAll() {
   console.log("[DB] All incidents and scrape logs cleared");
 }
 
-module.exports = {
+export {
   pool,
   init,
   insertIncident,

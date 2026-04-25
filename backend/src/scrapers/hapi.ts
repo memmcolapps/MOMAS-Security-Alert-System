@@ -1,9 +1,7 @@
-'use strict';
-
-const axios = require('axios');
-const { geocode } = require('../geocoder');
-const { buildFingerprint, fingerprintsMatch } = require('../classifier/fingerprint');
-const db = require('../db');
+import axios from "axios";
+import { geocode } from "../geocoder";
+import { buildFingerprint, fingerprintsMatch } from "../classifier/fingerprint";
+import * as db from "../db";
 
 const HAPI_BASE = 'https://hapi.humdata.org/api/v2';
 const APP_NAME = process.env.HAPI_APP_NAME || 'momas-security-alert';
@@ -274,4 +272,4 @@ function isHAPIEnabled() {
   return process.env.HAPI_ENABLED !== 'false';
 }
 
-module.exports = { fetchHAPI, isHAPIEnabled };
+export { fetchHAPI, isHAPIEnabled };

@@ -1,14 +1,12 @@
-"use strict";
-
-const axios = require("axios");
-const Parser = require("rss-parser");
-const { classifyMany } = require("../classifier");
-const { geocode, extractState } = require("../geocoder");
-const {
+import axios from "axios";
+import Parser from "rss-parser";
+import { classifyMany } from "../classifier";
+import { geocode, extractState } from "../geocoder";
+import {
   buildFingerprint,
   fingerprintsMatch,
-} = require("../classifier/fingerprint");
-const db = require("../db");
+} from "../classifier/fingerprint";
+import * as db from "../db";
 
 const parser = new Parser({
   customFields: { item: ["media:content", "content:encoded"] },
@@ -345,4 +343,4 @@ async function scrapeAll() {
   return results;
 }
 
-module.exports = { scrapeAll };
+export { scrapeAll };

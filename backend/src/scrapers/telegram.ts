@@ -1,19 +1,17 @@
-"use strict";
-
 // Free Telegram public-channel scraper using the t.me/s/<channel> web preview.
 // No API key, no auth. Works for any public channel that allows web preview.
 //
 // Configure channels via env: TELEGRAM_CHANNELS=zagazola,humangle_media,...
 // Each channel name is the public @handle (without the @).
 
-const axios = require("axios");
-const { classifyMany } = require("../classifier");
-const { geocode, extractState } = require("../geocoder");
-const {
+import axios from "axios";
+import { classifyMany } from "../classifier";
+import { geocode, extractState } from "../geocoder";
+import {
   buildFingerprint,
   fingerprintsMatch,
-} = require("../classifier/fingerprint");
-const db = require("../db");
+} from "../classifier/fingerprint";
+import * as db from "../db";
 
 // NOTE: t.me/s/<handle> only works for channels with "Channel preview" enabled.
 // Most major Nigerian outlets (Sahara Reporters, Premium Times, Channels TV,
@@ -274,4 +272,4 @@ function isTelegramEnabled() {
   return getChannels().length > 0;
 }
 
-module.exports = { scrapeTelegram, isTelegramEnabled };
+export { scrapeTelegram, isTelegramEnabled };
