@@ -24,6 +24,9 @@ const envSchema = z.object({
   POCSTARS_LOC_BASE: z.string().url().default("http://102.221.238.124:9275"),
   POCSTARS_SOS_BASE: z.string().url().default("http://102.221.238.124:6891"),
   POCSTARS_TARGET_UID: z.string().default("583"),
+  AUTH_JWT_SECRET: z.string().min(16).default("momas-dev-secret-change-me"),
+  EPAIL_ADMIN_EMAIL: z.string().email().optional(),
+  EPAIL_ADMIN_PASSWORD: z.string().min(8).optional(),
 });
 
 export const env = envSchema.parse(process.env);

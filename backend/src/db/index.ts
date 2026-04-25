@@ -1,4 +1,5 @@
 import { Pool } from "pg";
+import { env } from "../config";
 import { bus } from "../events";
 
 const pool = new Pool({
@@ -76,6 +77,7 @@ async function init() {
 
     CREATE TABLE IF NOT EXISTS devices (
       device_id   TEXT PRIMARY KEY,
+      organization_id INTEGER,
       name        TEXT,
       company     TEXT,
       operator    TEXT,
@@ -84,6 +86,43 @@ async function init() {
       active      BOOLEAN     DEFAULT true,
       created_at  TIMESTAMPTZ DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS organizations (
+      id          SERIAL PRIMARY KEY,
+      name        TEXT NOT NULL,
+      slug        TEXT UNIQUE NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'active',
+      all_states  BOOLEAN NOT NULL DEFAULT false,
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id            SERIAL PRIMARY KEY,
+      email         TEXT UNIQUE NOT NULL,
+      name          TEXT,
+      password_hash TEXT NOT NULL,
+      platform_role TEXT NOT NULL DEFAULT 'none',
+      status        TEXT NOT NULL DEFAULT 'active',
+      created_at    TIMESTAMPTZ DEFAULT NOW(),
+      updated_at    TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS organization_memberships (
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role            TEXT NOT NULL DEFAULT 'viewer',
+      created_at      TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (organization_id, user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS organization_states (
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      state           TEXT NOT NULL,
+      PRIMARY KEY (organization_id, state)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_memberships_user ON organization_memberships(user_id);
   `);
 
   // Add new columns if they don't exist (idempotent migration)
@@ -91,6 +130,8 @@ async function init() {
     await pool.query(`
       ALTER TABLE incidents ADD COLUMN IF NOT EXISTS report_count INTEGER DEFAULT 1;
       ALTER TABLE incidents ADD COLUMN IF NOT EXISTS sources TEXT DEFAULT '[]';
+      ALTER TABLE devices ADD COLUMN IF NOT EXISTS organization_id INTEGER;
+      CREATE INDEX IF NOT EXISTS idx_devices_org ON devices(organization_id);
     `);
   } catch (err) {
     console.warn("[DB] Column migration note:", err.message);
@@ -105,6 +146,8 @@ async function init() {
   }
 
   console.log("[DB] PostgreSQL schema ready");
+
+  await bootstrapPlatformAdmin();
 }
 
 // ── Queries ───────────────────────────────────────────────────────────────────
@@ -161,6 +204,22 @@ async function logScrape(p) {
   );
 }
 
+async function bootstrapPlatformAdmin() {
+  if (!env.EPAIL_ADMIN_EMAIL || !env.EPAIL_ADMIN_PASSWORD) return;
+  const existing = await getUserByEmail(env.EPAIL_ADMIN_EMAIL);
+  if (existing) return;
+  const password_hash = await (Bun as any).password.hash(env.EPAIL_ADMIN_PASSWORD, {
+    algorithm: "bcrypt",
+    cost: 10,
+  });
+  await pool.query(
+    `INSERT INTO users (email, name, password_hash, platform_role)
+     VALUES ($1, $2, $3, 'admin')`,
+    [env.EPAIL_ADMIN_EMAIL.toLowerCase(), "EPAIL Admin", password_hash],
+  );
+  console.log(`[DB] Bootstrapped EPAIL admin user ${env.EPAIL_ADMIN_EMAIL}`);
+}
+
 /** Get incidents with optional filters + pagination. */
 async function getIncidents({
   state,
@@ -170,6 +229,8 @@ async function getIncidents({
   to,
   limit = 100,
   offset = 0,
+  allowedStates,
+  allStates = true,
 }: any = {}) {
   const conds = ["1=1"];
   const vals = [];
@@ -195,6 +256,15 @@ async function getIncidents({
     conds.push(`date    <= $${i++}`);
     vals.push(to);
   }
+  if (!allStates) {
+    const states = Array.isArray(allowedStates) ? allowedStates.filter(Boolean) : [];
+    if (!states.length) {
+      conds.push("1=0");
+    } else {
+      conds.push(`state = ANY($${i++})`);
+      vals.push(states);
+    }
+  }
 
   vals.push(Math.min(Number(limit) || 100, 500), Number(offset) || 0);
 
@@ -212,7 +282,7 @@ async function getIncidents({
 }
 
 /** Count + aggregate incidents matching the same filters. */
-async function countIncidents({ state, type, severity, from, to }: any = {}) {
+async function countIncidents({ state, type, severity, from, to, allowedStates, allStates = true }: any = {}) {
   const conds = ["1=1"];
   const vals = [];
   let i = 1;
@@ -222,6 +292,15 @@ async function countIncidents({ state, type, severity, from, to }: any = {}) {
   if (severity) { conds.push(`severity = $${i++}`); vals.push(severity); }
   if (from)     { conds.push(`date    >= $${i++}`); vals.push(from); }
   if (to)       { conds.push(`date    <= $${i++}`); vals.push(to); }
+  if (!allStates) {
+    const states = Array.isArray(allowedStates) ? allowedStates.filter(Boolean) : [];
+    if (!states.length) {
+      conds.push("1=0");
+    } else {
+      conds.push(`state = ANY($${i++})`);
+      vals.push(states);
+    }
+  }
 
   const { rows } = await pool.query(
     `SELECT
@@ -283,7 +362,20 @@ async function mergeIntoIncident(incidentId, { source, source_url, fatalities, v
 }
 
 /** Aggregate stats + breakdowns for the dashboard. */
-async function getStats() {
+async function getStats(scope: any = {}) {
+  const conds = ["1=1"];
+  const vals = [];
+  let i = 1;
+  if (!scope.allStates) {
+    const states = Array.isArray(scope.allowedStates) ? scope.allowedStates.filter(Boolean) : [];
+    if (!states.length) {
+      conds.push("1=0");
+    } else {
+      conds.push(`state = ANY($${i++})`);
+      vals.push(states);
+    }
+  }
+  const where = conds.join(" AND ");
   const {
     rows: [stats],
   } = await pool.query(`
@@ -298,26 +390,26 @@ async function getStats() {
       COUNT(*) FILTER (WHERE source_type = 'acled')::int            AS acled_count,
       COUNT(*) FILTER (WHERE source_type = 'rss')::int              AS rss_count,
       COUNT(DISTINCT state) FILTER (WHERE state IS NOT NULL)::int   AS states_affected
-    FROM incidents
-  `);
+    FROM incidents WHERE ${where}
+  `, vals);
 
   const { rows: byState } = await pool.query(`
     SELECT state, COUNT(*)::int AS count, COALESCE(SUM(fatalities),0)::int AS fatalities
-    FROM incidents WHERE state IS NOT NULL
+    FROM incidents WHERE state IS NOT NULL AND ${where}
     GROUP BY state ORDER BY count DESC LIMIT 15
-  `);
+  `, vals);
 
   const { rows: byType } = await pool.query(`
     SELECT type, COUNT(*)::int AS count
-    FROM incidents GROUP BY type ORDER BY count DESC
-  `);
+    FROM incidents WHERE ${where} GROUP BY type ORDER BY count DESC
+  `, vals);
 
   const { rows: last30 } = await pool.query(`
     SELECT date::text, COUNT(*)::int AS count
     FROM incidents
-    WHERE date >= NOW() - INTERVAL '30 days'
+    WHERE date >= NOW() - INTERVAL '30 days' AND ${where}
     GROUP BY date ORDER BY date
-  `);
+  `, vals);
 
   const { rows: logs } = await pool.query(`
     SELECT * FROM scrape_logs ORDER BY created_at DESC LIMIT 20
@@ -389,16 +481,20 @@ async function resolveSosAlert(sos_msg_id) {
   return _getSosWithDevice(sos_msg_id);
 }
 
-async function listSosAlerts() {
+async function listSosAlerts(scope: any = {}) {
   // Show: unresolved (any date) + resolved today (by our clock, not POCSTARS clock)
+  const vals = [];
+  const orgFilter = scope.organizationId ? "AND d.organization_id = $1" : "";
+  if (scope.organizationId) vals.push(scope.organizationId);
   const { rows } = await pool.query(`
     SELECT ${SOS_WITH_DEVICE_COLS}
       FROM sos_alerts s
       LEFT JOIN devices d ON d.device_id = s.device_id
-     WHERE s.status < 2
-        OR s.resolved_at::date = CURRENT_DATE
+     WHERE (s.status < 2
+        OR s.resolved_at::date = CURRENT_DATE)
+       ${orgFilter}
      ORDER BY s.created_at DESC
-  `);
+  `, vals);
   return rows;
 }
 
@@ -410,18 +506,30 @@ async function allSosMsgIds() {
 
 // ── Device registry ───────────────────────────────────────────────────────────
 
-async function listDevices() {
+async function listDevices(scope: any = {}) {
+  const vals = [];
+  const conds = ["1=1"];
+  if (scope.organizationId) {
+    conds.push(`organization_id = $${vals.length + 1}`);
+    vals.push(scope.organizationId);
+  }
   const { rows } = await pool.query(
-    "SELECT * FROM devices ORDER BY created_at DESC",
+    `SELECT d.*, o.name AS organization_name
+       FROM devices d
+       LEFT JOIN organizations o ON o.id = d.organization_id
+      WHERE ${conds.join(" AND ")}
+      ORDER BY d.created_at DESC`,
+    vals,
   );
   return rows;
 }
 
-async function upsertDevice({ device_id, name, company, operator, device_type, notes, active }) {
+async function upsertDevice({ device_id, name, company, operator, device_type, notes, active, organization_id }) {
   const { rows } = await pool.query(
-    `INSERT INTO devices (device_id, name, company, operator, device_type, notes, active)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)
+    `INSERT INTO devices (device_id, organization_id, name, company, operator, device_type, notes, active)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
      ON CONFLICT (device_id) DO UPDATE SET
+       organization_id = EXCLUDED.organization_id,
        name        = EXCLUDED.name,
        company     = EXCLUDED.company,
        operator    = EXCLUDED.operator,
@@ -429,7 +537,7 @@ async function upsertDevice({ device_id, name, company, operator, device_type, n
        notes       = EXCLUDED.notes,
        active      = EXCLUDED.active
      RETURNING *`,
-    [device_id, name || null, company || null, operator || null, device_type || null, notes || null, active ?? true],
+    [device_id, organization_id || null, name || null, company || null, operator || null, device_type || null, notes || null, active ?? true],
   );
   return rows[0];
 }
@@ -440,6 +548,183 @@ async function deleteDevice(device_id) {
     [device_id],
   );
   return rowCount > 0;
+}
+
+// ── Organizations / users ────────────────────────────────────────────────────
+
+function slugify(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+async function getUserByEmail(email) {
+  const { rows } = await pool.query("SELECT * FROM users WHERE lower(email) = lower($1)", [email]);
+  return rows[0] ?? null;
+}
+
+async function getUserById(id) {
+  const { rows } = await pool.query("SELECT id, email, name, platform_role, status, created_at FROM users WHERE id = $1", [id]);
+  return rows[0] ?? null;
+}
+
+async function getMembershipsForUser(userId) {
+  const { rows } = await pool.query(
+    `SELECT m.organization_id, m.role, o.name, o.slug, o.status, o.all_states
+       FROM organization_memberships m
+       JOIN organizations o ON o.id = m.organization_id
+      WHERE m.user_id = $1
+      ORDER BY o.name`,
+    [userId],
+  );
+  return rows;
+}
+
+async function getStatesForOrganization(organizationId) {
+  const { rows } = await pool.query(
+    "SELECT state FROM organization_states WHERE organization_id = $1 ORDER BY state",
+    [organizationId],
+  );
+  return rows.map((row) => row.state);
+}
+
+async function createOrganization({ name, slug, all_states = false, states = [], status = "active" }) {
+  const finalSlug = slugify(slug || name);
+  const { rows } = await pool.query(
+    `INSERT INTO organizations (name, slug, status, all_states)
+     VALUES ($1,$2,$3,$4)
+     RETURNING *`,
+    [name, finalSlug, status, Boolean(all_states)],
+  );
+  await setOrganizationStates(rows[0].id, states);
+  return getOrganization(rows[0].id);
+}
+
+async function listOrganizations() {
+  const { rows } = await pool.query(`
+    SELECT o.*,
+      COALESCE(json_agg(DISTINCT os.state) FILTER (WHERE os.state IS NOT NULL), '[]') AS states,
+      COUNT(DISTINCT d.device_id)::int AS device_count,
+      COUNT(DISTINCT m.user_id)::int AS user_count
+    FROM organizations o
+    LEFT JOIN organization_states os ON os.organization_id = o.id
+    LEFT JOIN devices d ON d.organization_id = o.id
+    LEFT JOIN organization_memberships m ON m.organization_id = o.id
+    GROUP BY o.id
+    ORDER BY o.created_at DESC
+  `);
+  return rows;
+}
+
+async function getOrganization(id) {
+  const { rows } = await pool.query(
+    `SELECT o.*,
+      COALESCE(json_agg(DISTINCT os.state) FILTER (WHERE os.state IS NOT NULL), '[]') AS states
+     FROM organizations o
+     LEFT JOIN organization_states os ON os.organization_id = o.id
+     WHERE o.id = $1
+     GROUP BY o.id`,
+    [id],
+  );
+  return rows[0] ?? null;
+}
+
+async function updateOrganizationAccess(id, { all_states, states = [], status, name }) {
+  const { rows } = await pool.query(
+    `UPDATE organizations
+        SET all_states = COALESCE($2, all_states),
+            status = COALESCE($3, status),
+            name = COALESCE($4, name),
+            updated_at = NOW()
+      WHERE id = $1
+      RETURNING *`,
+    [id, all_states === undefined ? null : Boolean(all_states), status || null, name || null],
+  );
+  if (!rows[0]) return null;
+  await setOrganizationStates(id, states);
+  return getOrganization(id);
+}
+
+async function setOrganizationStates(organizationId, states = []) {
+  await pool.query("DELETE FROM organization_states WHERE organization_id = $1", [organizationId]);
+  const clean = [...new Set((states || []).map((state) => String(state).trim()).filter(Boolean))];
+  for (const state of clean) {
+    await pool.query(
+      `INSERT INTO organization_states (organization_id, state)
+       VALUES ($1,$2)
+       ON CONFLICT DO NOTHING`,
+      [organizationId, state],
+    );
+  }
+}
+
+async function createUser({ email, name, password, platform_role = "none" }) {
+  const password_hash = await (Bun as any).password.hash(password, {
+    algorithm: "bcrypt",
+    cost: 10,
+  });
+  const { rows } = await pool.query(
+    `INSERT INTO users (email, name, password_hash, platform_role)
+     VALUES ($1,$2,$3,$4)
+     RETURNING id, email, name, platform_role, status, created_at`,
+    [email.toLowerCase(), name || null, password_hash, platform_role],
+  );
+  return rows[0];
+}
+
+async function addOrganizationUser({ organization_id, email, name, password, role = "viewer" }) {
+  let user = await getUserByEmail(email);
+  if (!user) {
+    user = await createUser({ email, name, password, platform_role: "none" });
+  }
+  await pool.query(
+    `INSERT INTO organization_memberships (organization_id, user_id, role)
+     VALUES ($1,$2,$3)
+     ON CONFLICT (organization_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
+    [organization_id, user.id, role],
+  );
+  return getUserById(user.id);
+}
+
+async function assignDeviceToOrganization(deviceId, organizationId) {
+  const { rows } = await pool.query(
+    `UPDATE devices SET organization_id = $2 WHERE device_id = $1 RETURNING *`,
+    [deviceId, organizationId],
+  );
+  return rows[0] ?? null;
+}
+
+async function listOrganizationUsers(organizationId) {
+  const { rows } = await pool.query(
+    `SELECT u.id, u.email, u.name, u.platform_role, u.status, u.created_at,
+            m.role
+       FROM organization_memberships m
+       JOIN users u ON u.id = m.user_id
+      WHERE m.organization_id = $1
+      ORDER BY u.created_at DESC`,
+    [organizationId],
+  );
+  return rows;
+}
+
+async function removeOrganizationUser(organizationId, userId) {
+  const { rowCount } = await pool.query(
+    `DELETE FROM organization_memberships WHERE organization_id = $1 AND user_id = $2`,
+    [organizationId, userId],
+  );
+  return rowCount > 0;
+}
+
+async function getOrganizationScope(organizationId) {
+  const organization = await getOrganization(organizationId);
+  if (!organization) return null;
+  return {
+    organizationId,
+    allStates: Boolean(organization.all_states),
+    allowedStates: organization.all_states ? [] : await getStatesForOrganization(organizationId),
+  };
 }
 
 /** Clear all incidents and scrape logs. */
@@ -465,6 +750,20 @@ export {
   listDevices,
   upsertDevice,
   deleteDevice,
+  getUserByEmail,
+  getUserById,
+  getMembershipsForUser,
+  getStatesForOrganization,
+  createOrganization,
+  listOrganizations,
+  getOrganization,
+  updateOrganizationAccess,
+  createUser,
+  addOrganizationUser,
+  assignDeviceToOrganization,
+  listOrganizationUsers,
+  removeOrganizationUser,
+  getOrganizationScope,
   insertSosAlert,
   acknowledgeSosAlert,
   resolveSosAlert,

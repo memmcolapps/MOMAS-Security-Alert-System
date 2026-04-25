@@ -1,14 +1,13 @@
-import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Plus, Radio, Save, Trash2, X } from "lucide-react";
+import { Plus, Radio, Save, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { deleteDevice, listDevices, saveDevice } from "../lib/api";
+import { deleteDevice, getMe, listDevices, listOrganizations, saveDevice } from "../lib/api";
 import { deviceTypeLabel } from "../lib/domain";
 
 const emptyForm = {
   device_id: "",
   name: "",
-  company: "",
+  organization_id: "",
   operator: "",
   device_type: "",
   active: "true",
@@ -36,7 +35,24 @@ export function DevicesRoute() {
     queryFn: listDevices,
   });
 
-  const devices = devicesQuery.data?.devices || [];
+  const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
+  const isPlatformAdmin = meQuery.data?.user?.platform_role === "admin";
+
+  const orgsQuery = useQuery({
+    queryKey: ["organizations"],
+    queryFn: listOrganizations,
+    enabled: isPlatformAdmin,
+  });
+
+  const [orgFilter, setOrgFilter] = useState("all");
+
+  const allDevices = devicesQuery.data?.devices || [];
+  const organizations = orgsQuery.data?.organizations || [];
+  const devices = useMemo(() => {
+    if (orgFilter === "all") return allDevices;
+    if (orgFilter === "unassigned") return allDevices.filter((device) => !device.organization_id);
+    return allDevices.filter((device) => String(device.organization_id) === String(orgFilter));
+  }, [allDevices, orgFilter]);
   const activeCount = useMemo(() => devices.filter((device) => device.active).length, [devices]);
 
   useEffect(() => {
@@ -75,7 +91,7 @@ export function DevicesRoute() {
     setForm({
       device_id: device.device_id || "",
       name: device.name || "",
-      company: device.company || "",
+      organization_id: device.organization_id ? String(device.organization_id) : "",
       operator: device.operator || "",
       device_type: device.device_type || "",
       active: String(Boolean(device.active)),
@@ -104,7 +120,7 @@ export function DevicesRoute() {
     saveMutation.mutate({
       device_id: deviceId,
       name: form.name.trim() || null,
-      company: form.company.trim() || null,
+      organization_id: form.organization_id ? Number(form.organization_id) : null,
       operator: form.operator.trim() || null,
       device_type: form.device_type || null,
       notes: form.notes.trim() || null,
@@ -113,11 +129,7 @@ export function DevicesRoute() {
   }
 
   return (
-    <main className="device-page bg-ops-bg px-6 py-8 text-neutral-200">
-      <Link to="/" className="mb-6 inline-flex items-center gap-2 text-xs text-neutral-500 hover:text-neutral-200">
-        <ArrowLeft size={14} /> Back to map
-      </Link>
-
+    <main className="device-page bg-ops-bg px-6 pb-8 pt-20 text-neutral-200">
       <header className="mb-7 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="flex items-center gap-2 text-xl font-bold text-ops-green">
@@ -145,9 +157,16 @@ export function DevicesRoute() {
             <Field label="Name">
               <input className="field-input" value={form.name} onChange={(event) => updateField("name", event.target.value)} placeholder="e.g. TK-100 Gate" />
             </Field>
-            <Field label="Company / Group">
-              <input className="field-input" value={form.company} onChange={(event) => updateField("company", event.target.value)} placeholder="e.g. EPAIL Lagos" />
-            </Field>
+            {isPlatformAdmin ? (
+              <Field label="Company">
+                <select className="field-input" value={form.organization_id} onChange={(event) => updateField("organization_id", event.target.value)}>
+                  <option value="">Unassigned</option>
+                  {organizations.map((org) => (
+                    <option value={org.id} key={org.id}>{org.name}</option>
+                  ))}
+                </select>
+              </Field>
+            ) : null}
             <Field label="Assigned Operator">
               <input className="field-input" value={form.operator} onChange={(event) => updateField("operator", event.target.value)} placeholder="e.g. John Doe" />
             </Field>
@@ -181,6 +200,22 @@ export function DevicesRoute() {
         </form>
       ) : null}
 
+      {isPlatformAdmin ? (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <FilterChip active={orgFilter === "all"} onClick={() => setOrgFilter("all")}>
+            All ({allDevices.length})
+          </FilterChip>
+          <FilterChip active={orgFilter === "unassigned"} onClick={() => setOrgFilter("unassigned")}>
+            Unassigned ({allDevices.filter((device) => !device.organization_id).length})
+          </FilterChip>
+          {organizations.map((org) => (
+            <FilterChip key={org.id} active={String(orgFilter) === String(org.id)} onClick={() => setOrgFilter(String(org.id))}>
+              {org.name}
+            </FilterChip>
+          ))}
+        </div>
+      ) : null}
+
       <section className="glass-panel overflow-hidden rounded-lg border-green-500/25">
         <div className="border-b border-white/10 px-4 py-3 text-[11px] text-neutral-500">
           {devicesQuery.isLoading ? "Loading..." : `${devices.length} device${devices.length === 1 ? "" : "s"} · ${activeCount} active`}
@@ -191,7 +226,7 @@ export function DevicesRoute() {
               <tr className="border-b border-white/10 text-[9px] uppercase tracking-wide text-neutral-500">
                 <th className="px-4 py-3">Device ID</th>
                 <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Company</th>
+                {isPlatformAdmin ? <th className="px-4 py-3">Company</th> : null}
                 <th className="px-4 py-3">Operator</th>
                 <th className="px-4 py-3">Type</th>
                 <th className="px-4 py-3">Status</th>
@@ -202,14 +237,16 @@ export function DevicesRoute() {
             <tbody>
               {devicesQuery.isLoading ? (
                 <tr>
-                  <td className="px-4 py-10 text-center text-neutral-500" colSpan={8}>Loading devices...</td>
+                  <td className="px-4 py-10 text-center text-neutral-500" colSpan={isPlatformAdmin ? 8 : 7}>Loading devices...</td>
                 </tr>
               ) : devices.length ? (
                 devices.map((device) => (
                   <tr className="border-b border-white/5 hover:bg-white/[0.03]" key={device.device_id}>
                     <td className="px-4 py-3 font-mono text-[11px] text-ops-green">{device.device_id}</td>
                     <td className="px-4 py-3">{device.name || <Muted />}</td>
-                    <td className="px-4 py-3">{device.company || <Muted />}</td>
+                    {isPlatformAdmin ? (
+                      <td className="px-4 py-3">{device.organization_name || <span className="text-neutral-700">Unassigned</span>}</td>
+                    ) : null}
                     <td className="px-4 py-3">{device.operator || <Muted />}</td>
                     <td className="px-4 py-3">{device.device_type ? deviceTypeLabel(device.device_type) : <Muted />}</td>
                     <td className="px-4 py-3">
@@ -234,7 +271,7 @@ export function DevicesRoute() {
                 ))
               ) : (
                 <tr>
-                  <td className="px-4 py-12 text-center text-neutral-500" colSpan={8}>
+                  <td className="px-4 py-12 text-center text-neutral-500" colSpan={isPlatformAdmin ? 8 : 7}>
                     <Radio className="mx-auto mb-2" size={28} /> No devices yet
                   </td>
                 </tr>
@@ -266,4 +303,19 @@ function Field({ label, required, wide, children }) {
 
 function Muted() {
   return <span className="text-neutral-700">-</span>;
+}
+
+function FilterChip({ active, onClick, children }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-full border px-3 py-1 text-[10px] font-bold transition ${
+        active
+          ? "border-ops-green bg-green-500/15 text-ops-green"
+          : "border-white/10 bg-white/[0.03] text-neutral-400 hover:text-neutral-200"
+      }`}
+    >
+      {children}
+    </button>
+  );
 }

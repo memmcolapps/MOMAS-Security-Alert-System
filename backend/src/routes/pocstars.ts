@@ -1,5 +1,6 @@
 import axios from "axios";
 import { Hono } from "hono";
+import { primaryOrganization, requireAuth } from "../auth";
 import { env } from "../config";
 import * as db from "../db";
 
@@ -15,6 +16,15 @@ const sseClients = new Set<SseClient>();
 const LOC_BASE = env.POCSTARS_LOC_BASE;
 const SOS_BASE = env.POCSTARS_SOS_BASE;
 const DEFAULT_TARGET_UID = env.POCSTARS_TARGET_UID;
+
+router.use("*", requireAuth);
+
+function orgScope(c: any) {
+  const user = c.get("user");
+  if (!user || user.platform_role === "admin") return {};
+  const org = primaryOrganization(user);
+  return org ? { organizationId: org.organization_id } : { organizationId: -1 };
+}
 
 let lastPocstarsOk: number | null = null;
 let lastPocstarsErr: string | null = null;
@@ -134,7 +144,7 @@ setInterval(serverPollSos, 12_000);
 
 router.get("/devices", async (c) => {
   try {
-    const devices = await db.listDevices();
+    const devices = await db.listDevices(orgScope(c));
     return c.json({ devices });
   } catch (error) {
     return c.json(jsonError(error), 500);
@@ -154,6 +164,7 @@ router.post("/devices", async (c) => {
       operator,
       device_type,
       notes,
+      organization_id: body.organization_id || orgScope(c).organizationId || null,
       active: active ?? true,
     });
     return c.json({ device });
@@ -185,7 +196,7 @@ router.get("/sos/seen-ids", async (c) => {
 
 router.get("/sos/log", async (c) => {
   try {
-    const alerts = await db.listSosAlerts();
+    const alerts = await db.listSosAlerts(orgScope(c));
     return c.json({ alerts, pocstarsLastOk: lastPocstarsOk, pocstarsLastErr: lastPocstarsErr });
   } catch (error) {
     return c.json(jsonError(error), 500);
@@ -219,7 +230,7 @@ router.post("/sos/:sosMsgId/resolve", async (c) => {
 });
 
 router.get("/config", async (c) => {
-  const devices = await db.listDevices().catch(() => []);
+  const devices = await db.listDevices(orgScope(c)).catch(() => []);
   const active = devices.filter((device: any) => device.active);
   return c.json({
     uids: active.map((device: any) => device.device_id),
@@ -230,7 +241,7 @@ router.get("/config", async (c) => {
 router.get("/locations", async (c) => {
   let uids = c.req.query("uids");
   if (!uids) {
-    const devices = await db.listDevices().catch(() => []);
+    const devices = await db.listDevices(orgScope(c)).catch(() => []);
     uids = devices
       .filter((device: any) => device.active)
       .map((device: any) => device.device_id)

@@ -6,10 +6,16 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  redirect,
+  useRouterState,
 } from "@tanstack/react-router";
-import React from "react";
 import { createRoot } from "react-dom/client";
+import { AppHeader } from "./components/AppHeader";
+import { getAuthToken, getMe } from "./lib/api";
+import { AdminOrganizationDetailRoute } from "./routes/AdminOrganizationDetailRoute";
+import { AdminOrganizationsRoute } from "./routes/AdminOrganizationsRoute";
 import { DevicesRoute } from "./routes/DevicesRoute";
+import { LoginRoute } from "./routes/LoginRoute";
 import { OperationsRoute } from "./routes/OperationsRoute";
 import "./styles.css";
 
@@ -23,7 +29,14 @@ const queryClient = new QueryClient({
 });
 
 function RootLayout() {
-  return <Outlet />;
+  const router = useRouterState();
+  const showHeader = router.location.pathname !== "/login";
+  return (
+    <>
+      {showHeader ? <AppHeader /> : null}
+      <Outlet />
+    </>
+  );
 }
 
 function NotFound() {
@@ -50,19 +63,66 @@ const rootRoute = createRootRoute({
   notFoundComponent: NotFound,
 });
 
+async function requireSession() {
+  if (!getAuthToken()) throw redirect({ to: "/login" });
+  try {
+    return await queryClient.fetchQuery({
+      queryKey: ["me"],
+      queryFn: getMe,
+      staleTime: 60_000,
+    });
+  } catch {
+    throw redirect({ to: "/login" });
+  }
+}
+
+async function requireAdmin() {
+  const session = await requireSession();
+  if (session.user?.platform_role !== "admin") throw redirect({ to: "/" });
+  return session;
+}
+
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
+  beforeLoad: requireSession,
   component: OperationsRoute,
 });
 
 const devicesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/devices",
+  beforeLoad: requireSession,
   component: DevicesRoute,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, devicesRoute]);
+const loginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/login",
+  component: LoginRoute,
+});
+
+const adminOrganizationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/organizations",
+  beforeLoad: requireAdmin,
+  component: AdminOrganizationsRoute,
+});
+
+const adminOrganizationDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/organizations/$id",
+  beforeLoad: requireAdmin,
+  component: AdminOrganizationDetailRoute,
+});
+
+const routeTree = rootRoute.addChildren([
+  indexRoute,
+  devicesRoute,
+  loginRoute,
+  adminOrganizationsRoute,
+  adminOrganizationDetailRoute,
+]);
 
 const router = createRouter({
   routeTree,
@@ -70,9 +130,7 @@ const router = createRouter({
 });
 
 createRoot(document.getElementById("root")).render(
-  <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>
-  </React.StrictMode>,
+  <QueryClientProvider client={queryClient}>
+    <RouterProvider router={router} />
+  </QueryClientProvider>,
 );

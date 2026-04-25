@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { requireAuth, scopeForUser } from "../auth";
 import * as db from "../db";
 import { bus } from "../events";
 import { reverseGeocode } from "../geocoder";
@@ -67,6 +68,8 @@ bus.on("incident:new", (row) => {
 const cache = new Map<string, { ts: number; data: unknown }>();
 const CACHE_TTL_MS = 2 * 60 * 1000;
 
+router.use("*", requireAuth);
+
 function getCached(key: string) {
   const hit = cache.get(key);
   if (!hit) return null;
@@ -109,15 +112,17 @@ router.get("/", async (c) => {
   try {
     const query = c.req.query();
     const { state, type, severity, from, to } = query;
+    const user = (c as any).get("user");
+    const scope = await scopeForUser(user);
     const limit = query.limit ?? "100";
     const offset = query.offset ?? "0";
-    const key = JSON.stringify({ state, type, severity, from, to, limit, offset });
+    const key = JSON.stringify({ state, type, severity, from, to, limit, offset, scope });
     const cached = getCached(key);
     if (cached) return c.json(cached);
 
     const [incidents, agg] = await Promise.all([
-      db.getIncidents({ state, type, severity, from, to, limit: Number(limit), offset: Number(offset) }),
-      db.countIncidents({ state, type, severity, from, to }),
+      db.getIncidents({ state, type, severity, from, to, limit: Number(limit), offset: Number(offset), ...scope }),
+      db.countIncidents({ state, type, severity, from, to, ...scope }),
     ]);
     const payload = {
       total: agg.total,
@@ -135,7 +140,9 @@ router.get("/", async (c) => {
 
 router.get("/stats", async (c) => {
   try {
-    return c.json(await db.getStats());
+    const user = (c as any).get("user");
+    const scope = await scopeForUser(user);
+    return c.json(await db.getStats(scope));
   } catch (error) {
     return c.json(jsonError(error), 500);
   }
@@ -144,7 +151,9 @@ router.get("/stats", async (c) => {
 router.get("/recent", async (c) => {
   try {
     const { limit = "50", severity } = c.req.query();
-    const incidents = await db.getIncidents({ severity, limit: Number(limit) });
+    const user = (c as any).get("user");
+    const scope = await scopeForUser(user);
+    const incidents = await db.getIncidents({ severity, limit: Number(limit), ...scope });
     return c.json({ count: incidents.length, incidents });
   } catch (error) {
     return c.json(jsonError(error), 500);

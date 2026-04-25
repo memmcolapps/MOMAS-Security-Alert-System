@@ -3,7 +3,9 @@ import { cors } from "hono/cors";
 import { serveStatic } from "hono/bun";
 import { env } from "./config";
 import * as db from "./db";
+import authRouter from "./routes/auth";
 import incidentsRouter from "./routes/incidents";
+import organizationsRouter from "./routes/organizations";
 import pocstarsRouter from "./routes/pocstars";
 import { isGDELTEnabled, scrapeGDELT } from "./scrapers/gdelt";
 import { isGuardianEnabled, scrapeGuardian } from "./scrapers/guardian";
@@ -25,12 +27,14 @@ app.use(
   cors({
     origin: "*",
     allowHeaders: ["Content-Type", "Authorization"],
-    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   }),
 );
 
 app.route("/api/incidents", incidentsRouter);
 app.route("/api/pocstars", pocstarsRouter);
+app.route("/api/auth", authRouter);
+app.route("/api/organizations", organizationsRouter);
 
 app.get("/api/config", (c) =>
   c.json({

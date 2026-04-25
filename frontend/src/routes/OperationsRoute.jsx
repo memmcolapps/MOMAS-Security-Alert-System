@@ -1,4 +1,3 @@
-import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bell,
@@ -158,12 +157,8 @@ export function OperationsRoute() {
         basemap={basemap}
       />
 
-      <section className="glass-panel absolute left-3 top-3 z-[1000] max-w-[280px] rounded-md px-3 py-2">
-        <h1 className="text-[13px] font-bold text-ops-red">MOMAS Security Operations</h1>
-        <p className="mt-0.5 text-[9px] leading-snug text-neutral-500">
-          Live intelligence feed, incident mapping, POCSTARS devices and SOS response.
-        </p>
-        <div className="mt-1 inline-flex items-center gap-1 rounded border border-ops-red bg-red-500/10 px-1.5 py-0.5 text-[8px] font-bold tracking-widest text-ops-red">
+      <section className="glass-panel absolute left-3 top-16 z-[1000] max-w-[260px] rounded-md px-3 py-2">
+        <div className="inline-flex items-center gap-1 rounded border border-ops-red bg-red-500/10 px-1.5 py-0.5 text-[8px] font-bold tracking-widest text-ops-red">
           <span className="live-dot" /> LIVE MONITORING
         </div>
         <div className="mt-1 text-[9px] tracking-wide text-neutral-500">
@@ -174,7 +169,7 @@ export function OperationsRoute() {
       </section>
 
       <section
-        className={`glass-panel absolute top-5 z-[1000] hidden max-w-[210px] rounded-lg p-3 text-[10px] lg:block ${
+        className={`glass-panel absolute top-16 z-[1000] hidden max-w-[210px] rounded-lg p-3 text-[10px] lg:block ${
           panelOpen ? "right-[400px]" : "right-5"
         }`}
       >
@@ -200,7 +195,7 @@ export function OperationsRoute() {
       </section>
 
       <aside
-        className={`glass-panel absolute right-0 top-0 z-[1000] flex h-screen w-[380px] max-w-[calc(100vw-32px)] flex-col border-r-0 transition-transform ${
+        className={`glass-panel absolute right-0 top-12 z-[1000] flex h-[calc(100vh-3rem)] w-[380px] max-w-[calc(100vw-32px)] flex-col border-r-0 transition-transform ${
           panelOpen ? "translate-x-0" : "translate-x-full"
         }`}
       >
@@ -336,7 +331,7 @@ export function OperationsRoute() {
         }`}
       >
         <div className="mb-2 flex items-baseline justify-between">
-          <span className="text-[11px] font-bold text-ops-red">MOMAS Security Operations</span>
+          <span className="text-[11px] font-bold text-ops-red">EPAIL Security Operations</span>
           <span className="text-[10px] text-neutral-500">{from || "All"} to {to || "present"}</span>
           <button className="text-neutral-600 hover:text-neutral-300" onClick={() => setStatsMinimized(!statsMinimized)}>
             {statsMinimized ? "▴" : "▾"}
@@ -375,9 +370,6 @@ export function OperationsRoute() {
                   {key === "live" ? "Live Alerts" : key === "heat" ? "Heatmap" : "Devices"}
                 </button>
               ))}
-              <Link to="/devices" className="rounded border border-ops-line bg-red-500/10 px-2 py-1 text-[10px] font-bold text-ops-red hover:bg-red-500/20">
-                <Radio size={12} className="mr-1 inline" /> Devices
-              </Link>
               <button className="rounded border border-ops-line bg-red-500/10 px-2 py-1 text-[10px] font-bold text-ops-red hover:bg-red-500/20" onClick={() => downloadCSV(visibleIncidents)}>
                 <Download size={12} className="mr-1 inline" /> Export CSV
               </button>

@@ -113,7 +113,17 @@ export function OperationsMap({
     mapRef.current = map;
 
     return () => {
-      map.remove();
+      const node = mapNode.current;
+      try {
+        map.off();
+        map.remove();
+      } catch (error) {
+        console.warn("[Map] Leaflet cleanup skipped:", error);
+      }
+      if (node) {
+        node.replaceChildren();
+        delete node._leaflet_id;
+      }
       mapRef.current = null;
       layersRef.current = {};
     };
