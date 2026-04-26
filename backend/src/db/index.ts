@@ -129,7 +129,7 @@ async function init() {
       organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
       parent_unit_id  INTEGER REFERENCES organization_units(id) ON DELETE SET NULL,
       name            TEXT NOT NULL,
-      type            TEXT NOT NULL DEFAULT 'station',
+      type            TEXT,
       state           TEXT,
       lga             TEXT,
       location        TEXT,
@@ -162,6 +162,8 @@ async function init() {
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS unit_id INTEGER;
       ALTER TABLE organization_memberships ADD COLUMN IF NOT EXISTS unit_id INTEGER;
       ALTER TABLE organization_memberships ADD COLUMN IF NOT EXISTS scope_level TEXT NOT NULL DEFAULT 'organization';
+      ALTER TABLE organization_units ALTER COLUMN type DROP NOT NULL;
+      ALTER TABLE organization_units ALTER COLUMN type DROP DEFAULT;
       CREATE INDEX IF NOT EXISTS idx_devices_org ON devices(organization_id);
       CREATE INDEX IF NOT EXISTS idx_devices_unit ON devices(unit_id);
     `);
@@ -878,12 +880,12 @@ async function getOrganizationUnit(organizationId, unitId) {
   return rows[0] ?? null;
 }
 
-async function createOrganizationUnit({ organization_id, parent_unit_id, name, type = "station", state, lga, location }) {
+async function createOrganizationUnit({ organization_id, parent_unit_id, name, type, state, lga, location }) {
   const { rows } = await pool.query(
     `INSERT INTO organization_units (organization_id, parent_unit_id, name, type, state, lga, location)
      VALUES ($1,$2,$3,$4,$5,$6,$7)
      RETURNING *`,
-    [organization_id, parent_unit_id || null, name, type, state || null, lga || null, location || null],
+    [organization_id, parent_unit_id || null, name, type || null, state || null, lga || null, location || null],
   );
   return rows[0];
 }

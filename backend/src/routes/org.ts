@@ -120,7 +120,7 @@ router.post("/units", async (c) => {
       organization_id: organizationId,
       parent_unit_id: body.parent_unit_id || null,
       name: body.name,
-      type: body.type || "station",
+      type: body.type || null,
       state: body.state,
       lga: body.lga,
       location: body.location,
@@ -131,7 +131,7 @@ router.post("/units", async (c) => {
       action: "unit.create",
       target_type: "unit",
       target_id: unit.id,
-      metadata: { name: unit.name, type: unit.type, state: unit.state },
+      metadata: { name: unit.name, type: unit.type || null, state: unit.state },
     });
     return c.json({ unit }, 201);
   } catch (error) {

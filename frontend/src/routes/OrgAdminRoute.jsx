@@ -19,14 +19,6 @@ const TABS = [
   { id: "audit", label: "Audit", icon: ClipboardList },
 ];
 
-const UNIT_TYPES = [
-  ["hq", "HQ"],
-  ["zone", "Zone"],
-  ["state_command", "State Command"],
-  ["area_command", "Area Command"],
-  ["station", "Station"],
-];
-
 const ROLES = [
   ["org_owner", "Org owner"],
   ["org_admin", "Org admin"],
@@ -91,11 +83,11 @@ function Shell({ children }) {
 }
 
 function UnitsSection({ units, canCreateUnits, onChanged }) {
-  const [form, setForm] = useState({ name: "", type: "station", parent_unit_id: "", state: "", lga: "", location: "" });
+  const [form, setForm] = useState({ name: "", type: "", parent_unit_id: "", state: "", lga: "", location: "" });
   const createMutation = useMutation({
     mutationFn: createOrgUnit,
     onSuccess: () => {
-      setForm({ name: "", type: "station", parent_unit_id: "", state: "", lga: "", location: "" });
+      setForm({ name: "", type: "", parent_unit_id: "", state: "", lga: "", location: "" });
       onChanged();
     },
   });
@@ -108,21 +100,19 @@ function UnitsSection({ units, canCreateUnits, onChanged }) {
         createMutation.mutate({ ...form, parent_unit_id: form.parent_unit_id || null });
       }}>
         <h2 className="mb-4 flex items-center gap-2 text-[13px] font-bold text-ops-red">
-          <Building2 size={15} /> Add command or station
+          <Building2 size={15} /> Add unit
         </h2>
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
           <Field label="Name">
             <input className="field-input" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
           </Field>
-          <Field label="Type">
-            <select className="field-input" value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}>
-              {UNIT_TYPES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
-            </select>
+          <Field label="Label">
+            <input className="field-input" value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })} placeholder="Optional, e.g. Campus, Department, Station" />
           </Field>
           <Field label="Parent">
             <select className="field-input" value={form.parent_unit_id} onChange={(event) => setForm({ ...form, parent_unit_id: event.target.value })}>
               <option value="">None</option>
-              {units.map((unit) => <option value={unit.id} key={unit.id}>{unit.name}</option>)}
+              {units.map((unit) => <option value={unit.id} key={unit.id}>{unitOptionLabel(unit)}</option>)}
             </select>
           </Field>
           <Field label="State">
@@ -160,7 +150,7 @@ function UnitRow({ unit, onChanged }) {
       <div className="min-w-0">
         <h3 className="text-sm text-neutral-100">{unit.name}</h3>
         <p className="text-[11px] text-neutral-500">
-          {labelForUnitType(unit.type)} · {unit.parent_name || "top level"} · {unit.state || "all states"} · {unit.user_count || 0} users · {unit.device_count || 0} devices
+          {unit.type || "Unit"} · {unit.parent_name || "top level"} · {unit.state || "all states"} · {unit.user_count || 0} users · {unit.device_count || 0} devices
         </p>
       </div>
       <button className="inline-flex items-center gap-1 rounded border border-red-500/20 px-2 py-1 text-[10px] text-red-400/70 hover:border-ops-red hover:text-ops-red" onClick={() => {
@@ -204,7 +194,7 @@ function UsersSection({ users, units, onChanged }) {
           <Field label="Unit">
             <select className="field-input" value={form.unit_id} onChange={(event) => setForm({ ...form, unit_id: event.target.value })}>
               <option value="">Whole organization</option>
-              {units.map((unit) => <option value={unit.id} key={unit.id}>{unit.name}</option>)}
+              {units.map((unit) => <option value={unit.id} key={unit.id}>{unitOptionLabel(unit)}</option>)}
             </select>
           </Field>
           <Field label="Scope">
@@ -258,7 +248,7 @@ function DevicesSection({ devices, units, onChanged }) {
           <div className="text-neutral-400">{device.operator || "No operator"}</div>
           <select className="field-input" value={pending[device.device_id] ?? device.unit_id ?? ""} onChange={(event) => setPending({ ...pending, [device.device_id]: event.target.value })}>
             <option value="">No unit</option>
-            {units.map((unit) => <option value={unit.id} key={unit.id}>{unit.name}</option>)}
+            {units.map((unit) => <option value={unit.id} key={unit.id}>{unitOptionLabel(unit)}</option>)}
           </select>
           <button className="inline-flex items-center justify-center gap-2 rounded bg-ops-green px-3 py-2 text-xs font-bold text-black disabled:opacity-50" disabled={assignMutation.isPending} onClick={() => assignMutation.mutate({ deviceId: device.device_id, unitId: pending[device.device_id] ?? device.unit_id ?? "" })}>
             <Save size={13} /> Assign
@@ -308,12 +298,12 @@ function Empty({ children }) {
   return <div className="px-4 py-10 text-center text-[12px] text-neutral-500">{children}</div>;
 }
 
-function labelForUnitType(value) {
-  return UNIT_TYPES.find(([key]) => key === value)?.[1] || value;
-}
-
 function roleLabel(value) {
   return ROLES.find(([key]) => key === value)?.[1] || value;
+}
+
+function unitOptionLabel(unit) {
+  return unit.parent_name ? `${unit.parent_name} / ${unit.name}` : unit.name;
 }
 
 function formatDateTime(value) {
