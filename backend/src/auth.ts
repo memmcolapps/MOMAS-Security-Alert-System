@@ -84,13 +84,57 @@ function primaryOrganization(user: any) {
   return user?.memberships?.[0] || null;
 }
 
+const ORG_MANAGE_ROLES = new Set(["org_owner", "org_admin", "admin"]);
+const UNIT_MANAGE_ROLES = new Set(["org_owner", "org_admin", "unit_admin", "admin"]);
+
+function canManageOrganization(membership: any) {
+  return Boolean(membership && ORG_MANAGE_ROLES.has(membership.role));
+}
+
+function canManageUnit(membership: any, unitId?: number | null) {
+  if (!membership || !UNIT_MANAGE_ROLES.has(membership.role)) return false;
+  if (membership.role === "unit_admin") {
+    return Boolean(membership.unit_id && unitId && Number(membership.unit_id) === Number(unitId));
+  }
+  if (membership.scope_level === "unit" && membership.unit_id) {
+    return Boolean(unitId && Number(membership.unit_id) === Number(unitId));
+  }
+  return true;
+}
+
 async function scopeForUser(user: any) {
   if (!user || user.platform_role === "admin") {
-    return { allStates: true, allowedStates: [], organizationId: null };
+    return { allStates: true, allowedStates: [], organizationId: null, unitId: null };
   }
   const org = primaryOrganization(user);
-  if (!org) return { allStates: false, allowedStates: [], organizationId: null };
-  return db.getOrganizationScope(org.organization_id);
+  if (!org) return { allStates: false, allowedStates: [], organizationId: null, unitId: null };
+  const organizationScope = await db.getOrganizationScope(org.organization_id);
+  if (!organizationScope) return { allStates: false, allowedStates: [], organizationId: null, unitId: null };
+  if (org.scope_level === "unit" && org.unit_id) {
+    return {
+      ...organizationScope,
+      allowedStates: org.unit_state ? [org.unit_state] : organizationScope.allowedStates,
+      allStates: false,
+      unitId: org.unit_id,
+    };
+  }
+  return { ...organizationScope, unitId: null };
+}
+
+async function requireOrgManager(c: Context, next: Next) {
+  const user = await currentUserFromRequest(c);
+  if (!user) return c.json({ error: "unauthorized" }, 401);
+  if (user.platform_role === "admin") {
+    c.set("user", user);
+    c.set("membership", null);
+    await next();
+    return;
+  }
+  const membership = primaryOrganization(user);
+  if (!canManageOrganization(membership) && !canManageUnit(membership, membership?.unit_id)) return c.json({ error: "forbidden" }, 403);
+  c.set("user", user);
+  c.set("membership", membership);
+  await next();
 }
 
 export {
@@ -98,8 +142,11 @@ export {
   verifyToken,
   requireAuth,
   requirePlatformAdmin,
+  requireOrgManager,
   optionalAuth,
   currentUserFromRequest,
   primaryOrganization,
+  canManageOrganization,
+  canManageUnit,
   scopeForUser,
 };

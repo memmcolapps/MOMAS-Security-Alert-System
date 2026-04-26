@@ -1,6 +1,6 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, ChevronDown, LogOut, Map, Radio, ShieldAlert } from "lucide-react";
+import { Building2, ChevronDown, LogOut, Map, Radio, ShieldAlert, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getMe, setAuthToken } from "../lib/api";
 
@@ -14,6 +14,7 @@ export function AppHeader() {
   const user = meQuery.data?.user;
   const isAdmin = user?.platform_role === "admin";
   const org = user?.memberships?.[0] || null;
+  const canManageOrg = isAdmin || ["org_owner", "org_admin", "unit_admin", "admin"].includes(org?.role);
   const accessSummary = org
     ? org.all_states
       ? "all states"
@@ -64,6 +65,9 @@ export function AppHeader() {
           <NavItem to="/devices" icon={Radio} label="Devices" active={isActive("/devices")} />
           {isAdmin ? (
             <NavItem to="/admin/organizations" icon={Building2} label="Companies" active={isActive("/admin/organizations")} />
+          ) : null}
+          {!isAdmin && canManageOrg ? (
+            <NavItem to="/org/admin" icon={UsersRound} label="Admin" active={isActive("/org/admin")} />
           ) : null}
         </nav>
 

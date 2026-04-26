@@ -43,7 +43,11 @@ router.get("/:id", async (c) => {
     db.listDevices({ organizationId: id }),
     db.listOrganizationUsers(id),
   ]);
-  return c.json({ organization, devices, users });
+  const [units, audit] = await Promise.all([
+    db.listOrganizationUnits(id),
+    db.listAuditLogs(id, 50),
+  ]);
+  return c.json({ organization, devices, users, units, audit });
 });
 
 router.put("/:id/access", async (c) => {
@@ -70,7 +74,15 @@ router.post("/:id/users", async (c) => {
     email: body.email,
     name: body.name,
     password: body.password,
-    role: body.role || "admin",
+    role: body.role || "org_admin",
+  });
+  await db.createAuditLog({
+    organization_id,
+    actor_user_id: (c as any).get("user")?.id,
+    action: "user.upsert",
+    target_type: "user",
+    target_id: user.id,
+    metadata: { email: body.email, role: body.role || "org_admin" },
   });
   return c.json({ user }, 201);
 });

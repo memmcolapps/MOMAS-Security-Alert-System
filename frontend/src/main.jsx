@@ -16,6 +16,7 @@ import { AdminOrganizationDetailRoute } from "./routes/AdminOrganizationDetailRo
 import { AdminOrganizationsRoute } from "./routes/AdminOrganizationsRoute";
 import { DevicesRoute } from "./routes/DevicesRoute";
 import { LoginRoute } from "./routes/LoginRoute";
+import { OrgAdminRoute } from "./routes/OrgAdminRoute";
 import { OperationsRoute } from "./routes/OperationsRoute";
 import "./styles.css";
 
@@ -82,6 +83,15 @@ async function requireAdmin() {
   return session;
 }
 
+async function requireOrgAdmin() {
+  const session = await requireSession();
+  const role = session.user?.memberships?.[0]?.role;
+  if (session.user?.platform_role !== "admin" && !["org_owner", "org_admin", "unit_admin", "admin"].includes(role)) {
+    throw redirect({ to: "/" });
+  }
+  return session;
+}
+
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
@@ -116,12 +126,20 @@ const adminOrganizationDetailRoute = createRoute({
   component: AdminOrganizationDetailRoute,
 });
 
+const orgAdminRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/org/admin",
+  beforeLoad: requireOrgAdmin,
+  component: OrgAdminRoute,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   devicesRoute,
   loginRoute,
   adminOrganizationsRoute,
   adminOrganizationDetailRoute,
+  orgAdminRoute,
 ]);
 
 const router = createRouter({

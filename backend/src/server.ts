@@ -5,6 +5,7 @@ import { env } from "./config";
 import * as db from "./db";
 import authRouter from "./routes/auth";
 import incidentsRouter from "./routes/incidents";
+import orgRouter from "./routes/org";
 import organizationsRouter from "./routes/organizations";
 import pocstarsRouter from "./routes/pocstars";
 import { isGDELTEnabled, scrapeGDELT } from "./scrapers/gdelt";
@@ -35,6 +36,7 @@ app.route("/api/incidents", incidentsRouter);
 app.route("/api/pocstars", pocstarsRouter);
 app.route("/api/auth", authRouter);
 app.route("/api/organizations", organizationsRouter);
+app.route("/api/org", orgRouter);
 
 app.get("/api/config", (c) =>
   c.json({

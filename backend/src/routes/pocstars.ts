@@ -1,6 +1,6 @@
 import axios from "axios";
 import { Hono } from "hono";
-import { primaryOrganization, requireAuth } from "../auth";
+import { canManageOrganization, primaryOrganization, requireAuth } from "../auth";
 import { env } from "../config";
 import * as db from "../db";
 
@@ -23,7 +23,7 @@ function orgScope(c: any) {
   const user = c.get("user");
   if (!user || user.platform_role === "admin") return {};
   const org = primaryOrganization(user);
-  return org ? { organizationId: org.organization_id } : { organizationId: -1 };
+  return org ? { organizationId: org.organization_id, unitId: org.scope_level === "unit" ? org.unit_id : null } : { organizationId: -1 };
 }
 
 let lastPocstarsOk: number | null = null;
@@ -152,21 +152,32 @@ router.get("/devices", async (c) => {
 });
 
 router.post("/devices", async (c) => {
-  const user = c.get("user");
+  const user = (c as any).get("user");
   const body = await c.req.json().catch(() => ({}));
   const { device_id, name, operator, device_type, notes, active } = body;
   if (!device_id?.trim()) return c.json({ error: "device_id is required" }, 400);
 
   try {
-    if (user?.platform_role === "admin") {
+    const membership = primaryOrganization(user);
+    if (user?.platform_role === "admin" || canManageOrganization(membership)) {
       const device = await db.upsertDevice({
         device_id: device_id.trim(),
         name,
+        company: null,
         operator,
         device_type,
         notes,
-        organization_id: body.organization_id || null,
+        organization_id: user?.platform_role === "admin" ? body.organization_id || null : membership.organization_id,
+        unit_id: body.unit_id || (membership?.scope_level === "unit" ? membership.unit_id : null),
         active: active ?? true,
+      });
+      await db.createAuditLog({
+        organization_id: user?.platform_role === "admin" ? body.organization_id || null : membership.organization_id,
+        actor_user_id: user?.id,
+        action: "device.upsert",
+        target_type: "device",
+        target_id: device_id.trim(),
+        metadata: { unit_id: body.unit_id || null },
       });
       return c.json({ device });
     }
@@ -192,7 +203,7 @@ router.post("/devices", async (c) => {
 });
 
 router.delete("/devices/:device_id", async (c) => {
-  const user = c.get("user");
+  const user = (c as any).get("user");
   if (user?.platform_role !== "admin") return c.json({ error: "forbidden" }, 403);
   try {
     const deleted = await db.deleteDevice(c.req.param("device_id"));

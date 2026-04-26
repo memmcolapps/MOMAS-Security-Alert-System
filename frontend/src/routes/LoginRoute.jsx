@@ -12,7 +12,8 @@ export function LoginRoute() {
     mutationFn: login,
     onSuccess: ({ token, user }) => {
       setAuthToken(token);
-      navigate({ to: user.platform_role === "admin" ? "/admin/organizations" : "/" });
+      const orgRole = user.memberships?.[0]?.role;
+      navigate({ to: user.platform_role === "admin" ? "/admin/organizations" : ["org_owner", "org_admin", "unit_admin", "admin"].includes(orgRole) ? "/org/admin" : "/" });
     },
   });
 

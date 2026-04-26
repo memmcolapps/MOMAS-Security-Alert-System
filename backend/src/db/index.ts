@@ -112,6 +112,8 @@ async function init() {
       organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
       user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       role            TEXT NOT NULL DEFAULT 'viewer',
+      unit_id         INTEGER,
+      scope_level     TEXT NOT NULL DEFAULT 'organization',
       created_at      TIMESTAMPTZ DEFAULT NOW(),
       PRIMARY KEY (organization_id, user_id)
     );
@@ -122,7 +124,33 @@ async function init() {
       PRIMARY KEY (organization_id, state)
     );
 
+    CREATE TABLE IF NOT EXISTS organization_units (
+      id              SERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      parent_unit_id  INTEGER REFERENCES organization_units(id) ON DELETE SET NULL,
+      name            TEXT NOT NULL,
+      type            TEXT NOT NULL DEFAULT 'station',
+      state           TEXT,
+      lga             TEXT,
+      location        TEXT,
+      created_at      TIMESTAMPTZ DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id              SERIAL PRIMARY KEY,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      actor_user_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      action          TEXT NOT NULL,
+      target_type     TEXT,
+      target_id       TEXT,
+      metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    );
+
     CREATE INDEX IF NOT EXISTS idx_memberships_user ON organization_memberships(user_id);
+    CREATE INDEX IF NOT EXISTS idx_units_org ON organization_units(organization_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_org ON audit_logs(organization_id, created_at DESC);
   `);
 
   // Add new columns if they don't exist (idempotent migration)
@@ -131,7 +159,11 @@ async function init() {
       ALTER TABLE incidents ADD COLUMN IF NOT EXISTS report_count INTEGER DEFAULT 1;
       ALTER TABLE incidents ADD COLUMN IF NOT EXISTS sources TEXT DEFAULT '[]';
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS organization_id INTEGER;
+      ALTER TABLE devices ADD COLUMN IF NOT EXISTS unit_id INTEGER;
+      ALTER TABLE organization_memberships ADD COLUMN IF NOT EXISTS unit_id INTEGER;
+      ALTER TABLE organization_memberships ADD COLUMN IF NOT EXISTS scope_level TEXT NOT NULL DEFAULT 'organization';
       CREATE INDEX IF NOT EXISTS idx_devices_org ON devices(organization_id);
+      CREATE INDEX IF NOT EXISTS idx_devices_unit ON devices(unit_id);
     `);
   } catch (err) {
     console.warn("[DB] Column migration note:", err.message);
@@ -484,15 +516,23 @@ async function resolveSosAlert(sos_msg_id) {
 async function listSosAlerts(scope: any = {}) {
   // Show: unresolved (any date) + resolved today (by our clock, not POCSTARS clock)
   const vals = [];
-  const orgFilter = scope.organizationId ? "AND d.organization_id = $1" : "";
-  if (scope.organizationId) vals.push(scope.organizationId);
+  const conds = [];
+  if (scope.organizationId) {
+    conds.push(`d.organization_id = $${vals.length + 1}`);
+    vals.push(scope.organizationId);
+  }
+  if (scope.unitId) {
+    conds.push(`d.unit_id = $${vals.length + 1}`);
+    vals.push(scope.unitId);
+  }
+  const scopedFilter = conds.length ? `AND ${conds.join(" AND ")}` : "";
   const { rows } = await pool.query(`
     SELECT ${SOS_WITH_DEVICE_COLS}
       FROM sos_alerts s
       LEFT JOIN devices d ON d.device_id = s.device_id
      WHERE (s.status < 2
         OR s.resolved_at::date = CURRENT_DATE)
-       ${orgFilter}
+       ${scopedFilter}
      ORDER BY s.created_at DESC
   `, vals);
   return rows;
@@ -510,13 +550,18 @@ async function listDevices(scope: any = {}) {
   const vals = [];
   const conds = ["1=1"];
   if (scope.organizationId) {
-    conds.push(`organization_id = $${vals.length + 1}`);
+    conds.push(`d.organization_id = $${vals.length + 1}`);
     vals.push(scope.organizationId);
   }
+  if (scope.unitId) {
+    conds.push(`d.unit_id = $${vals.length + 1}`);
+    vals.push(scope.unitId);
+  }
   const { rows } = await pool.query(
-    `SELECT d.*, o.name AS organization_name
+    `SELECT d.*, o.name AS organization_name, ou.name AS unit_name, ou.type AS unit_type
        FROM devices d
        LEFT JOIN organizations o ON o.id = d.organization_id
+       LEFT JOIN organization_units ou ON ou.id = d.unit_id
       WHERE ${conds.join(" AND ")}
       ORDER BY d.created_at DESC`,
     vals,
@@ -524,12 +569,13 @@ async function listDevices(scope: any = {}) {
   return rows;
 }
 
-async function upsertDevice({ device_id, name, company, operator, device_type, notes, active, organization_id }) {
+async function upsertDevice({ device_id, name, company, operator, device_type, notes, active, organization_id, unit_id }) {
   const { rows } = await pool.query(
-    `INSERT INTO devices (device_id, organization_id, name, company, operator, device_type, notes, active)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+    `INSERT INTO devices (device_id, organization_id, unit_id, name, company, operator, device_type, notes, active)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
      ON CONFLICT (device_id) DO UPDATE SET
        organization_id = EXCLUDED.organization_id,
+       unit_id     = EXCLUDED.unit_id,
        name        = EXCLUDED.name,
        company     = EXCLUDED.company,
        operator    = EXCLUDED.operator,
@@ -537,7 +583,7 @@ async function upsertDevice({ device_id, name, company, operator, device_type, n
        notes       = EXCLUDED.notes,
        active      = EXCLUDED.active
      RETURNING *`,
-    [device_id, organization_id || null, name || null, company || null, operator || null, device_type || null, notes || null, active ?? true],
+    [device_id, organization_id || null, unit_id || null, name || null, company || null, operator || null, device_type || null, notes || null, active ?? true],
   );
   return rows[0];
 }
@@ -592,18 +638,31 @@ async function getUserById(id) {
 
 async function getMembershipsForUser(userId) {
   const { rows } = await pool.query(
-    `SELECT m.organization_id, m.role,
+    `SELECT m.organization_id, m.role, m.unit_id, m.scope_level,
             o.name, o.slug, o.status, o.all_states,
+            u.name AS unit_name, u.type AS unit_type, u.state AS unit_state,
             COUNT(os.state)::int AS state_count
        FROM organization_memberships m
        JOIN organizations o ON o.id = m.organization_id
+       LEFT JOIN organization_units u ON u.id = m.unit_id
        LEFT JOIN organization_states os ON os.organization_id = o.id
       WHERE m.user_id = $1
-      GROUP BY m.organization_id, m.role, o.name, o.slug, o.status, o.all_states
+      GROUP BY m.organization_id, m.role, m.unit_id, m.scope_level, o.name, o.slug, o.status, o.all_states, u.name, u.type, u.state
       ORDER BY o.name`,
     [userId],
   );
   return rows;
+}
+
+async function getMembership(organizationId, userId) {
+  const { rows } = await pool.query(
+    `SELECT m.*, u.name AS unit_name, u.type AS unit_type, u.state AS unit_state
+       FROM organization_memberships m
+       LEFT JOIN organization_units u ON u.id = m.unit_id
+      WHERE m.organization_id = $1 AND m.user_id = $2`,
+    [organizationId, userId],
+  );
+  return rows[0] ?? null;
 }
 
 async function getStatesForOrganization(organizationId) {
@@ -712,10 +771,48 @@ async function addOrganizationUser({ organization_id, email, name, password, rol
   return getUserById(user.id);
 }
 
+async function upsertOrganizationUser({
+  organization_id,
+  email,
+  name,
+  password,
+  role = "viewer",
+  unit_id = null,
+  scope_level = "organization",
+}) {
+  let user = await getUserByEmail(email);
+  if (!user) {
+    if (!password) throw new Error("password is required for new users");
+    user = await createUser({ email, name, password, platform_role: "none" });
+  }
+  const finalUnitId = unit_id ? Number(unit_id) : null;
+  await pool.query(
+    `INSERT INTO organization_memberships (organization_id, user_id, role, unit_id, scope_level)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (organization_id, user_id) DO UPDATE SET
+       role = EXCLUDED.role,
+       unit_id = EXCLUDED.unit_id,
+       scope_level = EXCLUDED.scope_level`,
+    [organization_id, user.id, role, finalUnitId, scope_level || (finalUnitId ? "unit" : "organization")],
+  );
+  return getUserById(user.id);
+}
+
 async function assignDeviceToOrganization(deviceId, organizationId) {
   const { rows } = await pool.query(
-    `UPDATE devices SET organization_id = $2 WHERE device_id = $1 RETURNING *`,
+    `UPDATE devices SET organization_id = $2, unit_id = CASE WHEN $2::int IS NULL THEN NULL ELSE unit_id END WHERE device_id = $1 RETURNING *`,
     [deviceId, organizationId],
+  );
+  return rows[0] ?? null;
+}
+
+async function assignDeviceToUnit(deviceId, organizationId, unitId) {
+  const { rows } = await pool.query(
+    `UPDATE devices
+        SET unit_id = $3
+      WHERE device_id = $1 AND organization_id = $2
+      RETURNING *`,
+    [deviceId, organizationId, unitId || null],
   );
   return rows[0] ?? null;
 }
@@ -723,9 +820,11 @@ async function assignDeviceToOrganization(deviceId, organizationId) {
 async function listOrganizationUsers(organizationId) {
   const { rows } = await pool.query(
     `SELECT u.id, u.email, u.name, u.platform_role, u.status, u.created_at,
-            m.role
+            m.role, m.unit_id, m.scope_level,
+            ou.name AS unit_name, ou.type AS unit_type
        FROM organization_memberships m
        JOIN users u ON u.id = m.user_id
+       LEFT JOIN organization_units ou ON ou.id = m.unit_id
       WHERE m.organization_id = $1
       ORDER BY u.created_at DESC`,
     [organizationId],
@@ -749,6 +848,92 @@ async function getOrganizationScope(organizationId) {
     allStates: Boolean(organization.all_states),
     allowedStates: organization.all_states ? [] : await getStatesForOrganization(organizationId),
   };
+}
+
+async function listOrganizationUnits(organizationId) {
+  const { rows } = await pool.query(
+    `SELECT ou.*,
+            parent.name AS parent_name,
+            COUNT(DISTINCT child.id)::int AS child_count,
+            COUNT(DISTINCT m.user_id)::int AS user_count,
+            COUNT(DISTINCT d.device_id)::int AS device_count
+       FROM organization_units ou
+       LEFT JOIN organization_units parent ON parent.id = ou.parent_unit_id
+       LEFT JOIN organization_units child ON child.parent_unit_id = ou.id
+       LEFT JOIN organization_memberships m ON m.unit_id = ou.id
+       LEFT JOIN devices d ON d.unit_id = ou.id
+      WHERE ou.organization_id = $1
+      GROUP BY ou.id, parent.name
+      ORDER BY ou.created_at DESC`,
+    [organizationId],
+  );
+  return rows;
+}
+
+async function getOrganizationUnit(organizationId, unitId) {
+  const { rows } = await pool.query(
+    "SELECT * FROM organization_units WHERE organization_id = $1 AND id = $2",
+    [organizationId, unitId],
+  );
+  return rows[0] ?? null;
+}
+
+async function createOrganizationUnit({ organization_id, parent_unit_id, name, type = "station", state, lga, location }) {
+  const { rows } = await pool.query(
+    `INSERT INTO organization_units (organization_id, parent_unit_id, name, type, state, lga, location)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     RETURNING *`,
+    [organization_id, parent_unit_id || null, name, type, state || null, lga || null, location || null],
+  );
+  return rows[0];
+}
+
+async function updateOrganizationUnit(organizationId, unitId, { parent_unit_id, name, type, state, lga, location }) {
+  const { rows } = await pool.query(
+    `UPDATE organization_units
+        SET parent_unit_id = $3,
+            name = COALESCE($4, name),
+            type = COALESCE($5, type),
+            state = $6,
+            lga = $7,
+            location = $8,
+            updated_at = NOW()
+      WHERE organization_id = $1 AND id = $2
+      RETURNING *`,
+    [organizationId, unitId, parent_unit_id || null, name || null, type || null, state || null, lga || null, location || null],
+  );
+  return rows[0] ?? null;
+}
+
+async function deleteOrganizationUnit(organizationId, unitId) {
+  const { rowCount } = await pool.query(
+    "DELETE FROM organization_units WHERE organization_id = $1 AND id = $2",
+    [organizationId, unitId],
+  );
+  return rowCount > 0;
+}
+
+async function createAuditLog({ organization_id, actor_user_id, action, target_type, target_id, metadata = {} }) {
+  const { rows } = await pool.query(
+    `INSERT INTO audit_logs (organization_id, actor_user_id, action, target_type, target_id, metadata)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     RETURNING *`,
+    [organization_id || null, actor_user_id || null, action, target_type || null, target_id ? String(target_id) : null, metadata],
+  );
+  return rows[0];
+}
+
+async function listAuditLogs(organizationId, limit = 100) {
+  const { rows } = await pool.query(
+    `SELECT a.*, u.email AS actor_email, u.name AS actor_name
+       FROM audit_logs a
+       LEFT JOIN users u ON u.id = a.actor_user_id
+      WHERE a.organization_id = $1
+      ORDER BY a.created_at DESC
+      LIMIT $2`,
+    [organizationId, limit],
+  );
+  return rows;
 }
 
 /** Clear all incidents and scrape logs. */
@@ -779,6 +964,7 @@ export {
   getUserByEmail,
   getUserById,
   getMembershipsForUser,
+  getMembership,
   getStatesForOrganization,
   createOrganization,
   listOrganizations,
@@ -786,10 +972,19 @@ export {
   updateOrganizationAccess,
   createUser,
   addOrganizationUser,
+  upsertOrganizationUser,
   assignDeviceToOrganization,
+  assignDeviceToUnit,
   listOrganizationUsers,
   removeOrganizationUser,
   getOrganizationScope,
+  listOrganizationUnits,
+  getOrganizationUnit,
+  createOrganizationUnit,
+  updateOrganizationUnit,
+  deleteOrganizationUnit,
+  createAuditLog,
+  listAuditLogs,
   insertSosAlert,
   acknowledgeSosAlert,
   resolveSosAlert,

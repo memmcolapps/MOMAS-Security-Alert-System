@@ -75,6 +75,54 @@ export function removeOrganizationUser(orgId, userId) {
   });
 }
 
+export function getOrgAdmin() {
+  return request("/api/org");
+}
+
+export function addOrgAdminUser(payload) {
+  return request("/api/org/users", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function removeOrgAdminUser(userId) {
+  return request(`/api/org/users/${userId}`, {
+    method: "DELETE",
+  });
+}
+
+export function createOrgUnit(payload) {
+  return request("/api/org/units", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateOrgUnit(unitId, payload) {
+  return request(`/api/org/units/${unitId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteOrgUnit(unitId) {
+  return request(`/api/org/units/${unitId}`, {
+    method: "DELETE",
+  });
+}
+
+export function assignDeviceUnit(deviceId, unitId) {
+  return request(`/api/org/devices/${encodeURIComponent(deviceId)}/unit`, {
+    method: "POST",
+    body: JSON.stringify({ unit_id: unitId || null }),
+  });
+}
+
+export function getOrgAudit() {
+  return request("/api/org/audit");
+}
+
 export function attachDeviceToOrganization(orgId, deviceId) {
   return request(`/api/organizations/${orgId}/devices/${encodeURIComponent(deviceId)}`, {
     method: "POST",

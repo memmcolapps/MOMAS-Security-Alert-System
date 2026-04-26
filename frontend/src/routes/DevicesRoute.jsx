@@ -1,13 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Radio, Save, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { deleteDevice, getMe, listDevices, listOrganizations, saveDevice } from "../lib/api";
+import { deleteDevice, getMe, getOrgAdmin, listDevices, listOrganizations, saveDevice } from "../lib/api";
 import { deviceTypeLabel } from "../lib/domain";
 
 const emptyForm = {
   device_id: "",
   name: "",
   organization_id: "",
+  unit_id: "",
   operator: "",
   device_type: "",
   active: "true",
@@ -37,17 +38,25 @@ export function DevicesRoute() {
 
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
   const isPlatformAdmin = meQuery.data?.user?.platform_role === "admin";
+  const orgRole = meQuery.data?.user?.memberships?.[0]?.role;
+  const canManageDevices = isPlatformAdmin || ["org_owner", "org_admin", "admin"].includes(orgRole);
 
   const orgsQuery = useQuery({
     queryKey: ["organizations"],
     queryFn: listOrganizations,
     enabled: isPlatformAdmin,
   });
+  const orgAdminQuery = useQuery({
+    queryKey: ["org-admin"],
+    queryFn: getOrgAdmin,
+    enabled: !isPlatformAdmin && canManageDevices,
+  });
 
   const [orgFilter, setOrgFilter] = useState("all");
 
   const allDevices = devicesQuery.data?.devices || [];
   const organizations = orgsQuery.data?.organizations || [];
+  const units = orgAdminQuery.data?.units || [];
   const devices = useMemo(() => {
     if (orgFilter === "all") return allDevices;
     if (orgFilter === "unassigned") return allDevices.filter((device) => !device.organization_id);
@@ -92,6 +101,7 @@ export function DevicesRoute() {
       device_id: device.device_id || "",
       name: device.name || "",
       organization_id: device.organization_id ? String(device.organization_id) : "",
+      unit_id: device.unit_id ? String(device.unit_id) : "",
       operator: device.operator || "",
       device_type: device.device_type || "",
       active: String(Boolean(device.active)),
@@ -121,6 +131,7 @@ export function DevicesRoute() {
       device_id: deviceId,
       name: form.name.trim() || null,
       organization_id: form.organization_id ? Number(form.organization_id) : null,
+      unit_id: form.unit_id ? Number(form.unit_id) : null,
       operator: form.operator.trim() || null,
       device_type: form.device_type || null,
       notes: form.notes.trim() || null,
@@ -141,7 +152,7 @@ export function DevicesRoute() {
               : "View your assigned devices and update operational details"}
           </p>
         </div>
-        {isPlatformAdmin ? (
+        {canManageDevices ? (
           <button className="inline-flex items-center gap-2 rounded-md bg-ops-green px-4 py-2 text-xs font-bold text-black hover:opacity-85" onClick={openAdd}>
             <Plus size={14} /> Add device
           </button>
@@ -169,6 +180,16 @@ export function DevicesRoute() {
                   <option value="">Unassigned</option>
                   {organizations.map((org) => (
                     <option value={org.id} key={org.id}>{org.name}</option>
+                  ))}
+                </select>
+              </Field>
+            ) : null}
+            {!isPlatformAdmin && canManageDevices ? (
+              <Field label="Unit">
+                <select className="field-input" value={form.unit_id} onChange={(event) => updateField("unit_id", event.target.value)}>
+                  <option value="">No unit</option>
+                  {units.map((unit) => (
+                    <option value={unit.id} key={unit.id}>{unit.name}</option>
                   ))}
                 </select>
               </Field>
