@@ -103,6 +103,7 @@ async function init() {
       name          TEXT,
       password_hash TEXT NOT NULL,
       platform_role TEXT NOT NULL DEFAULT 'none',
+      must_change_password BOOLEAN NOT NULL DEFAULT false,
       status        TEXT NOT NULL DEFAULT 'active',
       created_at    TIMESTAMPTZ DEFAULT NOW(),
       updated_at    TIMESTAMPTZ DEFAULT NOW()
@@ -162,6 +163,7 @@ async function init() {
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS unit_id INTEGER;
       ALTER TABLE organization_memberships ADD COLUMN IF NOT EXISTS unit_id INTEGER;
       ALTER TABLE organization_memberships ADD COLUMN IF NOT EXISTS scope_level TEXT NOT NULL DEFAULT 'organization';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false;
       ALTER TABLE organization_units ALTER COLUMN type DROP NOT NULL;
       ALTER TABLE organization_units ALTER COLUMN type DROP DEFAULT;
       CREATE INDEX IF NOT EXISTS idx_devices_org ON devices(organization_id);
@@ -634,7 +636,7 @@ async function getUserByEmail(email) {
 }
 
 async function getUserById(id) {
-  const { rows } = await pool.query("SELECT id, email, name, platform_role, status, created_at FROM users WHERE id = $1", [id]);
+  const { rows } = await pool.query("SELECT id, email, name, platform_role, must_change_password, status, created_at FROM users WHERE id = $1", [id]);
   return rows[0] ?? null;
 }
 
@@ -745,24 +747,49 @@ async function setOrganizationStates(organizationId, states = []) {
   }
 }
 
-async function createUser({ email, name, password, platform_role = "none" }) {
+async function createUser({ email, name, password, platform_role = "none", must_change_password = platform_role !== "admin" }) {
   const password_hash = await (Bun as any).password.hash(password, {
     algorithm: "bcrypt",
     cost: 10,
   });
   const { rows } = await pool.query(
-    `INSERT INTO users (email, name, password_hash, platform_role)
-     VALUES ($1,$2,$3,$4)
-     RETURNING id, email, name, platform_role, status, created_at`,
-    [email.toLowerCase(), name || null, password_hash, platform_role],
+    `INSERT INTO users (email, name, password_hash, platform_role, must_change_password)
+     VALUES ($1,$2,$3,$4,$5)
+     RETURNING id, email, name, platform_role, must_change_password, status, created_at`,
+    [email.toLowerCase(), name || null, password_hash, platform_role, Boolean(must_change_password)],
   );
   return rows[0];
+}
+
+async function updateUserPassword(userId, password) {
+  const password_hash = await (Bun as any).password.hash(password, {
+    algorithm: "bcrypt",
+    cost: 10,
+  });
+  const { rows } = await pool.query(
+    `UPDATE users
+        SET password_hash = $2,
+            must_change_password = false,
+            updated_at = NOW()
+      WHERE id = $1
+      RETURNING id, email, name, platform_role, must_change_password, status, created_at`,
+    [userId, password_hash],
+  );
+  return rows[0] ?? null;
+}
+
+function assertCanJoinOrganization(user) {
+  if (user?.platform_role === "admin") {
+    throw new Error("This email belongs to a platform admin and cannot be added to an organization.");
+  }
 }
 
 async function addOrganizationUser({ organization_id, email, name, password, role = "viewer" }) {
   let user = await getUserByEmail(email);
   if (!user) {
     user = await createUser({ email, name, password, platform_role: "none" });
+  } else {
+    assertCanJoinOrganization(user);
   }
   await pool.query(
     `INSERT INTO organization_memberships (organization_id, user_id, role)
@@ -784,8 +811,10 @@ async function upsertOrganizationUser({
 }) {
   let user = await getUserByEmail(email);
   if (!user) {
-    if (!password) throw new Error("password is required for new users");
+    if (!password) throw new Error("Enter a temporary password for new users.");
     user = await createUser({ email, name, password, platform_role: "none" });
+  } else {
+    assertCanJoinOrganization(user);
   }
   const finalUnitId = unit_id ? Number(unit_id) : null;
   await pool.query(
@@ -965,6 +994,7 @@ export {
   deleteDevice,
   getUserByEmail,
   getUserById,
+  updateUserPassword,
   getMembershipsForUser,
   getMembership,
   getStatesForOrganization,

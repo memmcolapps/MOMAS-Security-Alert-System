@@ -14,6 +14,7 @@ import { AppHeader } from "./components/AppHeader";
 import { getAuthToken, getMe } from "./lib/api";
 import { AdminOrganizationDetailRoute } from "./routes/AdminOrganizationDetailRoute";
 import { AdminOrganizationsRoute } from "./routes/AdminOrganizationsRoute";
+import { ChangePasswordRoute } from "./routes/ChangePasswordRoute";
 import { DevicesRoute } from "./routes/DevicesRoute";
 import { LoginRoute } from "./routes/LoginRoute";
 import { OrgAdminRoute } from "./routes/OrgAdminRoute";
@@ -31,7 +32,7 @@ const queryClient = new QueryClient({
 
 function RootLayout() {
   const router = useRouterState();
-  const showHeader = router.location.pathname !== "/login";
+  const showHeader = !["/login", "/change-password"].includes(router.location.pathname);
   return (
     <>
       {showHeader ? <AppHeader /> : null}
@@ -77,15 +78,21 @@ async function requireSession() {
   }
 }
 
-async function requireAdmin() {
+async function requireReadySession() {
   const session = await requireSession();
+  if (session.user?.must_change_password) throw redirect({ to: "/change-password" });
+  return session;
+}
+
+async function requireAdmin() {
+  const session = await requireReadySession();
   if (session.user?.platform_role !== "admin") throw redirect({ to: "/" });
   return session;
 }
 
 async function requireOrgAdmin() {
-  const session = await requireSession();
-  const role = session.user?.memberships?.[0]?.role;
+  const session = await requireReadySession();
+  const role = session.user?.active_membership?.role || session.user?.memberships?.[0]?.role;
   if (session.user?.platform_role !== "admin" && !["org_owner", "org_admin", "unit_admin", "admin"].includes(role)) {
     throw redirect({ to: "/" });
   }
@@ -95,15 +102,22 @@ async function requireOrgAdmin() {
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  beforeLoad: requireSession,
+  beforeLoad: requireReadySession,
   component: OperationsRoute,
 });
 
 const devicesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/devices",
-  beforeLoad: requireSession,
+  beforeLoad: requireReadySession,
   component: DevicesRoute,
+});
+
+const changePasswordRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/change-password",
+  beforeLoad: requireSession,
+  component: ChangePasswordRoute,
 });
 
 const loginRoute = createRoute({
@@ -137,6 +151,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   devicesRoute,
   loginRoute,
+  changePasswordRoute,
   adminOrganizationsRoute,
   adminOrganizationDetailRoute,
   orgAdminRoute,

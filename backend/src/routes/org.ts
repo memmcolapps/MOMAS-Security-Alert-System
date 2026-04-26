@@ -10,6 +10,18 @@ function jsonError(error: unknown) {
   return { error: error instanceof Error ? error.message : String(error) };
 }
 
+function clientError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    message.includes("platform admin") ||
+    message.includes("temporary password") ||
+    message.includes("duplicate key")
+  ) {
+    return { status: 400 as const, body: { error: message.includes("duplicate key") ? "A record with these details already exists." : message } };
+  }
+  return { status: 500 as const, body: { error: message } };
+}
+
 function organizationIdFor(c: any) {
   const user = c.get("user");
   if (user?.platform_role === "admin") return Number(c.req.query("organization_id") || 0);
@@ -35,7 +47,7 @@ function unitScoped(c: any) {
 
 router.get("/", async (c) => {
   const organizationId = organizationIdFor(c);
-  if (!organizationId) return c.json({ error: "organization required" }, 400);
+  if (!organizationId) return c.json({ error: "Select an organization before opening the admin console." }, 400);
   const scopedUnitId = unitScoped(c);
   const [organization, allUsers, allUnits, devices, audit] = await Promise.all([
     db.getOrganization(organizationId),
@@ -44,7 +56,7 @@ router.get("/", async (c) => {
     db.listDevices({ organizationId, unitId: scopedUnitId }),
     db.listAuditLogs(organizationId, 100),
   ]);
-  if (!organization) return c.json({ error: "organization not found" }, 404);
+  if (!organization) return c.json({ error: "The selected organization could not be found." }, 404);
   const users = scopedUnitId ? allUsers.filter((user) => Number(user.unit_id) === scopedUnitId) : allUsers;
   const units = scopedUnitId ? allUnits.filter((unit) => Number(unit.id) === scopedUnitId || Number(unit.parent_unit_id) === scopedUnitId) : allUnits;
   return c.json({ organization, users, units, devices, audit });
@@ -60,9 +72,9 @@ router.get("/users", async (c) => {
 router.post("/users", async (c) => {
   const organizationId = organizationIdFor(c);
   const body = await c.req.json().catch(() => ({}));
-  if (!body.email) return c.json({ error: "email is required" }, 400);
+  if (!body.email) return c.json({ error: "Enter the user's email address." }, 400);
   if (!canManageUnit(membership(c), body.unit_id ? Number(body.unit_id) : null) && !isPlatformAdmin(c)) {
-    return c.json({ error: "forbidden" }, 403);
+    return c.json({ error: "You can only add users to units you are allowed to manage." }, 403);
   }
   try {
     const user = await db.upsertOrganizationUser({
@@ -84,7 +96,8 @@ router.post("/users", async (c) => {
     });
     return c.json({ user }, 201);
   } catch (error) {
-    return c.json(jsonError(error), 500);
+    const next = clientError(error);
+    return c.json(next.body, next.status);
   }
 });
 
@@ -92,7 +105,7 @@ router.delete("/users/:user_id", async (c) => {
   const organizationId = organizationIdFor(c);
   const userId = Number(c.req.param("user_id"));
   const removed = await db.removeOrganizationUser(organizationId, userId);
-  if (!removed) return c.json({ error: "membership not found" }, 404);
+  if (!removed) return c.json({ error: "That user is not a member of this organization." }, 404);
   await db.createAuditLog({
     organization_id: organizationId,
     actor_user_id: actor(c),
@@ -113,8 +126,10 @@ router.get("/units", async (c) => {
 router.post("/units", async (c) => {
   const organizationId = organizationIdFor(c);
   const body = await c.req.json().catch(() => ({}));
-  if (!body.name) return c.json({ error: "name is required" }, 400);
-  if (!isPlatformAdmin(c) && !canManageOrganization(membership(c))) return c.json({ error: "forbidden" }, 403);
+  if (!body.name) return c.json({ error: "Enter a unit name." }, 400);
+  if (!isPlatformAdmin(c) && !canManageOrganization(membership(c))) {
+    return c.json({ error: "Only organization admins can create new units." }, 403);
+  }
   try {
     const unit = await db.createOrganizationUnit({
       organization_id: organizationId,
@@ -142,10 +157,10 @@ router.post("/units", async (c) => {
 router.put("/units/:unit_id", async (c) => {
   const organizationId = organizationIdFor(c);
   const unitId = Number(c.req.param("unit_id"));
-  if (!canManageUnit(membership(c), unitId) && !isPlatformAdmin(c)) return c.json({ error: "forbidden" }, 403);
+  if (!canManageUnit(membership(c), unitId) && !isPlatformAdmin(c)) return c.json({ error: "You can only update units you are allowed to manage." }, 403);
   const body = await c.req.json().catch(() => ({}));
   const unit = await db.updateOrganizationUnit(organizationId, unitId, body);
-  if (!unit) return c.json({ error: "unit not found" }, 404);
+  if (!unit) return c.json({ error: "That unit could not be found in this organization." }, 404);
   await db.createAuditLog({
     organization_id: organizationId,
     actor_user_id: actor(c),
@@ -160,9 +175,9 @@ router.put("/units/:unit_id", async (c) => {
 router.delete("/units/:unit_id", async (c) => {
   const organizationId = organizationIdFor(c);
   const unitId = Number(c.req.param("unit_id"));
-  if (!canManageUnit(membership(c), unitId) && !isPlatformAdmin(c)) return c.json({ error: "forbidden" }, 403);
+  if (!canManageUnit(membership(c), unitId) && !isPlatformAdmin(c)) return c.json({ error: "You can only remove units you are allowed to manage." }, 403);
   const removed = await db.deleteOrganizationUnit(organizationId, unitId);
-  if (!removed) return c.json({ error: "unit not found" }, 404);
+  if (!removed) return c.json({ error: "That unit could not be found in this organization." }, 404);
   await db.createAuditLog({
     organization_id: organizationId,
     actor_user_id: actor(c),
@@ -177,9 +192,9 @@ router.post("/devices/:device_id/unit", async (c) => {
   const organizationId = organizationIdFor(c);
   const body = await c.req.json().catch(() => ({}));
   const unitId = body.unit_id ? Number(body.unit_id) : null;
-  if (!canManageUnit(membership(c), unitId) && !isPlatformAdmin(c)) return c.json({ error: "forbidden" }, 403);
+  if (!canManageUnit(membership(c), unitId) && !isPlatformAdmin(c)) return c.json({ error: "You can only assign devices to units you are allowed to manage." }, 403);
   const device = await db.assignDeviceToUnit(c.req.param("device_id"), organizationId, unitId);
-  if (!device) return c.json({ error: "device not found" }, 404);
+  if (!device) return c.json({ error: "That device is not assigned to this organization." }, 404);
   await db.createAuditLog({
     organization_id: organizationId,
     actor_user_id: actor(c),

@@ -56,20 +56,41 @@ async function currentUserFromRequest(c: Context) {
   const user = await db.getUserById(payload.sub);
   if (!user || user.status !== "active") return null;
   const memberships = await db.getMembershipsForUser(user.id);
-  return { ...user, memberships };
+  const requestedOrganizationId = Number(c.req.header("x-organization-id") || "");
+  const activeMembership =
+    memberships.find((membership) => Number(membership.organization_id) === requestedOrganizationId) ||
+    memberships[0] ||
+    null;
+  return {
+    ...user,
+    memberships,
+    active_organization_id: activeMembership?.organization_id || null,
+    active_membership: activeMembership,
+  };
+}
+
+function mustChangePassword(c: Context, user: any) {
+  if (!user?.must_change_password) return false;
+  return !["/api/auth/me", "/api/auth/change-password"].includes(c.req.path);
+}
+
+function passwordChangeRequired(c: Context) {
+  return c.json({ error: "You must change your temporary password before continuing.", must_change_password: true }, 403);
 }
 
 async function requireAuth(c: Context, next: Next) {
   const user = await currentUserFromRequest(c);
-  if (!user) return c.json({ error: "unauthorized" }, 401);
+  if (!user) return c.json({ error: "Please sign in to continue." }, 401);
+  if (mustChangePassword(c, user)) return passwordChangeRequired(c);
   c.set("user", user);
   await next();
 }
 
 async function requirePlatformAdmin(c: Context, next: Next) {
   const user = await currentUserFromRequest(c);
-  if (!user) return c.json({ error: "unauthorized" }, 401);
-  if (user.platform_role !== "admin") return c.json({ error: "forbidden" }, 403);
+  if (!user) return c.json({ error: "Please sign in to continue." }, 401);
+  if (mustChangePassword(c, user)) return passwordChangeRequired(c);
+  if (user.platform_role !== "admin") return c.json({ error: "Only platform admins can access this area." }, 403);
   c.set("user", user);
   await next();
 }
@@ -81,7 +102,7 @@ async function optionalAuth(c: Context, next: Next) {
 }
 
 function primaryOrganization(user: any) {
-  return user?.memberships?.[0] || null;
+  return user?.active_membership || user?.memberships?.[0] || null;
 }
 
 const ORG_MANAGE_ROLES = new Set(["org_owner", "org_admin", "admin"]);
@@ -123,7 +144,8 @@ async function scopeForUser(user: any) {
 
 async function requireOrgManager(c: Context, next: Next) {
   const user = await currentUserFromRequest(c);
-  if (!user) return c.json({ error: "unauthorized" }, 401);
+  if (!user) return c.json({ error: "Please sign in to continue." }, 401);
+  if (mustChangePassword(c, user)) return passwordChangeRequired(c);
   if (user.platform_role === "admin") {
     c.set("user", user);
     c.set("membership", null);
@@ -131,7 +153,9 @@ async function requireOrgManager(c: Context, next: Next) {
     return;
   }
   const membership = primaryOrganization(user);
-  if (!canManageOrganization(membership) && !canManageUnit(membership, membership?.unit_id)) return c.json({ error: "forbidden" }, 403);
+  if (!canManageOrganization(membership) && !canManageUnit(membership, membership?.unit_id)) {
+    return c.json({ error: "You do not have admin access for the selected organization." }, 403);
+  }
   c.set("user", user);
   c.set("membership", membership);
   await next();

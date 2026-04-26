@@ -2,7 +2,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { LogIn, Shield } from "lucide-react";
 import { useState } from "react";
-import { login, setAuthToken } from "../lib/api";
+import { login, setActiveOrganizationId, setAuthToken } from "../lib/api";
 
 export function LoginRoute() {
   const navigate = useNavigate();
@@ -12,8 +12,9 @@ export function LoginRoute() {
     mutationFn: login,
     onSuccess: ({ token, user }) => {
       setAuthToken(token);
-      const orgRole = user.memberships?.[0]?.role;
-      navigate({ to: user.platform_role === "admin" ? "/admin/organizations" : ["org_owner", "org_admin", "unit_admin", "admin"].includes(orgRole) ? "/org/admin" : "/" });
+      setActiveOrganizationId(user.platform_role === "admin" ? null : user.memberships?.[0]?.organization_id || null);
+      const orgRole = user.active_membership?.role || user.memberships?.[0]?.role;
+      navigate({ to: user.must_change_password ? "/change-password" : user.platform_role === "admin" ? "/admin/organizations" : ["org_owner", "org_admin", "unit_admin", "admin"].includes(orgRole) ? "/org/admin" : "/" });
     },
   });
 

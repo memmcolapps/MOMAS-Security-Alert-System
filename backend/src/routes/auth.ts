@@ -21,6 +21,7 @@ router.post("/login", async (c) => {
     email: user.email,
     name: user.name,
     platform_role: user.platform_role,
+    must_change_password: user.must_change_password,
     memberships,
   };
   const token = signToken({
@@ -33,6 +34,36 @@ router.post("/login", async (c) => {
 
 router.get("/me", requireAuth, async (c) => {
   return c.json({ user: (c as any).get("user") });
+});
+
+router.post("/change-password", requireAuth, async (c) => {
+  const currentUser = (c as any).get("user");
+  const body = await c.req.json().catch(() => ({}));
+  const currentPassword = String(body.current_password || "");
+  const newPassword = String(body.new_password || "");
+  if (!currentPassword || !newPassword) {
+    return c.json({ error: "Enter your current password and a new password." }, 400);
+  }
+  if (newPassword.length < 8) {
+    return c.json({ error: "Your new password must be at least 8 characters." }, 400);
+  }
+  if (currentPassword === newPassword) {
+    return c.json({ error: "Choose a new password that is different from your temporary password." }, 400);
+  }
+  const user = await db.getUserByEmail(currentUser.email);
+  const ok = user ? await (Bun as any).password.verify(currentPassword, user.password_hash) : false;
+  if (!ok) return c.json({ error: "Your current password is incorrect." }, 400);
+
+  const updated = await db.updateUserPassword(currentUser.id, newPassword);
+  const memberships = await db.getMembershipsForUser(currentUser.id);
+  return c.json({
+    user: {
+      ...updated,
+      memberships,
+      active_organization_id: currentUser.active_organization_id,
+      active_membership: currentUser.active_membership,
+    },
+  });
 });
 
 export default router;

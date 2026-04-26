@@ -2,7 +2,7 @@ import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Building2, ChevronDown, LogOut, Map, Radio, ShieldAlert, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { getMe, setAuthToken } from "../lib/api";
+import { getActiveOrganizationId, getMe, setActiveOrganizationId, setAuthToken } from "../lib/api";
 
 export function AppHeader() {
   const navigate = useNavigate();
@@ -13,7 +13,8 @@ export function AppHeader() {
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
   const user = meQuery.data?.user;
   const isAdmin = user?.platform_role === "admin";
-  const org = user?.memberships?.[0] || null;
+  const memberships = user?.memberships || [];
+  const org = user?.active_membership || memberships.find((membership) => String(membership.organization_id) === String(getActiveOrganizationId())) || memberships[0] || null;
   const canManageOrg = isAdmin || ["org_owner", "org_admin", "unit_admin", "admin"].includes(org?.role);
   const accessSummary = org
     ? org.all_states
@@ -39,6 +40,13 @@ export function AppHeader() {
     setAuthToken(null);
     queryClient.clear();
     navigate({ to: "/login" });
+  }
+
+  function switchOrganization(organizationId) {
+    setActiveOrganizationId(organizationId);
+    setMenuOpen(false);
+    queryClient.clear();
+    navigate({ to: "/" });
   }
 
   return (
@@ -98,6 +106,24 @@ export function AppHeader() {
                   <div className="mt-1 text-[10px] text-ops-red">Platform admin · all states</div>
                 ) : null}
               </div>
+              {!isAdmin && memberships.length > 1 ? (
+                <div className="border-b border-white/10 py-1">
+                  {memberships.map((membership) => (
+                    <button
+                      className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-[11px] ${
+                        Number(org?.organization_id) === Number(membership.organization_id)
+                          ? "bg-white/10 text-ops-red"
+                          : "text-neutral-300 hover:bg-white/10"
+                      }`}
+                      key={membership.organization_id}
+                      onClick={() => switchOrganization(membership.organization_id)}
+                    >
+                      <span className="min-w-0 truncate">{membership.name}</span>
+                      <span className="shrink-0 text-[10px] text-neutral-500">{membership.role}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               <button
                 className="mt-1 inline-flex w-full items-center gap-2 rounded px-2 py-1.5 text-[11px] text-neutral-300 hover:bg-white/10"
                 onClick={logout}

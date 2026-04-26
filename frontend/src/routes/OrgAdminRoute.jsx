@@ -34,7 +34,7 @@ export function OrgAdminRoute() {
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
   const data = orgQuery.data || {};
   const organization = data.organization;
-  const currentMembership = meQuery.data?.user?.memberships?.[0];
+  const currentMembership = meQuery.data?.user?.active_membership || meQuery.data?.user?.memberships?.[0];
   const canCreateUnits = meQuery.data?.user?.platform_role === "admin" || ["org_owner", "org_admin", "admin"].includes(currentMembership?.role);
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["org-admin"] });
 

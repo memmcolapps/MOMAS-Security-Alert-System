@@ -38,7 +38,7 @@ export function DevicesRoute() {
 
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
   const isPlatformAdmin = meQuery.data?.user?.platform_role === "admin";
-  const orgRole = meQuery.data?.user?.memberships?.[0]?.role;
+  const orgRole = meQuery.data?.user?.active_membership?.role || meQuery.data?.user?.memberships?.[0]?.role;
   const canManageDevices = isPlatformAdmin || ["org_owner", "org_admin", "admin"].includes(orgRole);
 
   const orgsQuery = useQuery({

@@ -1,6 +1,7 @@
 import { config } from "./app-config";
 
 const TOKEN_KEY = "momas_auth_token";
+const ORG_KEY = "momas_active_organization_id";
 
 export function getAuthToken() {
   return localStorage.getItem(TOKEN_KEY);
@@ -8,7 +9,19 @@ export function getAuthToken() {
 
 export function setAuthToken(token) {
   if (token) localStorage.setItem(TOKEN_KEY, token);
-  else localStorage.removeItem(TOKEN_KEY);
+  else {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(ORG_KEY);
+  }
+}
+
+export function getActiveOrganizationId() {
+  return localStorage.getItem(ORG_KEY);
+}
+
+export function setActiveOrganizationId(organizationId) {
+  if (organizationId) localStorage.setItem(ORG_KEY, String(organizationId));
+  else localStorage.removeItem(ORG_KEY);
 }
 
 async function request(path, options = {}) {
@@ -16,6 +29,7 @@ async function request(path, options = {}) {
     headers: {
       "Content-Type": "application/json",
       ...(getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {}),
+      ...(getActiveOrganizationId() ? { "X-Organization-Id": getActiveOrganizationId() } : {}),
       ...options.headers,
     },
     ...options,
@@ -38,6 +52,13 @@ export function login(payload) {
 
 export function getMe() {
   return request("/api/auth/me");
+}
+
+export function changePassword(payload) {
+  return request("/api/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function listOrganizations() {
