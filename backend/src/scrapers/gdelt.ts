@@ -3,26 +3,22 @@ import { classifyMany } from "../classifier";
 import { geocode, extractState } from "../geocoder";
 import { buildFingerprint, fingerprintsMatch } from "../classifier/fingerprint";
 import * as db from "../db";
+import { enrichCandidate } from "./enrichment";
 
 const GDELT_URL = 'https://api.gdeltproject.org/api/v2/doc/doc';
 
 const QUERY_GROUPS = [
-  'theme:KILL',
-  'theme:KIDNAP',
-  'theme:ATTACK',
-  'theme:SUICIDE_BOMB',
-  'theme:TERROR',
-  'theme:WB_2432_CONFLICT',
-  '"gunmen"',
-  '"bandits"',
-  '"herdsmen"',
-  '"ambush"',
-  '"massacre"',
-  '"clash"',
-  '"abducted"',
+  '(theme:KILL OR theme:KIDNAP OR theme:ATTACK OR theme:TERROR)',
+  '("gunmen" OR "bandits" OR "abducted" OR "kidnapped")',
+  '("herdsmen" OR "communal clash" OR "farmer herder")',
+  '("bomb" OR "ied" OR "explosion" OR "ambush")',
 ];
 
-const QUERY_DELAY_MS = 15000;
+const QUERY_DELAY_MS = parseInt(process.env.GDELT_QUERY_DELAY_MS || '20000', 10);
+const GDELT_QUERY_LIMIT = Math.max(
+  1,
+  parseInt(process.env.GDELT_QUERY_LIMIT || String(QUERY_GROUPS.length), 10),
+);
 const RATE_LIMIT_BACKOFF_MS = 15000;
 const PROBE_MAX_WAIT_MS = 90000;
 const PROBE_WAIT_STEP_MS = 15000;
@@ -140,7 +136,7 @@ function computeIncidentConfidence(cluster) {
 
 // ─── GDELT API query ──────────────────────────────────────────────────────
 function buildQueries() {
-  return QUERY_GROUPS.map((group) => `sourcecountry:nigeria ${group}`);
+  return QUERY_GROUPS.slice(0, GDELT_QUERY_LIMIT).map((group) => `sourcecountry:nigeria ${group}`);
 }
 
 function parseGDELTDate(s) {
@@ -176,6 +172,10 @@ function parseArticles(data) {
       locationName: a.locationName || '',
     };
   });
+}
+
+function buildGDELTExternalId(url) {
+  return `gdelt:${Buffer.from(url || '').toString('base64').slice(0, 40)}`;
 }
 
 async function probeRateLimit() {
@@ -299,7 +299,49 @@ async function scrapeGDELT(daysBack = 7) {
     return { found: 0, added: 0 };
   }
 
-  const scored = articles.map((a) => {
+  await db.upsertSourceItems(
+    articles.map((a) => ({
+      external_id: buildGDELTExternalId(a.url),
+      source_type: 'gdelt',
+      source: a.domain || 'GDELT',
+      title: a.title,
+      description: [a.locationName, ...(a.themes || [])].filter(Boolean).join(' | '),
+      source_url: a.url,
+      published_at: a.datePublished,
+      raw: {
+        sourceCountry: a.sourceCountry,
+        tone: a.tone,
+        themes: a.themes,
+        locationName: a.locationName,
+        lat: a.lat,
+        lon: a.lon,
+      },
+    })),
+  );
+
+  const knownIncidentIds = await db.existingExternalIds(
+    articles.map((a) => buildGDELTExternalId(a.url)),
+  );
+  const processedSourceIds = await db.existingProcessedSourceItemIds(
+    articles.map((a) => buildGDELTExternalId(a.url)),
+  );
+
+  await Promise.all(
+    articles
+      .filter((a) => knownIncidentIds.has(buildGDELTExternalId(a.url)))
+      .map((a) =>
+        db.markSourceItemProcessed(buildGDELTExternalId(a.url), {
+          status: 'incident',
+        }),
+      ),
+  );
+
+  const unprocessedArticles = articles.filter((a) => {
+    const id = buildGDELTExternalId(a.url);
+    return !knownIncidentIds.has(id) && !processedSourceIds.has(id);
+  });
+
+  const scored = unprocessedArticles.map((a) => {
     const tier = getSourceTier(a.domain);
     const modifier = SOURCE_MODIFIER[tier];
     const baseConfidence = 70;
@@ -320,14 +362,31 @@ async function scrapeGDELT(daysBack = 7) {
 
   console.log(`[GDELT] Classifying ${candidateClusters.length} clusters…`);
 
-  const classifyItems = candidateClusters.map((cluster) => {
+  const classifyItems = await Promise.all(candidateClusters.map(async (cluster) => {
     const firstEv = cluster.events[0];
     const allTitles = cluster.events.map(e => e.title).filter(Boolean);
     const title = allTitles[0] || `Security incident in ${firstEv.locationName || 'Nigeria'}`;
     const allUrls = [...new Set(cluster.events.map(e => e.url).filter(Boolean))];
-    const description = `${cluster.events.length} report(s) from ${cluster.sourceDomains.size} source(s)`;
-    return { title, description, cluster, allUrls };
-  });
+    const compactContext = [
+      ...allTitles.slice(0, 8),
+      firstEv.locationName ? `Location: ${firstEv.locationName}` : '',
+      cluster.events.length > 1
+        ? `${cluster.events.length} related report(s) from ${cluster.sourceDomains.size} source(s)`
+        : '',
+    ].filter(Boolean).join('\n');
+    const enriched = await enrichCandidate({
+      title,
+      description: compactContext,
+      source_url: allUrls[0],
+    });
+    return {
+      title,
+      description: enriched.description || compactContext,
+      contentText: enriched.contentText || '',
+      cluster,
+      allUrls,
+    };
+  }));
 
   const results = await classifyMany(
     classifyItems.map((ci) => ({ title: ci.title, description: ci.description })),
@@ -343,6 +402,12 @@ async function scrapeGDELT(daysBack = 7) {
 
     if (!result || !result.is_security_incident) {
       skipped++;
+      await Promise.all(cluster.events.map((ev) =>
+        db.markSourceItemProcessed(buildGDELTExternalId(ev.url), {
+          status: 'non_incident',
+          content_text: classifyItems[i].contentText || null,
+        }),
+      ));
       continue;
     }
 
@@ -381,6 +446,13 @@ async function scrapeGDELT(daysBack = 7) {
           victims,
         });
         if (merged) {
+          await Promise.all(cluster.events.map((ev) =>
+            db.markSourceItemProcessed(buildGDELTExternalId(ev.url), {
+              status: 'merged',
+              incident_id: existing.id,
+              content_text: classifyItems[i].contentText || null,
+            }),
+          ));
           console.log(`[GDELT] Merged into existing incident #${existing.id}: ${title.slice(0, 60)}…`);
         }
         break;
@@ -389,7 +461,7 @@ async function scrapeGDELT(daysBack = 7) {
 
     if (!merged) {
       const inserted = await db.insertIncident({
-        external_id: `gdelt:${Buffer.from(allUrls[0] || title).toString('base64').slice(0, 40)}`,
+        external_id: buildGDELTExternalId(allUrls[0] || title),
         title: title.slice(0, 500),
         description: description.slice(0, 2000),
         date: dateStr,
@@ -408,11 +480,20 @@ async function scrapeGDELT(daysBack = 7) {
       });
 
       if (inserted) added++;
+      if (inserted) {
+        await Promise.all(cluster.events.map((ev) =>
+          db.markSourceItemProcessed(buildGDELTExternalId(ev.url), {
+            status: 'incident',
+            incident_id: inserted.id,
+            content_text: classifyItems[i].contentText || null,
+          }),
+        ));
+      }
     }
   }
 
   await db.logScrape({ source: 'gdelt', status: 'ok', items_found: articles.length, items_added: added, error: null });
-  console.log(`[GDELT] Done. Found ${articles.length} articles, clustered ${clusters.length}, classified ${candidateClusters.length}, skipped ${skipped}, added ${added} new incidents.`);
+  console.log(`[GDELT] Done. Found ${articles.length} articles (${unprocessedArticles.length} fresh), clustered ${clusters.length}, classified ${candidateClusters.length}, skipped ${skipped}, added ${added} new incidents.`);
   return { found: articles.length, added, skipped, clusters: clusters.length };
 }
 

@@ -27,6 +27,14 @@ const GROQ_BATCH_SIZE = Math.max(
   1,
   parseInt(process.env.GROQ_BATCH_SIZE || "10", 10),
 );
+const CLASSIFIER_MAX_TITLE_CHARS = parseInt(
+  process.env.CLASSIFIER_MAX_TITLE_CHARS || "300",
+  10,
+);
+const CLASSIFIER_MAX_DESCRIPTION_CHARS = parseInt(
+  process.env.CLASSIFIER_MAX_DESCRIPTION_CHARS || "1200",
+  10,
+);
 const CACHE_MAX = Math.max(
   100,
   parseInt(process.env.CLASSIFIER_CACHE_MAX || "5000", 10),
@@ -173,7 +181,9 @@ function sanitize(raw) {
 
   if (raw.is_security_incident !== true) return { ...NON_INCIDENT };
 
-  const type = INCIDENT_TYPES.includes(raw.type) ? raw.type : "armed_attack";
+  if (!INCIDENT_TYPES.includes(raw.type)) return { ...NON_INCIDENT };
+
+  const type = raw.type;
   const severity = SEVERITIES.includes(raw.severity) ? raw.severity : "YELLOW";
 
   // Cap at 500 — genuine single-incident counts rarely exceed this;
@@ -224,7 +234,7 @@ function extractJSON(text) {
 async function callGroqBatch(batch) {
   const payload = batch.map((b, i) => ({
     id: i,
-    text: `Headline: ${b.title}\n\nDescription: ${b.description || "(none)"}`,
+    text: `Headline: ${(b.title || "").slice(0, CLASSIFIER_MAX_TITLE_CHARS)}\n\nDescription: ${(b.description || "(none)").slice(0, CLASSIFIER_MAX_DESCRIPTION_CHARS)}`,
   }));
 
   for (let attempt = 1; attempt <= GROQ_MAX_RETRIES; attempt++) {
@@ -299,6 +309,16 @@ async function callGroqBatch(batch) {
         );
         await new Promise((r) => setTimeout(r, backoffMs));
         continue;
+      }
+
+      if (status === 413 && batch.length > 1) {
+        const mid = Math.ceil(batch.length / 2);
+        console.warn(
+          `[classifier] Batch too large (${batch.length}); splitting into ${mid}+${batch.length - mid}.`,
+        );
+        const left = await callGroqBatch(batch.slice(0, mid));
+        const right = await callGroqBatch(batch.slice(mid));
+        return [...left, ...right];
       }
 
       const msg = err.response?.data?.error?.message || err.message;

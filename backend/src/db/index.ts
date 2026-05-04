@@ -15,6 +15,21 @@ pool.on("error", (err) => {
   console.error("[DB] Unexpected pool error:", err.message);
 });
 
+async function queryWithRetry(sql, params = []) {
+  try {
+    return await pool.query(sql, params);
+  } catch (err) {
+    const msg = err?.message || "";
+    if (
+      /Connection terminated unexpectedly|Connection terminated|ECONNRESET|ETIMEDOUT/i.test(msg)
+    ) {
+      console.warn(`[DB] Transient query failure (${msg}); retrying once.`);
+      return await pool.query(sql, params);
+    }
+    throw err;
+  }
+}
+
 // ── Schema migrations ─────────────────────────────────────────────────────────
 async function init() {
   await pool.query(`
@@ -52,10 +67,31 @@ async function init() {
       created_at  TIMESTAMPTZ DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS source_items (
+      id            SERIAL PRIMARY KEY,
+      external_id   TEXT UNIQUE NOT NULL,
+      source_type   TEXT NOT NULL,
+      source        TEXT,
+      title         TEXT,
+      description   TEXT,
+      content_text  TEXT,
+      source_url    TEXT,
+      published_at  TIMESTAMPTZ,
+      raw           JSONB NOT NULL DEFAULT '{}'::jsonb,
+      status        TEXT NOT NULL DEFAULT 'pending',
+      incident_id   INTEGER REFERENCES incidents(id) ON DELETE SET NULL,
+      processed_at  TIMESTAMPTZ,
+      created_at    TIMESTAMPTZ DEFAULT NOW(),
+      updated_at    TIMESTAMPTZ DEFAULT NOW()
+    );
+
     CREATE INDEX IF NOT EXISTS idx_incidents_date     ON incidents(date);
     CREATE INDEX IF NOT EXISTS idx_incidents_state    ON incidents(state);
     CREATE INDEX IF NOT EXISTS idx_incidents_type     ON incidents(type);
     CREATE INDEX IF NOT EXISTS idx_incidents_severity ON incidents(severity);
+    CREATE INDEX IF NOT EXISTS idx_source_items_status ON source_items(status);
+    CREATE INDEX IF NOT EXISTS idx_source_items_source ON source_items(source_type, source);
+    CREATE INDEX IF NOT EXISTS idx_source_items_published ON source_items(published_at);
 
     CREATE TABLE IF NOT EXISTS sos_alerts (
       id           SERIAL PRIMARY KEY,
@@ -159,6 +195,9 @@ async function init() {
     await pool.query(`
       ALTER TABLE incidents ADD COLUMN IF NOT EXISTS report_count INTEGER DEFAULT 1;
       ALTER TABLE incidents ADD COLUMN IF NOT EXISTS sources TEXT DEFAULT '[]';
+      ALTER TABLE incidents ADD COLUMN IF NOT EXISTS summary TEXT;
+      ALTER TABLE incidents ADD COLUMN IF NOT EXISTS confidence_score INTEGER DEFAULT 0;
+      ALTER TABLE incidents ADD COLUMN IF NOT EXISTS confidence_reason TEXT;
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS organization_id INTEGER;
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS unit_id INTEGER;
       ALTER TABLE organization_memberships ADD COLUMN IF NOT EXISTS unit_id INTEGER;
@@ -190,7 +229,7 @@ async function init() {
 
 /** Insert one incident. Returns the inserted row, or null on duplicate. */
 async function insertIncident(p) {
-  const result = await pool.query(
+  const result = await queryWithRetry(
     `
     INSERT INTO incidents
       (external_id, title, description, date, location, state, lat, lon,
@@ -237,6 +276,65 @@ async function logScrape(p) {
       p.items_added ?? 0,
       p.error ?? null,
     ],
+  );
+}
+
+async function upsertSourceItem(p) {
+  const result = await queryWithRetry(
+    `
+    INSERT INTO source_items
+      (external_id, source_type, source, title, description, content_text,
+       source_url, published_at, raw, status)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+    ON CONFLICT (external_id) DO UPDATE SET
+      source_type  = EXCLUDED.source_type,
+      source       = COALESCE(EXCLUDED.source, source_items.source),
+      title        = COALESCE(EXCLUDED.title, source_items.title),
+      description  = COALESCE(EXCLUDED.description, source_items.description),
+      content_text = COALESCE(NULLIF(EXCLUDED.content_text, ''), source_items.content_text),
+      source_url   = COALESCE(EXCLUDED.source_url, source_items.source_url),
+      published_at = COALESCE(EXCLUDED.published_at, source_items.published_at),
+      raw          = CASE
+                       WHEN EXCLUDED.raw = '{}'::jsonb THEN source_items.raw
+                       ELSE EXCLUDED.raw
+                     END,
+      updated_at   = NOW()
+    RETURNING *
+  `,
+    [
+      p.external_id,
+      p.source_type,
+      p.source ?? null,
+      p.title ?? null,
+      p.description ?? null,
+      p.content_text ?? null,
+      p.source_url ?? null,
+      p.published_at ?? null,
+      p.raw ?? {},
+      p.status ?? "pending",
+    ],
+  );
+  return result.rows[0] || null;
+}
+
+async function upsertSourceItems(items) {
+  const rows = [];
+  for (const item of items) rows.push(await upsertSourceItem(item));
+  return rows;
+}
+
+async function markSourceItemProcessed(externalId, { status, incident_id = null, content_text = null }) {
+  await queryWithRetry(
+    `
+    UPDATE source_items
+       SET status = $2::TEXT,
+           incident_id = COALESCE($3::INTEGER, incident_id),
+           content_text = COALESCE(NULLIF($4::TEXT, ''), content_text),
+           processed_at = NOW(),
+           updated_at = NOW()
+     WHERE external_id = $1
+  `,
+    [externalId, status, incident_id, content_text],
   );
 }
 
@@ -304,7 +402,7 @@ async function getIncidents({
 
   vals.push(Math.min(Number(limit) || 100, 500), Number(offset) || 0);
 
-  const { rows } = await pool.query(
+  const { rows } = await queryWithRetry(
     `
     SELECT * FROM incidents
     WHERE ${conds.join(" AND ")}
@@ -338,7 +436,7 @@ async function countIncidents({ state, type, severity, from, to, allowedStates, 
     }
   }
 
-  const { rows } = await pool.query(
+  const { rows } = await queryWithRetry(
     `SELECT
        COUNT(*)::int                       AS total,
        COALESCE(SUM(fatalities), 0)::int   AS sum_fatalities,
@@ -359,6 +457,18 @@ async function existingExternalIds(ids) {
   return new Set(rows.map((r) => r.external_id));
 }
 
+async function existingProcessedSourceItemIds(ids) {
+  if (!ids.length) return new Set();
+  const { rows } = await pool.query(
+    `SELECT external_id FROM source_items
+      WHERE external_id = ANY($1)
+        AND processed_at IS NOT NULL
+        AND status IN ('incident', 'merged', 'non_incident')`,
+    [ids],
+  );
+  return new Set(rows.map((r) => r.external_id));
+}
+
 /** Find incidents matching a fingerprint within the dedup window. */
 async function findMatchingIncidents({ date, state, type }) {
   const { rows } = await pool.query(
@@ -367,8 +477,8 @@ async function findMatchingIncidents({ date, state, type }) {
      FROM incidents
      WHERE date >= $1::DATE - INTERVAL '1 day'
        AND date <= $1::DATE + INTERVAL '1 day'
-       AND type = $2
-       AND (state IS NULL OR LOWER(state) = $3 OR $3 IS NULL)
+       AND type = $2::TEXT
+       AND (state IS NULL OR LOWER(state) = $3::TEXT OR $3::TEXT IS NULL)
      ORDER BY date DESC, report_count DESC`,
     [date, type, state?.toLowerCase() || null],
   );
@@ -381,14 +491,14 @@ async function findMatchingIncidents({ date, state, type }) {
  * Returns true if merged successfully.
  */
 async function mergeIntoIncident(incidentId, { source, source_url, fatalities, victims }) {
-  const result = await pool.query(
+  const result = await queryWithRetry(
     `UPDATE incidents
      SET report_count = report_count + 1,
-         sources = jsonb_build_array(
-           jsonb_build_object('source', $2, 'url', $3)
-         ) || sources,
-         fatalities = GREATEST(fatalities, $4),
-         victims = GREATEST(victims, $5),
+        sources = jsonb_build_array(
+          jsonb_build_object('source', $2::TEXT, 'url', $3::TEXT)
+        ) || sources,
+        fatalities = GREATEST(fatalities, $4::INTEGER),
+        victims = GREATEST(victims, $5::INTEGER),
          updated_at = NOW()
      WHERE id = $1
      RETURNING id`,
@@ -979,9 +1089,13 @@ export {
   init,
   insertIncident,
   logScrape,
+  upsertSourceItem,
+  upsertSourceItems,
+  markSourceItemProcessed,
   getIncidents,
   countIncidents,
   existingExternalIds,
+  existingProcessedSourceItemIds,
   findMatchingIncidents,
   mergeIntoIncident,
   getStats,

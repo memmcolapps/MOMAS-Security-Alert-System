@@ -7,6 +7,7 @@ import {
   fingerprintsMatch,
 } from "../classifier/fingerprint";
 import * as db from "../db";
+import { enrichCandidates } from "./enrichment";
 
 const parser = new Parser({
   customFields: { item: ["media:content", "content:encoded"] },
@@ -18,8 +19,6 @@ const FEEDS = [
   { name: "Punch", url: "https://punchng.com/feed/" },
   { name: "Vanguard", url: "https://www.vanguardngr.com/feed/" },
   { name: "Premium Times", url: "https://www.premiumtimesng.com/feed/" },
-  { name: "TheCable", url: "https://www.thecable.ng/feed/" },
-  { name: "Guardian Nigeria", url: "https://guardian.ng/feed/" },
   { name: "Daily Trust", url: "https://dailytrust.com/feed/" },
   {
     name: "Google News — NG Security",
@@ -191,23 +190,63 @@ async function scrapeFeed(feed) {
 
   const items = feedData.items || [];
 
-  // Build external_ids first, then skip items already in the DB
+  // Build external_ids first, then persist raw source items and skip anything
+  // already classified. This keeps non-incidents from being reprocessed forever.
   const classifyItems = items.map((item) => {
     const title = stripHtml(item.title || "");
     const rawContent =
       item["content:encoded"] || item.content || item.contentSnippet || "";
     const description = stripHtml(rawContent).slice(0, 1000);
     const external_id = buildId(feed.name, item);
-    return { title, description, item, external_id };
+    const publishedAt = item.isoDate || item.pubDate || null;
+    return { title, description, item, external_id, publishedAt };
   });
 
-  const knownIds = await db.existingExternalIds(
+  await db.upsertSourceItems(
+    classifyItems.map((ci) => ({
+      external_id: ci.external_id,
+      source_type: "rss",
+      source: feed.name,
+      title: ci.title,
+      description: ci.description,
+      source_url: ci.item.link || null,
+      published_at: ci.publishedAt,
+      raw: {
+        guid: ci.item.guid || null,
+        isoDate: ci.item.isoDate || null,
+        pubDate: ci.item.pubDate || null,
+      },
+    })),
+  );
+
+  const knownIncidentIds = await db.existingExternalIds(
     classifyItems.map((ci) => ci.external_id),
   );
-  const newItems = classifyItems.filter((ci) => !knownIds.has(ci.external_id));
+  const processedSourceIds = await db.existingProcessedSourceItemIds(
+    classifyItems.map((ci) => ci.external_id),
+  );
+
+  await Promise.all(
+    classifyItems
+      .filter((ci) => knownIncidentIds.has(ci.external_id))
+      .map((ci) =>
+        db.markSourceItemProcessed(ci.external_id, { status: "incident" }),
+      ),
+  );
+
+  const freshItems = classifyItems.filter(
+    (ci) =>
+      !knownIncidentIds.has(ci.external_id) &&
+      !processedSourceIds.has(ci.external_id),
+  );
+
+  const enrichedItems = await enrichCandidates(freshItems, 3);
+  const newItems = enrichedItems.filter((ci) =>
+    ci.title || ci.description,
+  );
 
   console.log(
-    `[RSS] ${feed.name}: fetched ${items.length} items, ${knownIds.size} already known, classifying ${newItems.length} new…`,
+    `[RSS] ${feed.name}: fetched ${items.length} items, ${knownIncidentIds.size + processedSourceIds.size} already processed, classifying ${newItems.length} new…`,
   );
 
   if (!newItems.length)
@@ -223,7 +262,7 @@ async function scrapeFeed(feed) {
   );
 
   let added = 0;
-  let skipped = knownIds.size;
+  let skipped = knownIncidentIds.size + processedSourceIds.size;
 
   for (let i = 0; i < newItems.length; i++) {
     const { title, description, item, external_id } = newItems[i];
@@ -231,6 +270,10 @@ async function scrapeFeed(feed) {
 
     if (!result || !result.is_security_incident) {
       skipped++;
+      await db.markSourceItemProcessed(external_id, {
+        status: "non_incident",
+        content_text: newItems[i].contentText || null,
+      });
       continue;
     }
 
@@ -261,6 +304,11 @@ async function scrapeFeed(feed) {
           victims,
         });
         if (merged) {
+          await db.markSourceItemProcessed(external_id, {
+            status: "merged",
+            incident_id: existing.id,
+            content_text: newItems[i].contentText || null,
+          });
           console.log(
             `[RSS] Merged into existing incident #${existing.id}: ${title.slice(0, 60)}…`,
           );
@@ -292,6 +340,13 @@ async function scrapeFeed(feed) {
       });
 
       if (inserted) added++;
+      if (inserted) {
+        await db.markSourceItemProcessed(external_id, {
+          status: "incident",
+          incident_id: inserted.id,
+          content_text: newItems[i].contentText || null,
+        });
+      }
     }
   }
 
