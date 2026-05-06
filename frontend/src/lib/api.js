@@ -35,7 +35,14 @@ async function request(path, options = {}) {
     ...options,
   });
   const text = await response.text();
-  const body = text ? JSON.parse(text) : null;
+  let body = null;
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = { message: text };
+    }
+  }
   if (!response.ok) {
     if (response.status === 401) setAuthToken(null);
     throw new Error(body?.error || body?.message || response.statusText);

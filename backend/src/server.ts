@@ -23,6 +23,11 @@ const WARM_INTERVAL_SEC = env.SCRAPE_WARM_SEC;
 const COLD_INTERVAL_MIN = env.SCRAPE_COLD_MIN;
 const START_SCRAPE_JOBS = env.START_SCRAPE_JOBS;
 
+function isDatabaseQuotaError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  return /exceeded the data transfer quota/i.test(message);
+}
+
 app.use(
   "*",
   cors({
@@ -31,6 +36,21 @@ app.use(
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   }),
 );
+
+app.onError((error, c) => {
+  if (isDatabaseQuotaError(error)) {
+    console.error("[DB] Data transfer quota exceeded:", error.message);
+    return c.json(
+      {
+        error: "Database transfer quota exceeded. Upgrade the database plan or temporarily disable background scrape jobs.",
+      },
+      503,
+    );
+  }
+
+  console.error("[API] Unhandled error:", error instanceof Error ? error.message : error);
+  return c.json({ error: "Internal server error" }, 500);
+});
 
 app.route("/api/incidents", incidentsRouter);
 app.route("/api/pocstars", pocstarsRouter);
