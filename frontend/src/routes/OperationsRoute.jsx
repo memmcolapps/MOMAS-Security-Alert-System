@@ -16,7 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { OperationsMap, devicePopup, incidentPopup } from "../components/OperationsMap";
+import { OperationsMap, devicePopup, incidentPopup, sosPopup } from "../components/OperationsMap";
 import {
   acknowledgeSos,
   getIncidents,
@@ -82,6 +82,7 @@ export function OperationsRoute() {
   const [basemap, setBasemap] = useState("dark");
   const [activeLayers, setActiveLayers] = useState({ live: true, heat: false, devices: true });
   const [sosSoundMuted, setSosSoundMuted] = useState(false);
+  const [focusTarget, setFocusTarget] = useState(null);
   const knownSosIdsRef = useRef(null);
   const ringingSosIdsRef = useRef(new Set());
   const audioCtxRef = useRef(null);
@@ -171,6 +172,24 @@ export function OperationsRoute() {
     const newIds = activeIds.filter((id) => !knownSosIdsRef.current.has(id));
     activeIds.forEach((id) => knownSosIdsRef.current.add(id));
     newIds.forEach((id) => ringingSosIdsRef.current.add(id));
+    const focusAlert = activeSos.find(
+      (alert) =>
+        newIds.includes(String(alert.sos_msg_id)) &&
+        Number.isFinite(Number(alert.location_lat)) &&
+        Number.isFinite(Number(alert.location_lon)),
+    );
+    if (focusAlert) {
+      setFocusTarget({
+        kind: "sos",
+        id: `sos-${focusAlert.sos_msg_id}`,
+        key: `sos-${focusAlert.sos_msg_id}-${Date.now()}`,
+        lat: Number(focusAlert.location_lat),
+        lon: Number(focusAlert.location_lon),
+        zoom: 15,
+        label: focusAlert.dev_name || focusAlert.device_name || `Device ${focusAlert.device_id}`,
+        popupHtml: sosPopup(focusAlert),
+      });
+    }
 
     const activeSet = new Set(activeIds);
     ringingSosIdsRef.current.forEach((id) => {
@@ -245,7 +264,6 @@ export function OperationsRoute() {
   const [liveMode, setLiveMode] = useState(false);
   const [tourPaused, setTourPaused] = useState(false);
   const [tourIndex, setTourIndex] = useState(0);
-  const [focusTarget, setFocusTarget] = useState(null);
 
   const tourStops = useMemo(() => {
     const incidentStops = visibleIncidents
@@ -316,6 +334,7 @@ export function OperationsRoute() {
         incidents={visibleIncidents}
         devices={devices}
         locations={locations}
+        sosAlerts={activeSos}
         activeLayers={activeLayers}
         basemap={basemap}
         focusTarget={focusTarget}

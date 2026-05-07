@@ -43,10 +43,27 @@ export function devicePopup(device, registry) {
   `;
 }
 
+export function sosPopup(alert) {
+  return `
+    <div>
+      <div style="font-size:13px;font-weight:700;color:#ff4444;margin-bottom:5px">SOS Alarm</div>
+      <div style="font-size:11px;color:#ccc"><strong>Device:</strong> ${escapeHtml(alert.dev_name || alert.device_name || `Device ${alert.device_id}`)}</div>
+      <div style="font-size:11px;color:#ccc"><strong>UID:</strong> ${escapeHtml(alert.device_id || "—")}</div>
+      <div style="font-size:11px;color:#ccc"><strong>When:</strong> ${escapeHtml(alert.triggered_at ? new Date(alert.triggered_at).toLocaleString() : "—")}</div>
+      <div style="font-size:11px;color:#ccc"><strong>Location:</strong> ${
+        alert.location_lat && alert.location_lon
+          ? `${Number(alert.location_lat).toFixed(5)}, ${Number(alert.location_lon).toFixed(5)}`
+          : "Unknown"
+      }</div>
+    </div>
+  `;
+}
+
 export function OperationsMap({
   incidents,
   devices,
   locations,
+  sosAlerts = [],
   activeLayers,
   basemap,
   onIncidentFocus,
@@ -86,10 +103,12 @@ export function OperationsMap({
       gradient: { 0.2: "#3399ff", 0.45: "#00bbaa", 0.7: "#ff6600", 1: "#ffb300" },
     });
     const deviceLayer = L.layerGroup();
+    const sosLayer = L.layerGroup();
 
     baseLayers.dark.addTo(map);
     incidentLayer.addTo(map);
     deviceLayer.addTo(map);
+    sosLayer.addTo(map);
     L.control.zoom({ position: "topleft" }).addTo(map);
     L.control.scale({ position: "bottomleft", imperial: false }).addTo(map);
 
@@ -110,7 +129,7 @@ export function OperationsMap({
     });
     map.addControl(new recenter());
 
-    layersRef.current = { baseLayers, activeBase: baseLayers.dark, incidentLayer, heatLayer, deviceLayer };
+    layersRef.current = { baseLayers, activeBase: baseLayers.dark, incidentLayer, heatLayer, deviceLayer, sosLayer };
     mapRef.current = map;
 
     return () => {
@@ -197,8 +216,30 @@ export function OperationsMap({
 
   useEffect(() => {
     const map = mapRef.current;
-    const { incidentLayer, heatLayer, deviceLayer } = layersRef.current;
-    if (!map || !incidentLayer || !heatLayer || !deviceLayer) return;
+    const { sosLayer } = layersRef.current;
+    if (!map || !sosLayer) return;
+    sosLayer.clearLayers();
+
+    for (const alert of sosAlerts) {
+      if (Number(alert.status) >= 2) continue;
+      const lat = Number(alert.location_lat);
+      const lon = Number(alert.location_lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      const label = alert.dev_name || alert.device_name || `Device ${alert.device_id}`;
+      const icon = L.divIcon({
+        className: "",
+        html: `<div class="device-pin sos"><i class="fas fa-triangle-exclamation"></i></div><div class="device-label sos">${escapeHtml(label)}</div>`,
+        iconSize: [30, 46],
+        iconAnchor: [15, 15],
+      });
+      L.marker([lat, lon], { icon, zIndexOffset: 1000 }).bindPopup(sosPopup(alert)).addTo(sosLayer);
+    }
+  }, [sosAlerts]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const { incidentLayer, heatLayer, deviceLayer, sosLayer } = layersRef.current;
+    if (!map || !incidentLayer || !heatLayer || !deviceLayer || !sosLayer) return;
     const syncLayer = (layer, enabled) => {
       if (enabled && !map.hasLayer(layer)) map.addLayer(layer);
       if (!enabled && map.hasLayer(layer)) map.removeLayer(layer);
@@ -206,6 +247,7 @@ export function OperationsMap({
     syncLayer(incidentLayer, activeLayers.live);
     syncLayer(heatLayer, activeLayers.heat);
     syncLayer(deviceLayer, activeLayers.devices);
+    syncLayer(sosLayer, true);
   }, [activeLayers]);
 
   useEffect(() => {
