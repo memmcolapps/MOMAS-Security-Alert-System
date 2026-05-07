@@ -166,13 +166,6 @@ export function OperationsMap({
       marker.on("click", () => onIncidentFocus?.(incident));
       incidentLayer.addLayer(marker);
       heatPoints.push([lat, lon, incident.severity === "RED" ? 1 : incident.severity === "ORANGE" ? 0.7 : 0.4]);
-      L.circle([lat, lon], {
-        radius: incident.severity === "RED" ? 28000 : 16000,
-        color,
-        fillColor: color,
-        fillOpacity: 0.08,
-        weight: 1,
-      }).addTo(incidentLayer);
     }
 
     heatLayer.setLatLngs(heatPoints);
