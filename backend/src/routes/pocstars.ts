@@ -28,6 +28,7 @@ function orgScope(c: any) {
 
 let lastPocstarsOk: number | null = null;
 let lastPocstarsErr: string | null = null;
+let sosSyncRunning = false;
 
 const formUrlencoded = (obj: Record<string, unknown>) =>
   Object.entries(obj)
@@ -128,19 +129,24 @@ async function persistAndBroadcast(rows: any[]) {
   }
 }
 
-async function serverPollSos() {
-  if (!sseClients.size) return;
+async function syncPocstarsSos({ notifyHealth = true } = {}) {
+  if (sosSyncRunning) return;
+  sosSyncRunning = true;
   try {
     const data = await fetchPocstarsSos(DEFAULT_TARGET_UID);
     const rows = data?.data?.rows || [];
     await persistAndBroadcast(rows);
-    broadcastSse("pocstars_health", { ok: true, ts: lastPocstarsOk });
+    if (notifyHealth) broadcastSse("pocstars_health", { ok: true, ts: lastPocstarsOk });
   } catch (error: any) {
-    broadcastSse("pocstars_health", { ok: false, err: error.message, ts: Date.now() });
+    if (notifyHealth) broadcastSse("pocstars_health", { ok: false, err: error.message, ts: Date.now() });
+  } finally {
+    sosSyncRunning = false;
   }
 }
 
-setInterval(serverPollSos, 12_000);
+setInterval(() => {
+  void syncPocstarsSos();
+}, 12_000);
 
 router.get("/devices", async (c) => {
   try {
@@ -227,6 +233,7 @@ router.get("/sos/seen-ids", async (c) => {
 
 router.get("/sos/log", async (c) => {
   try {
+    await syncPocstarsSos({ notifyHealth: false });
     const alerts = await db.listSosAlerts(orgScope(c));
     return c.json({ alerts, pocstarsLastOk: lastPocstarsOk, pocstarsLastErr: lastPocstarsErr });
   } catch (error) {

@@ -15,7 +15,7 @@ import {
   Tv,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OperationsMap, devicePopup, incidentPopup } from "../components/OperationsMap";
 import {
   acknowledgeSos,
@@ -81,6 +81,11 @@ export function OperationsRoute() {
   const [statsMinimized, setStatsMinimized] = useState(false);
   const [basemap, setBasemap] = useState("dark");
   const [activeLayers, setActiveLayers] = useState({ live: true, heat: false, devices: true });
+  const [sosSoundMuted, setSosSoundMuted] = useState(false);
+  const knownSosIdsRef = useRef(null);
+  const ringingSosIdsRef = useRef(new Set());
+  const audioCtxRef = useRef(null);
+  const alarmTimerRef = useRef(null);
 
   const incidentQuery = useQuery({
     queryKey: ["incidents", from, to],
@@ -126,6 +131,86 @@ export function OperationsRoute() {
   const locations = locationsQuery.data?.data || [];
   const sosAlerts = sosQuery.data?.alerts || [];
   const activeSos = sosAlerts.filter((alert) => Number(alert.status) < 2);
+
+  const ensureAudioContext = useCallback(() => {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return null;
+    if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
+    return audioCtxRef.current;
+  }, []);
+
+  const playSosTone = useCallback(() => {
+    if (sosSoundMuted) return;
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
+    if (ctx.state === "suspended") void ctx.resume();
+
+    for (let i = 0; i < 3; i += 1) {
+      const start = ctx.currentTime + i * 0.34;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "square";
+      osc.frequency.setValueAtTime(880, start);
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(0.18, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.22);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.24);
+    }
+  }, [ensureAudioContext, sosSoundMuted]);
+
+  useEffect(() => {
+    const activeIds = activeSos.map((alert) => String(alert.sos_msg_id)).filter(Boolean);
+    if (!knownSosIdsRef.current) {
+      knownSosIdsRef.current = new Set(activeIds);
+      return;
+    }
+
+    const newIds = activeIds.filter((id) => !knownSosIdsRef.current.has(id));
+    activeIds.forEach((id) => knownSosIdsRef.current.add(id));
+    newIds.forEach((id) => ringingSosIdsRef.current.add(id));
+
+    const activeSet = new Set(activeIds);
+    ringingSosIdsRef.current.forEach((id) => {
+      if (!activeSet.has(id)) ringingSosIdsRef.current.delete(id);
+    });
+  }, [activeSos]);
+
+  useEffect(() => {
+    if (alarmTimerRef.current) {
+      window.clearInterval(alarmTimerRef.current);
+      alarmTimerRef.current = null;
+    }
+    if (sosSoundMuted || !ringingSosIdsRef.current.size) return undefined;
+
+    playSosTone();
+    alarmTimerRef.current = window.setInterval(playSosTone, 1800);
+    return () => {
+      if (alarmTimerRef.current) {
+        window.clearInterval(alarmTimerRef.current);
+        alarmTimerRef.current = null;
+      }
+    };
+  }, [activeSos, playSosTone, sosSoundMuted]);
+
+  useEffect(() => {
+    const unlockAudio = () => {
+      const ctx = ensureAudioContext();
+      void ctx?.resume?.();
+    };
+    window.addEventListener("pointerdown", unlockAudio, { once: true });
+    window.addEventListener("keydown", unlockAudio, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", unlockAudio);
+      window.removeEventListener("keydown", unlockAudio);
+    };
+  }, [ensureAudioContext]);
+
+  function toggleSosSound() {
+    setSosSoundMuted((value) => !value);
+  }
 
   const visibleIncidents = useMemo(
     () =>
@@ -309,7 +394,11 @@ export function OperationsRoute() {
               <SatelliteDish size={14} /> Live Intelligence Feed
             </div>
             <div className="flex items-center gap-1">
-              <button className="rounded p-1 text-neutral-500 hover:text-neutral-100" title="Watch alerts">
+              <button
+                className={`rounded p-1 ${sosSoundMuted ? "text-neutral-500 hover:text-neutral-100" : "text-ops-red"}`}
+                onClick={toggleSosSound}
+                title={sosSoundMuted ? "Unmute SOS sound" : "Mute SOS sound"}
+              >
                 <Bell size={15} />
               </button>
               <button className="rounded p-1 text-neutral-500 hover:text-neutral-100" onClick={() => setPanelOpen(false)}>
