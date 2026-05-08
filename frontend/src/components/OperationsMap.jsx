@@ -51,10 +51,11 @@ export function sosPopup(alert) {
       <div style="font-size:11px;color:#ccc"><strong>UID:</strong> ${escapeHtml(alert.device_id || "—")}</div>
       <div style="font-size:11px;color:#ccc"><strong>When:</strong> ${escapeHtml(alert.triggered_at ? new Date(alert.triggered_at).toLocaleString() : "—")}</div>
       <div style="font-size:11px;color:#ccc"><strong>Location:</strong> ${
-        alert.location_lat && alert.location_lon
-          ? `${Number(alert.location_lat).toFixed(5)}, ${Number(alert.location_lon).toFixed(5)}`
+        Number.isFinite(Number(alert.map_lat)) && Number.isFinite(Number(alert.map_lon))
+          ? `${Number(alert.map_lat).toFixed(5)}, ${Number(alert.map_lon).toFixed(5)}`
           : "Unknown"
       }</div>
+      <div style="font-size:10px;color:#888">${alert.map_location_source === "device" ? "Using latest device location" : "Using SOS location"}</div>
     </div>
   `;
 }
@@ -222,8 +223,8 @@ export function OperationsMap({
 
     for (const alert of sosAlerts) {
       if (Number(alert.status) >= 2) continue;
-      const lat = Number(alert.location_lat);
-      const lon = Number(alert.location_lon);
+      const lat = Number(alert.map_lat ?? alert.location_lat);
+      const lon = Number(alert.map_lon ?? alert.location_lon);
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
       const label = alert.dev_name || alert.device_name || `Device ${alert.device_id}`;
       const icon = L.divIcon({

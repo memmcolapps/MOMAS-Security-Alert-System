@@ -85,6 +85,7 @@ export function OperationsRoute() {
   const [focusTarget, setFocusTarget] = useState(null);
   const knownSosIdsRef = useRef(null);
   const ringingSosIdsRef = useRef(new Set());
+  const pendingSosFocusIdsRef = useRef(new Set());
   const audioCtxRef = useRef(null);
   const alarmTimerRef = useRef(null);
 
@@ -131,7 +132,32 @@ export function OperationsRoute() {
   const devices = devicesQuery.data?.devices || [];
   const locations = locationsQuery.data?.data || [];
   const sosAlerts = sosQuery.data?.alerts || [];
-  const activeSos = sosAlerts.filter((alert) => Number(alert.status) < 2);
+  const latestDeviceLocations = useMemo(
+    () => new Map(locations.map((location) => [String(location.Uid), location])),
+    [locations],
+  );
+  const activeSos = useMemo(
+    () =>
+      sosAlerts
+        .filter((alert) => Number(alert.status) < 2)
+        .map((alert) => {
+          const sosLat = Number(alert.location_lat);
+          const sosLon = Number(alert.location_lon);
+          if (Number.isFinite(sosLat) && Number.isFinite(sosLon)) {
+            return { ...alert, map_lat: sosLat, map_lon: sosLon, map_location_source: "sos" };
+          }
+
+          const deviceLocation = latestDeviceLocations.get(String(alert.device_id));
+          const deviceLat = Number(deviceLocation?.Lat);
+          const deviceLon = Number(deviceLocation?.Lng);
+          if (Number.isFinite(deviceLat) && Number.isFinite(deviceLon)) {
+            return { ...alert, map_lat: deviceLat, map_lon: deviceLon, map_location_source: "device" };
+          }
+
+          return alert;
+        }),
+    [sosAlerts, latestDeviceLocations],
+  );
 
   const ensureAudioContext = useCallback(() => {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -172,19 +198,21 @@ export function OperationsRoute() {
     const newIds = activeIds.filter((id) => !knownSosIdsRef.current.has(id));
     activeIds.forEach((id) => knownSosIdsRef.current.add(id));
     newIds.forEach((id) => ringingSosIdsRef.current.add(id));
+    newIds.forEach((id) => pendingSosFocusIdsRef.current.add(id));
     const focusAlert = activeSos.find(
       (alert) =>
-        newIds.includes(String(alert.sos_msg_id)) &&
-        Number.isFinite(Number(alert.location_lat)) &&
-        Number.isFinite(Number(alert.location_lon)),
+        pendingSosFocusIdsRef.current.has(String(alert.sos_msg_id)) &&
+        Number.isFinite(Number(alert.map_lat)) &&
+        Number.isFinite(Number(alert.map_lon)),
     );
     if (focusAlert) {
+      pendingSosFocusIdsRef.current.delete(String(focusAlert.sos_msg_id));
       setFocusTarget({
         kind: "sos",
         id: `sos-${focusAlert.sos_msg_id}`,
         key: `sos-${focusAlert.sos_msg_id}-${Date.now()}`,
-        lat: Number(focusAlert.location_lat),
-        lon: Number(focusAlert.location_lon),
+        lat: Number(focusAlert.map_lat),
+        lon: Number(focusAlert.map_lon),
         zoom: 15,
         label: focusAlert.dev_name || focusAlert.device_name || `Device ${focusAlert.device_id}`,
         popupHtml: sosPopup(focusAlert),
@@ -194,6 +222,9 @@ export function OperationsRoute() {
     const activeSet = new Set(activeIds);
     ringingSosIdsRef.current.forEach((id) => {
       if (!activeSet.has(id)) ringingSosIdsRef.current.delete(id);
+    });
+    pendingSosFocusIdsRef.current.forEach((id) => {
+      if (!activeSet.has(id)) pendingSosFocusIdsRef.current.delete(id);
     });
   }, [activeSos]);
 
@@ -521,7 +552,9 @@ export function OperationsRoute() {
                   <span className="text-neutral-600">{relativeDate(alert.triggered_at)}</span>
                 </div>
                 <div className="mt-1 text-neutral-500">
-                  {alert.location_lat && alert.location_lon ? `${Number(alert.location_lat).toFixed(5)}, ${Number(alert.location_lon).toFixed(5)}` : "Location unknown"}
+                  {Number.isFinite(Number(alert.map_lat)) && Number.isFinite(Number(alert.map_lon))
+                    ? `${Number(alert.map_lat).toFixed(5)}, ${Number(alert.map_lon).toFixed(5)}${alert.map_location_source === "device" ? " · latest device" : ""}`
+                    : "Location unknown"}
                 </div>
                 <div className="mt-2 flex gap-2">
                   <button className="rounded border border-red-500/50 px-2 py-1 font-bold text-red-300" onClick={() => ackMutation.mutate(alert.sos_msg_id)}>

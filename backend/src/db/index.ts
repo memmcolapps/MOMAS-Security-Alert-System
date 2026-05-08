@@ -599,11 +599,18 @@ async function insertSosAlert({ sos_msg_id, device_id, device_name, triggered_at
   const { rows } = await pool.query(
     `INSERT INTO sos_alerts (sos_msg_id, device_id, device_name, triggered_at, location_lat, location_lon, location_raw)
      VALUES ($1,$2,$3,$4,$5,$6,$7)
-     ON CONFLICT (sos_msg_id) DO NOTHING
-     RETURNING sos_msg_id`,
+     ON CONFLICT (sos_msg_id) DO UPDATE
+       SET device_name = COALESCE(EXCLUDED.device_name, sos_alerts.device_name),
+           location_lat = COALESCE(EXCLUDED.location_lat, sos_alerts.location_lat),
+           location_lon = COALESCE(EXCLUDED.location_lon, sos_alerts.location_lon),
+           location_raw = COALESCE(EXCLUDED.location_raw, sos_alerts.location_raw)
+       WHERE (sos_alerts.location_lat IS NULL AND EXCLUDED.location_lat IS NOT NULL)
+          OR (sos_alerts.location_lon IS NULL AND EXCLUDED.location_lon IS NOT NULL)
+          OR (sos_alerts.location_raw IS NULL AND EXCLUDED.location_raw IS NOT NULL)
+     RETURNING sos_msg_id, xmax = 0 AS inserted`,
     [sos_msg_id, device_id, device_name, triggered_at, location_lat ?? null, location_lon ?? null, location_raw ?? null],
   );
-  if (!rows[0]) return null; // duplicate
+  if (!rows[0]?.inserted) return null; // duplicate or location backfill
   return _getSosWithDevice(rows[0].sos_msg_id);
 }
 

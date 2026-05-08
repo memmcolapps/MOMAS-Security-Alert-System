@@ -111,8 +111,8 @@ async function persistAndBroadcast(rows: any[]) {
     let locationRaw = null;
     try {
       const loc = typeof row.sosLocationAt === "string" ? JSON.parse(row.sosLocationAt) : row.sosLocationAt;
-      lat = loc?.wgs84?.lat ?? null;
-      lon = loc?.wgs84?.lon ?? null;
+      lat = loc?.wgs84?.lat ?? loc?.wgs84?.Lat ?? loc?.lat ?? loc?.Lat ?? null;
+      lon = loc?.wgs84?.lon ?? loc?.wgs84?.lng ?? loc?.wgs84?.Lng ?? loc?.lon ?? loc?.lng ?? loc?.Lng ?? null;
       locationRaw = row.sosLocationAt;
     } catch {}
 
