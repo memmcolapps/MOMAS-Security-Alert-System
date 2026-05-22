@@ -1,0 +1,62 @@
+name: Deploy EPAIL_ALERT_SYSTEM to DIGITAL OCEAN 
+
+on:
+  push:
+    branches:
+      - workflow
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      
+
+      - name: Install Dependencies
+        run: bun install
+
+  
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Copy Files to Remote Server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{secrets.SERVER_HOST }}         
+          username: ${{ secrets.SERVER_USER }}    
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "."                      
+          target: "/opt/MOMAS_SECURITY_ALERT_SYSTEM"
+
+      - name: SSH and Restart App
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /opt/MOMAS_SECURITY_ALERT_SYSTEM
+            bun install --production
+
+            pkill -f "bun.*src/index" || true
+            nohup bun src/index.ts > app.log 2>&1 &
+
+            sleep 5
+
+            if ! pgrep -f "bun.*src/index" > /dev/null; then
+              echo "App is not running. Restarting..."
+              nohup bun src/index.ts > app.log 2>&1 &
+              sleep 5
+            fi
+
+            if ! pgrep -f "bun.*src/index" > /dev/null; then
+              echo "App failed to start. Showing logs..."
+              tail -n 50 app.log
+              exit 1
+            fi
+
+            echo "App is running."
