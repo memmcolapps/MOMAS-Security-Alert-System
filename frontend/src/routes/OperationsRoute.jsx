@@ -16,9 +16,10 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { OperationsMap, devicePopup, incidentPopup, sosPopup } from "../components/OperationsMap";
+import { OperationsMap, devicePopup, dronePopup, incidentPopup, sosPopup } from "../components/OperationsMap";
 import {
   acknowledgeSos,
+  getDronePositions,
   getIncidents,
   getLocations,
   getMe,
@@ -47,6 +48,13 @@ const modes = [
   ["ytd", "YTD"],
   ["all", "All Time"],
 ];
+
+const LAYER_LABELS = {
+  live: "Live Alerts",
+  heat: "Heatmap",
+  devices: "Devices",
+  drones: "Drones",
+};
 
 function iconForType(type) {
   return typeIcons[type] || "fa-circle-exclamation";
@@ -80,7 +88,7 @@ export function OperationsRoute() {
   const [panelOpen, setPanelOpen] = useState(true);
   const [statsMinimized, setStatsMinimized] = useState(false);
   const [basemap, setBasemap] = useState("dark");
-  const [activeLayers, setActiveLayers] = useState({ live: true, heat: false, devices: true });
+  const [activeLayers, setActiveLayers] = useState({ live: true, heat: false, devices: true, drones: true });
   const [sosSoundMuted, setSosSoundMuted] = useState(false);
   const [focusTarget, setFocusTarget] = useState(null);
   const knownSosIdsRef = useRef(null);
@@ -113,6 +121,12 @@ export function OperationsRoute() {
     refetchInterval: 15000,
   });
 
+  const dronesQuery = useQuery({
+    queryKey: ["drone-positions"],
+    queryFn: getDronePositions,
+    refetchInterval: 3000,
+  });
+
   const scrapeMutation = useMutation({
     mutationFn: triggerScrape,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["incidents"] }),
@@ -132,6 +146,7 @@ export function OperationsRoute() {
   const devices = devicesQuery.data?.devices || [];
   const locations = locationsQuery.data?.data || [];
   const sosAlerts = sosQuery.data?.alerts || [];
+  const drones = dronesQuery.data?.drones || [];
   const latestDeviceLocations = useMemo(
     () => new Map(locations.map((location) => [String(location.Uid), location])),
     [locations],
@@ -327,8 +342,18 @@ export function OperationsRoute() {
         label: registry.get(String(location.Uid))?.name || location.Uid,
         popupHtml: devicePopup(location, registry),
       }));
-    return [...incidentStops, ...deviceStops];
-  }, [visibleIncidents, devices, locations]);
+    const droneStops = drones
+      .filter((drone) => Number.isFinite(Number(drone.lat)) && Number.isFinite(Number(drone.lon)))
+      .map((drone) => ({
+        kind: "drone",
+        id: `drone-${drone.sysid}`,
+        lat: Number(drone.lat),
+        lon: Number(drone.lon),
+        label: drone.name || `Drone ${drone.sysid}`,
+        popupHtml: dronePopup(drone),
+      }));
+    return [...incidentStops, ...deviceStops, ...droneStops];
+  }, [visibleIncidents, devices, locations, drones]);
 
   useEffect(() => {
     if (!liveMode || tourPaused || !tourStops.length) return undefined;
@@ -366,6 +391,7 @@ export function OperationsRoute() {
         devices={devices}
         locations={locations}
         sosAlerts={activeSos}
+        drones={drones}
         activeLayers={activeLayers}
         basemap={basemap}
         focusTarget={focusTarget}
@@ -610,9 +636,9 @@ export function OperationsRoute() {
                 <option value="streets">Streets</option>
                 <option value="satellite">Satellite</option>
               </select>
-              {["live", "heat", "devices"].map((key) => (
+              {Object.keys(LAYER_LABELS).map((key) => (
                 <button className={`rounded border px-2 py-1 text-[10px] font-bold ${activeLayers[key] ? "border-ops-red bg-ops-red text-black" : "border-ops-line bg-red-500/10 text-ops-red"}`} key={key} onClick={() => setActiveLayers({ ...activeLayers, [key]: !activeLayers[key] })}>
-                  {key === "live" ? "Live Alerts" : key === "heat" ? "Heatmap" : "Devices"}
+                  {LAYER_LABELS[key]}
                 </button>
               ))}
               <button

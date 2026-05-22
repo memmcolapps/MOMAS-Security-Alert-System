@@ -177,6 +177,39 @@ textarea {
   color: #ff1a1a;
 }
 
+.drone-pin {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #0a2230;
+  border: 2px solid #33bbff;
+  box-shadow: 0 0 8px rgba(51, 187, 255, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #33bbff;
+  font-size: 12px;
+}
+
+.drone-pin i {
+  transition: transform 0.3s ease;
+}
+
+.drone-pin.offline {
+  border-color: #888;
+  color: #888;
+  box-shadow: none;
+  opacity: 0.65;
+}
+
+.device-label.drone {
+  color: #33bbff;
+}
+
+.device-label.drone.offline {
+  color: #888;
+}
+
 .leaflet-top {
   top: 3rem;
 }

@@ -60,11 +60,39 @@ export function sosPopup(alert) {
   `;
 }
 
+export function dronePopup(drone) {
+  const online = drone.online;
+  const color = online ? "#33bbff" : "#888";
+  const num = (value, unit, digits = 0) =>
+    Number.isFinite(Number(value)) ? `${Number(value).toFixed(digits)}${unit}` : "—";
+  const status = online ? (drone.armed ? "Armed / flying" : "Connected") : "Offline";
+  return `
+    <div>
+      <div style="font-size:13px;font-weight:700;color:${color};margin-bottom:5px">${escapeHtml(drone.name || `Drone ${drone.sysid}`)}</div>
+      <div style="font-size:11px;color:#ccc"><strong>System ID:</strong> ${escapeHtml(String(drone.sysid))}</div>
+      <div style="font-size:11px;color:#ccc"><strong>Registration:</strong> ${escapeHtml(drone.registration || "—")}</div>
+      <div style="font-size:11px;color:#ccc"><strong>Model:</strong> ${escapeHtml(drone.model || "—")}</div>
+      <div style="font-size:11px;color:#ccc"><strong>Status:</strong> ${escapeHtml(status)}</div>
+      <div style="font-size:11px;color:#ccc"><strong>Altitude:</strong> ${num(drone.relative_alt_m, " m AGL")}</div>
+      <div style="font-size:11px;color:#ccc"><strong>Heading:</strong> ${num(drone.heading_deg, "°")}</div>
+      <div style="font-size:11px;color:#ccc"><strong>Ground speed:</strong> ${num(drone.ground_speed_ms, " m/s", 1)}</div>
+      <div style="font-size:11px;color:#ccc"><strong>GPS:</strong> ${drone.satellites ?? "—"} sats · fix ${drone.gps_fix ?? "—"}</div>
+      <div style="font-size:11px;color:#ccc"><strong>Battery:</strong> ${
+        drone.battery_pct != null ? `${drone.battery_pct}%` : "—"
+      }${drone.battery_voltage != null ? ` · ${Number(drone.battery_voltage).toFixed(1)} V` : ""}</div>
+      <div style="font-size:10px;color:#888;margin-top:5px">Updated ${
+        drone.age_sec != null ? `${drone.age_sec}s ago` : "—"
+      }${drone.registered ? "" : " · unregistered sysid"}</div>
+    </div>
+  `;
+}
+
 export function OperationsMap({
   incidents,
   devices,
   locations,
   sosAlerts = [],
+  drones = [],
   activeLayers,
   basemap,
   onIncidentFocus,
@@ -105,10 +133,12 @@ export function OperationsMap({
     });
     const deviceLayer = L.layerGroup();
     const sosLayer = L.layerGroup();
+    const droneLayer = L.layerGroup();
 
     baseLayers.dark.addTo(map);
     incidentLayer.addTo(map);
     deviceLayer.addTo(map);
+    droneLayer.addTo(map);
     sosLayer.addTo(map);
     L.control.zoom({ position: "topleft" }).addTo(map);
     L.control.scale({ position: "bottomleft", imperial: false }).addTo(map);
@@ -130,7 +160,7 @@ export function OperationsMap({
     });
     map.addControl(new recenter());
 
-    layersRef.current = { baseLayers, activeBase: baseLayers.dark, incidentLayer, heatLayer, deviceLayer, sosLayer };
+    layersRef.current = { baseLayers, activeBase: baseLayers.dark, incidentLayer, heatLayer, deviceLayer, sosLayer, droneLayer };
     mapRef.current = map;
 
     return () => {
@@ -239,8 +269,33 @@ export function OperationsMap({
 
   useEffect(() => {
     const map = mapRef.current;
-    const { incidentLayer, heatLayer, deviceLayer, sosLayer } = layersRef.current;
-    if (!map || !incidentLayer || !heatLayer || !deviceLayer || !sosLayer) return;
+    const { droneLayer } = layersRef.current;
+    if (!map || !droneLayer) return;
+    droneLayer.clearLayers();
+
+    for (const drone of drones) {
+      const lat = Number(drone.lat);
+      const lon = Number(drone.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      const offline = !drone.online;
+      const heading = Number(drone.heading_deg);
+      // fa-location-arrow points NE (45°); offset so 0° = due north.
+      const rotation = Number.isFinite(heading) ? heading - 45 : -45;
+      const label = drone.name || `Drone ${drone.sysid}`;
+      const icon = L.divIcon({
+        className: "",
+        html: `<div class="drone-pin ${offline ? "offline" : ""}"><i class="fas fa-location-arrow" style="transform:rotate(${rotation}deg)"></i></div><div class="device-label drone ${offline ? "offline" : ""}">${escapeHtml(label)}</div>`,
+        iconSize: [28, 44],
+        iconAnchor: [14, 14],
+      });
+      L.marker([lat, lon], { icon, zIndexOffset: 500 }).bindPopup(dronePopup(drone)).addTo(droneLayer);
+    }
+  }, [drones]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const { incidentLayer, heatLayer, deviceLayer, sosLayer, droneLayer } = layersRef.current;
+    if (!map || !incidentLayer || !heatLayer || !deviceLayer || !sosLayer || !droneLayer) return;
     const syncLayer = (layer, enabled) => {
       if (enabled && !map.hasLayer(layer)) map.addLayer(layer);
       if (!enabled && map.hasLayer(layer)) map.removeLayer(layer);
@@ -248,6 +303,7 @@ export function OperationsMap({
     syncLayer(incidentLayer, activeLayers.live);
     syncLayer(heatLayer, activeLayers.heat);
     syncLayer(deviceLayer, activeLayers.devices);
+    syncLayer(droneLayer, activeLayers.drones);
     syncLayer(sosLayer, true);
   }, [activeLayers]);
 

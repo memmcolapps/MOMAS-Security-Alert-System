@@ -123,6 +123,21 @@ async function init() {
       created_at  TIMESTAMPTZ DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS drones (
+      sysid           INTEGER PRIMARY KEY,
+      organization_id INTEGER,
+      unit_id         INTEGER,
+      name            TEXT,
+      registration    TEXT,
+      model           TEXT,
+      operator        TEXT,
+      notes           TEXT,
+      active          BOOLEAN     DEFAULT true,
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_drones_org ON drones(organization_id);
+
     CREATE TABLE IF NOT EXISTS organizations (
       id          SERIAL PRIMARY KEY,
       name        TEXT NOT NULL,
@@ -737,6 +752,86 @@ async function deleteDevice(device_id) {
   return rowCount > 0;
 }
 
+// ── Drone registry ────────────────────────────────────────────────────────────
+
+async function listDrones(scope: any = {}) {
+  const vals = [];
+  const conds = ["1=1"];
+  if (scope.organizationId) {
+    conds.push(`d.organization_id = $${vals.length + 1}`);
+    vals.push(scope.organizationId);
+  }
+  if (scope.unitId) {
+    conds.push(`d.unit_id = $${vals.length + 1}`);
+    vals.push(scope.unitId);
+  }
+  const { rows } = await pool.query(
+    `SELECT d.*, o.name AS organization_name, ou.name AS unit_name, ou.type AS unit_type
+       FROM drones d
+       LEFT JOIN organizations o ON o.id = d.organization_id
+       LEFT JOIN organization_units ou ON ou.id = d.unit_id
+      WHERE ${conds.join(" AND ")}
+      ORDER BY d.sysid ASC`,
+    vals,
+  );
+  return rows;
+}
+
+async function upsertDrone({ sysid, name, registration, model, operator, notes, active, organization_id, unit_id }) {
+  const { rows } = await pool.query(
+    `INSERT INTO drones (sysid, organization_id, unit_id, name, registration, model, operator, notes, active)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     ON CONFLICT (sysid) DO UPDATE SET
+       organization_id = EXCLUDED.organization_id,
+       unit_id      = EXCLUDED.unit_id,
+       name         = EXCLUDED.name,
+       registration = EXCLUDED.registration,
+       model        = EXCLUDED.model,
+       operator     = EXCLUDED.operator,
+       notes        = EXCLUDED.notes,
+       active       = EXCLUDED.active
+     RETURNING *`,
+    [
+      sysid,
+      organization_id || null,
+      unit_id || null,
+      name || null,
+      registration || null,
+      model || null,
+      operator || null,
+      notes || null,
+      active ?? true,
+    ],
+  );
+  return rows[0];
+}
+
+async function getDrone(sysid) {
+  const { rows } = await pool.query("SELECT * FROM drones WHERE sysid = $1", [sysid]);
+  return rows[0] ?? null;
+}
+
+async function updateDroneFields(sysid, { name, registration, model, operator, notes, active }) {
+  const { rows } = await pool.query(
+    `UPDATE drones SET
+       name         = COALESCE($2, name),
+       registration = COALESCE($3, registration),
+       model        = COALESCE($4, model),
+       operator     = COALESCE($5, operator),
+       notes        = COALESCE($6, notes),
+       active       = COALESCE($7, active)
+     WHERE sysid = $1
+     RETURNING *`,
+    [sysid, name ?? null, registration ?? null, model ?? null, operator ?? null, notes ?? null, active ?? null],
+  );
+  return rows[0] ?? null;
+}
+
+async function deleteDrone(sysid) {
+  const { rowCount } = await pool.query("DELETE FROM drones WHERE sysid = $1", [sysid]);
+  return rowCount > 0;
+}
+
 // ── Organizations / users ────────────────────────────────────────────────────
 
 function slugify(value) {
@@ -1113,6 +1208,11 @@ export {
   getDevice,
   updateDeviceFields,
   deleteDevice,
+  listDrones,
+  upsertDrone,
+  getDrone,
+  updateDroneFields,
+  deleteDrone,
   getUserByEmail,
   getUserById,
   updateUserPassword,

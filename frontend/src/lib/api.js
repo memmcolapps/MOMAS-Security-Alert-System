@@ -211,6 +211,27 @@ export function getSosLog() {
   return request("/api/pocstars/sos/log");
 }
 
+export function getDronePositions() {
+  return request("/api/drones/positions");
+}
+
+export function getDroneRegistry() {
+  return request("/api/drones/registry");
+}
+
+export function saveDrone(payload) {
+  return request("/api/drones/registry", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteDrone(sysid) {
+  return request(`/api/drones/registry/${encodeURIComponent(sysid)}`, {
+    method: "DELETE",
+  });
+}
+
 export function acknowledgeSos(sosMsgId) {
   return request(`/api/pocstars/sos/${sosMsgId}/acknowledge`, {
     method: "POST",

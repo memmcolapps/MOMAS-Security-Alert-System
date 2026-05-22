@@ -4,10 +4,12 @@ import { serveStatic } from "hono/bun";
 import { env } from "./config";
 import * as db from "./db";
 import authRouter from "./routes/auth";
+import dronesRouter from "./routes/drones";
 import incidentsRouter from "./routes/incidents";
 import orgRouter from "./routes/org";
 import organizationsRouter from "./routes/organizations";
 import pocstarsRouter from "./routes/pocstars";
+import { startMavlinkListener } from "./drones/mavlink-listener";
 import { isGDELTEnabled, scrapeGDELT } from "./scrapers/gdelt";
 import { isGuardianEnabled, scrapeGuardian } from "./scrapers/guardian";
 import { fetchHAPI, isHAPIEnabled } from "./scrapers/hapi";
@@ -54,6 +56,7 @@ app.onError((error, c) => {
 
 app.route("/api/incidents", incidentsRouter);
 app.route("/api/pocstars", pocstarsRouter);
+app.route("/api/drones", dronesRouter);
 app.route("/api/auth", authRouter);
 app.route("/api/organizations", organizationsRouter);
 app.route("/api/org", orgRouter);
@@ -148,6 +151,8 @@ try {
 ║  Runtime : Bun                              ║
 ║  Server  : http://localhost:${PORT}             ║
 ╚══════════════════════════════════════════════╝`);
+
+  startMavlinkListener();
 
   if (START_SCRAPE_JOBS) {
     void runHot();

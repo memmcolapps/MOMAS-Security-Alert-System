@@ -24,6 +24,12 @@ const envSchema = z.object({
   POCSTARS_LOC_BASE: z.string().url().default("http://102.221.238.124:9275"),
   POCSTARS_SOS_BASE: z.string().url().default("http://102.221.238.124:6891"),
   POCSTARS_TARGET_UID: z.string().default("583"),
+  // Drone tracking — raw MAVLink TCP listener (Mission Planner forwards here).
+  MAVLINK_ENABLE: boolFromEnv(true),
+  MAVLINK_TCP_HOST: z.string().default("0.0.0.0"),
+  MAVLINK_TCP_PORT: intFromEnv(5760),
+  DRONE_STALE_SEC: intFromEnv(30),
+  DRONE_FORGET_SEC: intFromEnv(3600),
   AUTH_JWT_SECRET: z.string().min(16).default("momas-dev-secret-change-me"),
   EPAIL_ADMIN_EMAIL: z.string().email().optional(),
   EPAIL_ADMIN_PASSWORD: z.string().min(8).optional(),
