@@ -1,0 +1,137 @@
+# Deploy the MOMAS backend to the Namecheap VPS.
+#
+# ── Pattern B: split of secrets ─────────────────────────────────────────
+#   GitHub stores DEPLOY-PLUMBING secrets only:
+#       SERVER_HOST, SERVER_USER, SSH_PRIVATE_KEY, SERVER_PORT (optional)
+#
+#   ALL application runtime config (DATABASE_URL, AUTH_JWT_SECRET,
+#   POCSTARS_*, MAVLINK_*, etc.) lives on the server at:
+#       /etc/momas/momas.env
+#   owned by the deploy user, chmod 600, and is loaded by the systemd
+#   unit via EnvironmentFile=. This workflow NEVER touches that file —
+#   rotating an app secret only requires editing it on the server and
+#   running `sudo systemctl restart momas-backend`.
+#
+# ── One-time VPS setup (do these once before this workflow can run) ────
+#   1. Install Bun and expose it system-wide:
+#        curl -fsSL https://bun.sh/install | bash
+#        sudo ln -sf "$HOME/.bun/bin/bun" /usr/local/bin/bun
+#
+#   2. Create the deploy user and add the GitHub deploy SSH pubkey
+#      to ~/.ssh/authorized_keys for that user.
+#
+#   3. Allow the deploy user to run systemctl + journalctl without a
+#      password (the only commands this workflow needs as root):
+#        echo 'deploy ALL=(ALL) NOPASSWD: /bin/systemctl, /usr/bin/journalctl' \
+#          | sudo tee /etc/sudoers.d/momas-deploy
+#        sudo chmod 440 /etc/sudoers.d/momas-deploy
+#
+#   4. Create directories owned by the deploy user:
+#        sudo mkdir -p /opt/momas /etc/momas
+#        sudo chown deploy:deploy /opt/momas
+#
+#   5. Install the env file:
+#        sudo cp backend/deploy/momas.env.example /etc/momas/momas.env
+#        sudo chown deploy:deploy /etc/momas/momas.env
+#        sudo chmod 600 /etc/momas/momas.env
+#        # then edit /etc/momas/momas.env with real values
+#
+#   6. Install and enable the systemd unit:
+#        sudo cp backend/deploy/momas-backend.service /etc/systemd/system/
+#        sudo systemctl daemon-reload
+#        sudo systemctl enable momas-backend
+#
+#   7. Open the firewall:
+#        sudo ufw allow 22/tcp       # SSH
+#        sudo ufw allow 443/tcp      # HTTPS (reverse proxy in front of :3000)
+#        sudo ufw allow 5760/tcp     # MAVLink (ideally allowlist drone-team IPs)
+#
+#   8. Put an HTTPS reverse proxy (nginx or Caddy) in front of 127.0.0.1:3000
+#      — the Vercel frontend runs on HTTPS and browsers will block plain HTTP.
+#      MAVLink stays on raw TCP 5760, *beside* the proxy, not behind it.
+#
+# After these steps, every push to `main` that touches `backend/` deploys.
+
+name: Deploy backend to VPS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/deploy-backend.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Sanity check: lockfile resolves cleanly. Catches a broken bun.lockb
+      # before we push anything to the server.
+      - name: Verify dependencies resolve
+        working-directory: backend
+        run: bun install --frozen-lockfile
+
+      # Pack only what the server needs. node_modules is reinstalled on the
+      # server; the env file lives in /etc/momas/momas.env (Pattern B); the
+      # data/ dir and logs are server-side state we never overwrite.
+      - name: Package backend
+        run: |
+          tar \
+            --exclude='backend/node_modules' \
+            --exclude='backend/.env' \
+            --exclude='backend/.env.*' \
+            --exclude='backend/data' \
+            --exclude='backend/app.log' \
+            --exclude='backend/.github' \
+            -czf backend.tar.gz backend/
+
+      - name: Copy tarball to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SERVER_PORT || '22' }}
+          source: backend.tar.gz
+          target: /tmp/
+
+      - name: Unpack, install, restart
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SERVER_PORT || '22' }}
+          script: |
+            set -euo pipefail
+            export PATH="/usr/local/bin:$HOME/.bun/bin:$PATH"
+
+            DEPLOY_ROOT="/opt/momas"
+            BACKEND_DIR="$DEPLOY_ROOT/backend"
+
+            mkdir -p "$DEPLOY_ROOT"
+            tar -xzf /tmp/backend.tar.gz -C "$DEPLOY_ROOT"
+            rm /tmp/backend.tar.gz
+
+            cd "$BACKEND_DIR"
+            bun install --production --frozen-lockfile
+
+            sudo systemctl restart momas-backend
+            sleep 3
+            sudo systemctl --no-pager status momas-backend | head -20
+            sudo journalctl -u momas-backend -n 40 --no-pager

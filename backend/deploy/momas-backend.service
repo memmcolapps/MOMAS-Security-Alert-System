@@ -1,0 +1,42 @@
+# Systemd unit for the MOMAS backend (Bun + Hono).
+#
+# Install:
+#   sudo cp backend/deploy/momas-backend.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable momas-backend
+#   sudo systemctl start momas-backend
+#
+# Runtime config lives in /etc/momas/momas.env (Pattern B). The deploy
+# workflow never touches that file — rotate secrets by editing it and
+# running `sudo systemctl restart momas-backend`.
+
+[Unit]
+Description=MOMAS Security Operations backend
+Documentation=https://github.com/memmcolapps/MOMAS-Security-Alert-System
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/opt/momas/backend
+
+# All application secrets and runtime config (DATABASE_URL,
+# AUTH_JWT_SECRET, POCSTARS_*, MAVLINK_*) come from here.
+EnvironmentFile=/etc/momas/momas.env
+
+ExecStart=/usr/local/bin/bun run src/server.ts
+
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=momas-backend
+
+# Light hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
