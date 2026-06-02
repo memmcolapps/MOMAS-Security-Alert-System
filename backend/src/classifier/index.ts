@@ -11,7 +11,10 @@
 
 import axios from "axios";
 import crypto from "node:crypto";
+import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
+import { z } from "zod";
 import { looksLikeSecurityIncident } from "./prefilter";
+import { extractState, geocode } from "../geocoder";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = process.env.GROQ_MODEL || "meta-llama/llama-4-scout-17b-16e-instruct";
@@ -56,10 +59,77 @@ const SEVERITIES = ["RED", "ORANGE", "YELLOW", "BLUE"];
 
 const NON_INCIDENT = Object.freeze({
   is_security_incident: false,
+  reasoning: null,
   type: null,
+  location_text: null,
+  date: null,
+  actors: null,
   fatalities: 0,
   victims: 0,
   severity: "BLUE",
+  summary: null,
+});
+
+const FOLLOW_UP_RE = new RegExp(
+  [
+    'contacts?\\s+.*family',
+    'seeks?\\s+release',
+    'demands?\\s+(rescue|release|action|justice)',
+    'pledges?\\s+rescue',
+    'vows?\\s+rescue',
+    'talks?\\b',
+    'negotiat(?:e|es|ed|ing|ion)',
+    'condition\\b',
+    'protests?\\b',
+    'rall(?:y|ies)',
+    'solidarity',
+    'strike\\b',
+    'faults?\\s+security',
+    'tracking\\s+.*kidnappers?',
+    'nabs?\\b',
+    'arrests?\\b',
+    'rescues?\\b',
+    'rescued\\b',
+    'releases?\\b',
+    'released\\b',
+    'mourns?\\b',
+    'condemns?\\b',
+    'outrage\\s+spreads',
+    'morning\\s+recap',
+    'high\\s+alert',
+  ].join('|'),
+  'i',
+);
+
+const FOREIGN_PLACE_RE = new RegExp(
+  [
+    'pakistan',
+    'iraq',
+    'london',
+    'ukraine',
+    'russia',
+    'chad',
+    'mali',
+    'south\\s+africa',
+    'east\\s+london',
+    'poltava',
+  ].join('|'),
+  'i',
+);
+
+const ClassificationSchema = z.object({
+  is_security_incident: z.boolean(),
+  reasoning: z.string().nullable().optional(),
+  reason: z.string().nullable().optional(),
+  type: z.enum(INCIDENT_TYPES as [string, ...string[]]).nullable().optional(),
+  location_text: z.string().nullable().optional(),
+  date: z.string().nullable().optional(),
+  actors: z.string().nullable().optional(),
+  fatalities: z.number().int().min(0).max(500).nullable().optional(),
+  casualty_count: z.number().int().min(0).max(500).nullable().optional(),
+  victims: z.number().int().min(0).max(500).nullable().optional(),
+  severity: z.enum(SEVERITIES as [string, ...string[]]).nullable().optional(),
+  summary: z.string().nullable().optional(),
 });
 
 const SYSTEM_PROMPT = `You are a security analyst. Your job: identify events that require a NEW security intervention.
@@ -92,7 +162,11 @@ Set is_security_incident=false for everything else:
 STEP 3 — TYPE (pick exactly one if is_security_incident=true):
 bombing | kidnapping | massacre | banditry | herder_clash | terrorism | armed_attack | cult_violence | displacement
 
-STEP 4 — COUNTS (THIS incident only, not historical or cumulative):
+STEP 4 — EXTRACT STRUCTURED INCIDENT FACTS (THIS incident only):
+- location_text: most specific location mentioned, or null
+- date: when it happened as YYYY-MM-DD if available from the text, else null
+- actors: people/groups involved, or null
+- summary: one sentence describing only the new incident
 - fatalities: killed IN THIS EVENT (0 if unknown)
 - victims:    abducted/kidnapped/displaced IN THIS EVENT (0 if not applicable)
 
@@ -119,19 +193,19 @@ Input:
 
 Output:
 [
-  {"id":0,"reason":"Fresh ambush attack with confirmed soldier fatalities","is_security_incident":true,"type":"terrorism","fatalities":5,"victims":0,"severity":"ORANGE"},
-  {"id":1,"reason":"Presidential condemnation of past event, not the incident","is_security_incident":false,"type":null,"fatalities":0,"victims":0,"severity":"BLUE"},
-  {"id":2,"reason":"Court/DPP decision about a past killing, violence is not new","is_security_incident":false,"type":null,"fatalities":0,"victims":0,"severity":"BLUE"},
-  {"id":3,"reason":"Retrospective feature on cumulative abductions since 2020","is_security_incident":false,"type":null,"fatalities":0,"victims":0,"severity":"BLUE"},
-  {"id":4,"reason":"New kidnapping with confirmed victim count reported today","is_security_incident":true,"type":"kidnapping","fatalities":0,"victims":43,"severity":"RED"},
-  {"id":5,"reason":"New IED blast with confirmed civilian deaths at market","is_security_incident":true,"type":"bombing","fatalities":3,"victims":0,"severity":"ORANGE"},
-  {"id":6,"reason":"Rescue operation — abduction already happened, new event is recovery","is_security_incident":false,"type":null,"fatalities":0,"victims":0,"severity":"BLUE"},
-  {"id":7,"reason":"Military operation to rescue hostages, violence already happened","is_security_incident":false,"type":null,"fatalities":0,"victims":0,"severity":"BLUE"}
+  {"id":0,"reasoning":"Fresh ambush attack with confirmed soldier fatalities","is_security_incident":true,"type":"terrorism","location_text":"Maiduguri-Damboa road, Borno","date":null,"actors":"Suspected ISWAP fighters; Nigerian soldiers","fatalities":5,"victims":0,"severity":"ORANGE","summary":"Suspected ISWAP fighters ambushed an army patrol on the Maiduguri-Damboa road, killing five soldiers."},
+  {"id":1,"reasoning":"Presidential condemnation of past event, not the incident","is_security_incident":false,"type":null,"location_text":null,"date":null,"actors":null,"fatalities":0,"victims":0,"severity":"BLUE","summary":null},
+  {"id":2,"reasoning":"Court/DPP decision about a past killing, violence is not new","is_security_incident":false,"type":null,"location_text":null,"date":null,"actors":null,"fatalities":0,"victims":0,"severity":"BLUE","summary":null},
+  {"id":3,"reasoning":"Retrospective feature on cumulative abductions since 2020","is_security_incident":false,"type":null,"location_text":null,"date":null,"actors":null,"fatalities":0,"victims":0,"severity":"BLUE","summary":null},
+  {"id":4,"reasoning":"New kidnapping with confirmed victim count reported today","is_security_incident":true,"type":"kidnapping","location_text":"Abuja-Kaduna highway","date":null,"actors":"Armed men; bus passengers","fatalities":0,"victims":43,"severity":"RED","summary":"Armed men intercepted a bus on the Abuja-Kaduna highway and abducted 43 passengers."},
+  {"id":5,"reasoning":"New IED blast with confirmed civilian deaths at market","is_security_incident":true,"type":"bombing","location_text":"Biu market, Borno","date":null,"actors":"Unknown bombers; traders","fatalities":3,"victims":0,"severity":"ORANGE","summary":"An IED exploded near Biu market in Borno, killing three traders."},
+  {"id":6,"reasoning":"Rescue operation; abduction already happened","is_security_incident":false,"type":null,"location_text":null,"date":null,"actors":null,"fatalities":0,"victims":0,"severity":"BLUE","summary":null},
+  {"id":7,"reasoning":"Military rescue operation, not new attack","is_security_incident":false,"type":null,"location_text":null,"date":null,"actors":null,"fatalities":0,"victims":0,"severity":"BLUE","summary":null}
 ]
 
 ---
 Now classify the real input. Respond ONLY with a JSON array. Each element must be:
-{"id": <same id as input>, "reason": "<≤12 words>", "is_security_incident": boolean, "type": string|null, "fatalities": integer, "victims": integer, "severity": string}
+{"id": <same id as input>, "reasoning": "<≤16 words>", "is_security_incident": boolean, "type": string|null, "location_text": string|null, "date": "YYYY-MM-DD"|null, "actors": string|null, "fatalities": integer, "victims": integer, "severity": string, "summary": string|null}
 Do not include any other text.`;
 
 // ── Slot-based rate limiter ────────────────────────────────────────────────
@@ -179,27 +253,42 @@ function isGroqEnabled() {
 function sanitize(raw) {
   if (!raw || typeof raw !== "object") return null;
 
-  if (raw.is_security_incident !== true) return { ...NON_INCIDENT };
+  const parsed = ClassificationSchema.safeParse(raw);
+  if (!parsed.success) return { ...NON_INCIDENT };
+  const value = parsed.data;
 
-  if (!INCIDENT_TYPES.includes(raw.type)) return { ...NON_INCIDENT };
+  if (value.is_security_incident !== true) {
+    return {
+      ...NON_INCIDENT,
+      reasoning: value.reasoning || value.reason || null,
+    };
+  }
 
-  const type = raw.type;
-  const severity = SEVERITIES.includes(raw.severity) ? raw.severity : "YELLOW";
+  if (!value.type || !INCIDENT_TYPES.includes(value.type)) {
+    return { ...NON_INCIDENT, reasoning: value.reasoning || value.reason || null };
+  }
+
+  const type = value.type;
+  const severity = value.severity && SEVERITIES.includes(value.severity) ? value.severity : "YELLOW";
 
   // Cap at 500 — genuine single-incident counts rarely exceed this;
   // larger numbers usually come from cumulative/retrospective reporting.
-  const fatalities =
-    Number.isFinite(raw.fatalities) &&
-    raw.fatalities >= 0 &&
-    raw.fatalities <= 500
-      ? Math.floor(raw.fatalities)
-      : 0;
-  const victims =
-    Number.isFinite(raw.victims) && raw.victims >= 0 && raw.victims <= 500
-      ? Math.floor(raw.victims)
-      : 0;
+  const fatalities = Number.isFinite(value.fatalities) ? Math.floor(value.fatalities || 0) : 0;
+  const victims = Number.isFinite(value.victims) ? Math.floor(value.victims || 0) : 0;
 
-  return { is_security_incident: true, type, fatalities, victims, severity };
+  return {
+    is_security_incident: true,
+    reasoning: value.reasoning || value.reason || null,
+    type,
+    location_text: value.location_text || null,
+    date: value.date || null,
+    actors: value.actors || null,
+    fatalities,
+    casualty_count: fatalities,
+    victims,
+    severity,
+    summary: value.summary || null,
+  };
 }
 
 function extractJSON(text) {
@@ -273,9 +362,9 @@ async function callGroqBatch(batch) {
       for (const r of parsed) {
         if (r && Number.isInteger(r.id)) {
           byId.set(r.id, r);
-          if (r.reason) {
+          if (r.reasoning || r.reason) {
             const verdict = r.is_security_incident ? `✓ ${r.type}` : "✗ skip";
-            console.log(`  [${verdict}] ${r.reason}`);
+            console.log(`  [${verdict}] ${r.reasoning || r.reason}`);
           }
         }
       }
@@ -332,6 +421,178 @@ async function callGroqBatch(batch) {
   return batch.map(() => null);
 }
 
+const ClassifierGraphState = Annotation.Root({
+  runId: Annotation<string>(),
+  items: Annotation<any[]>(),
+  results: Annotation<any[]>(),
+  toCall: Annotation<any[]>(),
+  stats: Annotation<any>(),
+});
+
+function classifierPrefilterNode(state) {
+  const results = new Array(state.items.length);
+  const toCall = [];
+
+  for (let i = 0; i < state.items.length; i++) {
+    const title = state.items[i].title || "";
+    const description = state.items[i].description || "";
+
+    if (!looksLikeSecurityIncident(title, description)) {
+      results[i] = { ...NON_INCIDENT };
+      continue;
+    }
+
+    const key = cacheKey(title, description);
+    const cached = cacheGet(key);
+    if (cached !== undefined) {
+      results[i] = cached;
+      continue;
+    }
+
+    toCall.push({ index: i, key, title, description });
+  }
+
+  const filteredOrCached = state.items.length - toCall.length;
+  console.log(
+    `[graph:${state.runId}:prefilter] ${state.items.length} item(s) -> ${filteredOrCached} filtered/cached, ${toCall.length} need LLM`,
+  );
+
+  return {
+    results,
+    toCall,
+    stats: {
+      input: state.items.length,
+      filteredOrCached,
+      llmItems: toCall.length,
+    },
+  };
+}
+
+function routeAfterPrefilter(state) {
+  const route = state.toCall?.length ? "triage_extract" : "done";
+  console.log(`[graph:${state.runId}:route] prefilter -> ${route}`);
+  return route;
+}
+
+async function triageExtractNode(state) {
+  const results = [...state.results];
+  console.log(`[graph:${state.runId}:triage_extract] entering with ${state.toCall.length} item(s)`);
+
+  if (!isGroqEnabled()) {
+    console.warn("[classifier] GROQ_API_KEY not set — skipping LLM items.");
+    for (const t of state.toCall) results[t.index] = null;
+    console.log(`[graph:${state.runId}:triage_extract] no Groq key -> returning null results`);
+    return { results };
+  }
+
+  const batches = [];
+  for (let i = 0; i < state.toCall.length; i += GROQ_BATCH_SIZE) {
+    batches.push(state.toCall.slice(i, i + GROQ_BATCH_SIZE));
+  }
+
+  console.log(
+    `[classifier:${state.runId}] ${state.items.length} items: ${state.stats.filteredOrCached} filtered/cached, ${state.toCall.length} → ${batches.length} LLM batch(es)`,
+  );
+
+  let incidents = 0;
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+    const batch = batches[batchIndex];
+    console.log(
+      `[graph:${state.runId}:triage_extract] Groq batch ${batchIndex + 1}/${batches.length}: ${batch.length} item(s)`,
+    );
+    const batchResults = await callGroqBatch(
+      batch.map((t) => ({ title: t.title, description: t.description })),
+    );
+
+    for (let j = 0; j < batch.length; j++) {
+      const t = batch[j];
+      const r = batchResults[j];
+      results[t.index] = r;
+      if (r) {
+        cacheSet(t.key, r);
+        if (r.is_security_incident) incidents++;
+      }
+    }
+  }
+
+  console.log(
+    `[graph:${state.runId}:triage_extract] ${state.toCall.length} LLM item(s) -> ${incidents} incident(s)`,
+  );
+
+  return {
+    results,
+    stats: {
+      ...state.stats,
+      incidents,
+      batches: batches.length,
+    },
+  };
+}
+
+function publishGuardNode(state) {
+  const results = [...state.results];
+  let guardRejected = 0;
+  let incidents = 0;
+
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
+    if (!result?.is_security_incident) continue;
+
+    const item = state.items[i] || {};
+    const text = `${item.title || ""} ${item.description || ""}`;
+    const locationText = result.location_text || "";
+    const guardText = `${text} ${locationText}`;
+    const geo = geocode(locationText) || geocode(text);
+    const stateName = geo?.state || extractState(guardText);
+
+    let reason = null;
+    if (FOLLOW_UP_RE.test(text)) {
+      reason = "Follow-up story, not a fresh incident";
+    } else if (FOREIGN_PLACE_RE.test(guardText) && !stateName) {
+      reason = "Foreign or non-Nigeria story";
+    } else if (!geo && !stateName) {
+      reason = "No concrete Nigerian map location";
+    }
+
+    if (reason) {
+      guardRejected++;
+      results[i] = {
+        ...NON_INCIDENT,
+        reasoning: reason,
+      };
+      continue;
+    }
+
+    incidents++;
+  }
+
+  console.log(
+    `[graph:${state.runId}:publish_guard] ${state.stats.incidents || 0} candidate incident(s) -> ${incidents} publishable, ${guardRejected} rejected`,
+  );
+
+  return {
+    results,
+    stats: {
+      ...state.stats,
+      incidents,
+      guardRejected,
+    },
+  };
+}
+
+const classifierGraph = new StateGraph(ClassifierGraphState)
+  .addNode("prefilter", classifierPrefilterNode)
+  .addNode("triage_extract", triageExtractNode)
+  .addNode("publish_guard", publishGuardNode)
+  .addEdge(START, "prefilter")
+  .addConditionalEdges("prefilter", routeAfterPrefilter, {
+    triage_extract: "triage_extract",
+    done: END,
+  })
+  .addEdge("triage_extract", "publish_guard")
+  .addEdge("publish_guard", END)
+  .compile();
+
 /**
  * Classify a single item. Returns the sanitized result, or null on failure.
  * Goes through prefilter and cache, same as classifyMany.
@@ -351,73 +612,20 @@ async function classify(title, description = "") {
  *   3. batch call — remaining items grouped into Groq calls of BATCH_SIZE
  */
 async function classifyMany(items) {
-  const results = new Array(items.length);
-  const toCall = [];
-
-  for (let i = 0; i < items.length; i++) {
-    const title = items[i].title || "";
-    const description = items[i].description || "";
-
-    if (!looksLikeSecurityIncident(title, description)) {
-      results[i] = { ...NON_INCIDENT };
-      continue;
-    }
-
-    const key = cacheKey(title, description);
-    const cached = cacheGet(key);
-    if (cached !== undefined) {
-      results[i] = cached;
-      continue;
-    }
-
-    toCall.push({ index: i, key, title, description });
-  }
-
-  const prefiltered = items.length - toCall.length;
-  if (!toCall.length) {
-    console.log(
-      `[classifier] ${items.length} items: ${prefiltered} filtered/cached, 0 LLM calls`,
-    );
-    return results;
-  }
-
-  if (!isGroqEnabled()) {
-    console.warn("[classifier] GROQ_API_KEY not set — skipping LLM items.");
-    for (const t of toCall) results[t.index] = null;
-    return results;
-  }
-
-  const batches = [];
-  for (let i = 0; i < toCall.length; i += GROQ_BATCH_SIZE) {
-    batches.push(toCall.slice(i, i + GROQ_BATCH_SIZE));
-  }
-
   const start = Date.now();
-  console.log(
-    `[classifier] ${items.length} items: ${prefiltered} filtered/cached, ${toCall.length} → ${batches.length} LLM batch(es)`,
-  );
-
-  let incidents = 0;
-  for (let b = 0; b < batches.length; b++) {
-    const batch = batches[b];
-    const batchResults = await callGroqBatch(
-      batch.map((t) => ({ title: t.title, description: t.description })),
-    );
-
-    for (let j = 0; j < batch.length; j++) {
-      const t = batch[j];
-      const r = batchResults[j];
-      results[t.index] = r;
-      if (r) {
-        cacheSet(t.key, r);
-        if (r.is_security_incident) incidents++;
-      }
-    }
-  }
+  const runId = crypto.randomBytes(2).toString("hex");
+  const finalState = await classifierGraph.invoke({ runId, items });
+  const results = finalState.results || new Array(items.length).fill(null);
+  const stats = finalState.stats || {};
 
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+  if (!stats.llmItems) {
+    console.log(
+      `[classifier:${runId}] ${items.length} items: ${stats.filteredOrCached ?? items.length} filtered/cached, 0 LLM calls`,
+    );
+  }
   console.log(
-    `[classifier] Batch done in ${elapsed}s — ${incidents} incidents from ${toCall.length} LLM items`,
+    `[classifier:${runId}] LangGraph done in ${elapsed}s — ${stats.incidents || 0} incidents from ${stats.llmItems || 0} LLM items`,
   );
   return results;
 }
