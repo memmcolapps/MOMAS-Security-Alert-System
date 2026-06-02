@@ -18,8 +18,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=deploy
-Group=deploy
+# TODO: switch to a dedicated `deploy` user once one is created on the VPS.
+# Running as root is fine for first boot but is not the long-term shape.
+User=root
+Group=root
 WorkingDirectory=/opt/momas/backend
 
 # All application secrets and runtime config (DATABASE_URL,
