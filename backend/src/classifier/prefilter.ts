@@ -66,6 +66,14 @@ const NON_EVENT_RE = new RegExp(
   'i',
 );
 
+const POLICY_DISCUSSION_RE = new RegExp(
+  [
+    '(senate|senators?|house\\s+of\\s+reps?|national\\s+assembly|lawmakers?|committee)\\b.{0,100}\\b(debates?|hearing|motion|resolution|summit|forum|dialogue)',
+    '\\b(debates?|discuss(?:es|ed|ing)?|hearing|motion|resolution)\\b.{0,100}\\b(kidnapping|banditry|terrorism|insecurity|security\\s+crisis)',
+  ].join('|'),
+  'i',
+);
+
 const NIGERIA_RE = new RegExp(
   [
     'nigeria', 'nigerian',
@@ -92,6 +100,7 @@ function looksLikeSecurityIncident(title, description = '') {
   const text = `${title} ${description}`;
   if (!text.trim()) return false;
   if (!NIGERIA_RE.test(text)) return false;
+  if (POLICY_DISCUSSION_RE.test(text)) return false;
   // Block reaction/commentary pieces unless they also describe a concrete event
   if (NON_EVENT_RE.test(text) && !SECURITY_RE.test(text)) return false;
   return SECURITY_RE.test(text);

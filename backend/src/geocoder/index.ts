@@ -261,6 +261,19 @@ const PLACES = [
 // Build a sorted list (longest names first so they match before substrings)
 const SORTED_PLACES = [...PLACES].sort((a, b) => b.name.length - a.name.length);
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasPlaceToken(text, name) {
+  const normalized = String(text || '').toLowerCase();
+  const escaped = escapeRegExp(String(name || '').toLowerCase()).replace(
+    /\s+/g,
+    '[\\s-]+',
+  );
+  return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, 'i').test(normalized);
+}
+
 function toTitleCase(name) {
   return String(name)
     .split(" ")
@@ -297,7 +310,7 @@ function geocode(locationText) {
   const lower = locationText.toLowerCase();
 
   for (const place of SORTED_PLACES) {
-    if (lower.includes(place.name)) {
+    if (hasPlaceToken(lower, place.name)) {
       return { lat: place.lat, lon: place.lon, state: place.state, matched: place.name };
     }
   }
@@ -319,7 +332,7 @@ const STATE_NAMES = [
 function extractState(text) {
   const lower = text.toLowerCase();
   for (const state of STATE_NAMES) {
-    if (lower.includes(state.toLowerCase())) return state;
+    if (hasPlaceToken(lower, state.toLowerCase())) return state;
   }
   return null;
 }

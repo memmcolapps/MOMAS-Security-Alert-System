@@ -15,7 +15,7 @@ pool.on("error", (err) => {
   console.error("[DB] Unexpected pool error:", err.message);
 });
 
-async function queryWithRetry(sql, params = []) {
+async function queryWithRetry(sql: string, params: any[] = []): Promise<any> {
   try {
     return await pool.query(sql, params);
   } catch (err) {
