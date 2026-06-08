@@ -2,7 +2,8 @@
 #
 # ── Pattern B: split of secrets ─────────────────────────────────────────
 #   GitHub stores DEPLOY-PLUMBING secrets only:
-#       SERVER_HOST, SERVER_USER, SSH_PRIVATE_KEY, SERVER_PORT (optional)
+#       SERVER_HOST, SERVER_USER, SSH_PRIVATE_KEY, SERVER_SUDO_PASSWORD,
+#       SERVER_PORT (optional)
 #
 #   ALL application runtime config (DATABASE_URL, AUTH_JWT_SECRET,
 #   POCSTARS_*, MAVLINK_*, etc.) lives on the server at:
@@ -20,11 +21,8 @@
 #   2. Create the deploy user and add the GitHub deploy SSH pubkey
 #      to ~/.ssh/authorized_keys for that user.
 #
-#   3. Allow the deploy user to install/reload the systemd unit and inspect
-#      its logs without a password (the only commands this workflow needs as root):
-#        echo 'deploy ALL=(ALL) NOPASSWD: /usr/bin/install -m 0644 /opt/momas/backend/deploy/momas-backend.service /etc/systemd/system/momas-backend.service, /bin/systemctl, /usr/bin/systemctl, /usr/bin/journalctl' \
-#          | sudo tee /etc/sudoers.d/momas-deploy
-#        sudo chmod 440 /etc/sudoers.d/momas-deploy
+#   3. Ensure the deploy user can run sudo. Its sudo password must be stored
+#      in the GitHub Actions secret SERVER_SUDO_PASSWORD.
 #
 #   4. Create directories owned by the deploy user:
 #        sudo mkdir -p /opt/momas /etc/momas
@@ -112,14 +110,21 @@ jobs:
 
       - name: Unpack, install, restart
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          SERVER_SUDO_PASSWORD: ${{ secrets.SERVER_SUDO_PASSWORD }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT || '22' }}
+          envs: SERVER_SUDO_PASSWORD
           script: |
             set -euo pipefail
             export PATH="/usr/local/bin:$HOME/.bun/bin:$PATH"
+
+            run_sudo() {
+              printf '%s\n' "$SERVER_SUDO_PASSWORD" | sudo -S -p '' "$@"
+            }
 
             DEPLOY_ROOT="/opt/momas"
             BACKEND_DIR="$DEPLOY_ROOT/backend"
@@ -131,12 +136,12 @@ jobs:
             cd "$BACKEND_DIR"
             bun install --production --frozen-lockfile
 
-            sudo -n install -m 0644 "$BACKEND_DIR/deploy/momas-backend.service" /etc/systemd/system/momas-backend.service
-            sudo -n systemctl daemon-reload
-            sudo -n systemctl restart momas-backend
+            run_sudo install -m 0644 "$BACKEND_DIR/deploy/momas-backend.service" /etc/systemd/system/momas-backend.service
+            run_sudo systemctl daemon-reload
+            run_sudo systemctl restart momas-backend
             sleep 3
 
             # Always print diagnostics before failing when startup is unhealthy.
-            sudo -n systemctl --no-pager status momas-backend | head -20 || true
-            sudo -n journalctl -u momas-backend -n 40 --no-pager || true
-            sudo -n systemctl is-active --quiet momas-backend
+            run_sudo systemctl --no-pager status momas-backend | head -20 || true
+            run_sudo journalctl -u momas-backend -n 40 --no-pager || true
+            run_sudo systemctl is-active --quiet momas-backend
