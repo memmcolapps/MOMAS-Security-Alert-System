@@ -20,9 +20,9 @@
 #   2. Create the deploy user and add the GitHub deploy SSH pubkey
 #      to ~/.ssh/authorized_keys for that user.
 #
-#   3. Allow the deploy user to run systemctl + journalctl without a
-#      password (the only commands this workflow needs as root):
-#        echo 'deploy ALL=(ALL) NOPASSWD: /bin/systemctl, /usr/bin/journalctl' \
+#   3. Allow the deploy user to install/reload the systemd unit and inspect
+#      its logs without a password (the only commands this workflow needs as root):
+#        echo 'deploy ALL=(ALL) NOPASSWD: /usr/bin/install -m 0644 /opt/momas/backend/deploy/momas-backend.service /etc/systemd/system/momas-backend.service, /bin/systemctl, /usr/bin/systemctl, /usr/bin/journalctl' \
 #          | sudo tee /etc/sudoers.d/momas-deploy
 #        sudo chmod 440 /etc/sudoers.d/momas-deploy
 #
@@ -131,7 +131,12 @@ jobs:
             cd "$BACKEND_DIR"
             bun install --production --frozen-lockfile
 
+            sudo install -m 0644 "$BACKEND_DIR/deploy/momas-backend.service" /etc/systemd/system/momas-backend.service
+            sudo systemctl daemon-reload
             sudo systemctl restart momas-backend
             sleep 3
-            sudo systemctl --no-pager status momas-backend | head -20
-            sudo journalctl -u momas-backend -n 40 --no-pager
+
+            # Always print diagnostics before failing when startup is unhealthy.
+            sudo systemctl --no-pager status momas-backend | head -20 || true
+            sudo journalctl -u momas-backend -n 40 --no-pager || true
+            sudo systemctl is-active --quiet momas-backend

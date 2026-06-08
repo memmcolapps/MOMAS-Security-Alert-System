@@ -28,7 +28,7 @@ WorkingDirectory=/opt/momas/backend
 # AUTH_JWT_SECRET, POCSTARS_*, MAVLINK_*) come from here.
 EnvironmentFile=/etc/momas/momas.env
 
-ExecStart=/usr/local/bin/bun run src/server.ts
+ExecStart=/usr/bin/bun run --env-file=/etc/momas/momas.env src/server.ts
 
 Restart=always
 RestartSec=5
