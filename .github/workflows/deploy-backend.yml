@@ -131,12 +131,12 @@ jobs:
             cd "$BACKEND_DIR"
             bun install --production --frozen-lockfile
 
-            sudo install -m 0644 "$BACKEND_DIR/deploy/momas-backend.service" /etc/systemd/system/momas-backend.service
-            sudo systemctl daemon-reload
-            sudo systemctl restart momas-backend
+            sudo -n install -m 0644 "$BACKEND_DIR/deploy/momas-backend.service" /etc/systemd/system/momas-backend.service
+            sudo -n systemctl daemon-reload
+            sudo -n systemctl restart momas-backend
             sleep 3
 
             # Always print diagnostics before failing when startup is unhealthy.
-            sudo systemctl --no-pager status momas-backend | head -20 || true
-            sudo journalctl -u momas-backend -n 40 --no-pager || true
-            sudo systemctl is-active --quiet momas-backend
+            sudo -n systemctl --no-pager status momas-backend | head -20 || true
+            sudo -n journalctl -u momas-backend -n 40 --no-pager || true
+            sudo -n systemctl is-active --quiet momas-backend
