@@ -60,6 +60,19 @@ export function sosPopup(alert) {
   `;
 }
 
+// Quadcopter glyph, drawn nose-up so rotating by heading_deg points it
+// in the direction of travel. Inherits color via currentColor.
+const DRONE_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="5" cy="5" r="3.1" opacity="0.55"/>
+  <circle cx="19" cy="5" r="3.1" opacity="0.55"/>
+  <circle cx="5" cy="19" r="3.1" opacity="0.55"/>
+  <circle cx="19" cy="19" r="3.1" opacity="0.55"/>
+  <rect x="10.9" y="5.4" width="2.2" height="13.2" rx="1.1"/>
+  <rect x="5.4" y="10.9" width="13.2" height="2.2" rx="1.1"/>
+  <circle cx="12" cy="12" r="2.6"/>
+  <path d="M12 2.2 L14 6 L10 6 Z"/>
+</svg>`;
+
 export function dronePopup(drone) {
   const online = drone.online;
   const color = online ? "#33bbff" : "#888";
@@ -279,12 +292,11 @@ export function OperationsMap({
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
       const offline = !drone.online;
       const heading = Number(drone.heading_deg);
-      // fa-location-arrow points NE (45°); offset so 0° = due north.
-      const rotation = Number.isFinite(heading) ? heading - 45 : -45;
+      const rotation = Number.isFinite(heading) ? heading : 0;
       const label = drone.name || `Drone ${drone.sysid}`;
       const icon = L.divIcon({
         className: "",
-        html: `<div class="drone-pin ${offline ? "offline" : ""}"><i class="fas fa-location-arrow" style="transform:rotate(${rotation}deg)"></i></div><div class="device-label drone ${offline ? "offline" : ""}">${escapeHtml(label)}</div>`,
+        html: `<div class="drone-pin ${offline ? "offline" : ""}"><span class="drone-glyph" style="transform:rotate(${rotation}deg)">${DRONE_SVG}</span></div><div class="device-label drone ${offline ? "offline" : ""}">${escapeHtml(label)}</div>`,
         iconSize: [28, 44],
         iconAnchor: [14, 14],
       });

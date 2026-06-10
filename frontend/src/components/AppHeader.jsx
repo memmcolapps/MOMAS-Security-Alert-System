@@ -1,6 +1,6 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, ChevronDown, LogOut, Map, Radio, ShieldAlert, UsersRound } from "lucide-react";
+import { Building2, ChevronDown, LogOut, Map, Plane, Radio, ShieldAlert, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getActiveOrganizationId, getMe, setActiveOrganizationId, setAuthToken } from "../lib/api";
 
@@ -71,6 +71,7 @@ export function AppHeader() {
         <nav className="flex items-center gap-1 text-[11px] font-bold">
           <NavItem to="/" icon={Map} label="Map" active={path === "/"} />
           <NavItem to="/devices" icon={Radio} label="Devices" active={isActive("/devices")} />
+          <NavItem to="/drones" icon={Plane} label="Drones" active={isActive("/drones")} />
           {isAdmin ? (
             <NavItem to="/admin/organizations" icon={Building2} label="Companies" active={isActive("/admin/organizations")} />
           ) : null}

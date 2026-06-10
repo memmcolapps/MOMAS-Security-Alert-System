@@ -16,6 +16,7 @@ import { AdminOrganizationDetailRoute } from "./routes/AdminOrganizationDetailRo
 import { AdminOrganizationsRoute } from "./routes/AdminOrganizationsRoute";
 import { ChangePasswordRoute } from "./routes/ChangePasswordRoute";
 import { DevicesRoute } from "./routes/DevicesRoute";
+import { DronesRoute } from "./routes/DronesRoute";
 import { LoginRoute } from "./routes/LoginRoute";
 import { OrgAdminRoute } from "./routes/OrgAdminRoute";
 import { OperationsRoute } from "./routes/OperationsRoute";
@@ -113,6 +114,13 @@ const devicesRoute = createRoute({
   component: DevicesRoute,
 });
 
+const dronesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/drones",
+  beforeLoad: requireReadySession,
+  component: DronesRoute,
+});
+
 const changePasswordRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/change-password",
@@ -150,6 +158,7 @@ const orgAdminRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   devicesRoute,
+  dronesRoute,
   loginRoute,
   changePasswordRoute,
   adminOrganizationsRoute,
