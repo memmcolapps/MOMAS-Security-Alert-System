@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { cors } from "hono/cors";
 import { serveStatic } from "hono/bun";
 import { env } from "./config";
 import * as db from "./db";
@@ -30,27 +29,22 @@ function isDatabaseQuotaError(error: unknown) {
   return /exceeded the data transfer quota/i.test(message);
 }
 
-app.use(
-  "*",
-  cors({
-    origin: "*",
-    allowHeaders: ["Content-Type", "Authorization", "X-Organization-Id"],
-    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  }),
-);
-
 app.onError((error, c) => {
   if (isDatabaseQuotaError(error)) {
     console.error("[DB] Data transfer quota exceeded:", error.message);
     return c.json(
       {
-        error: "Database transfer quota exceeded. Upgrade the database plan or temporarily disable background scrape jobs.",
+        error:
+          "Database transfer quota exceeded. Upgrade the database plan or temporarily disable background scrape jobs.",
       },
       503,
     );
   }
 
-  console.error("[API] Unhandled error:", error instanceof Error ? error.message : error);
+  console.error(
+    "[API] Unhandled error:",
+    error instanceof Error ? error.message : error,
+  );
   return c.json({ error: "Internal server error" }, 500);
 });
 
@@ -96,7 +90,10 @@ app.get("*", serveStatic({ path: "../frontend/dist/index.html" }));
 
 const running = { hot: false, warm: false, cold: false };
 
-async function runTier(name: keyof typeof running, jobs: Array<{ label: string; fn: () => Promise<unknown> }>) {
+async function runTier(
+  name: keyof typeof running,
+  jobs: Array<{ label: string; fn: () => Promise<unknown> }>,
+) {
   if (running[name]) {
     console.log(`[Scrape:${name}] already running - skip`);
     return;
@@ -113,7 +110,9 @@ async function runTier(name: keyof typeof running, jobs: Array<{ label: string; 
         );
       }
     });
-    console.log(`[Scrape:${name}] cycle done in ${((Date.now() - start) / 1000).toFixed(1)}s`);
+    console.log(
+      `[Scrape:${name}] cycle done in ${((Date.now() - start) / 1000).toFixed(1)}s`,
+    );
   } finally {
     running[name] = false;
   }
@@ -166,11 +165,16 @@ try {
     console.log(`[Jobs] WARM tier (GDELT) every ${WARM_INTERVAL_SEC}s`);
 
     setInterval(runCold, COLD_INTERVAL_MIN * 60 * 1000);
-    console.log(`[Jobs] COLD tier (HAPI+ReliefWeb+NewsAPI+Guardian) every ${COLD_INTERVAL_MIN} min`);
+    console.log(
+      `[Jobs] COLD tier (HAPI+ReliefWeb+NewsAPI+Guardian) every ${COLD_INTERVAL_MIN} min`,
+    );
   } else {
     console.log("[Jobs] Scrape jobs disabled by START_SCRAPE_JOBS=false");
   }
 } catch (error) {
-  console.error("[Startup] Failed to initialise backend:", error instanceof Error ? error.message : error);
+  console.error(
+    "[Startup] Failed to initialise backend:",
+    error instanceof Error ? error.message : error,
+  );
   process.exit(1);
 }
