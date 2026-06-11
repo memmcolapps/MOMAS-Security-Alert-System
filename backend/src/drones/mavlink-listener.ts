@@ -288,6 +288,11 @@ function handleMessage(msg: DecodedMessage) {
 // ── Public API ────────────────────────────────────────────────────────────────
 const parsers = new Map<unknown, FrameParser>();
 let server: unknown = null;
+let udpServer: unknown = null;
+
+// UDP "peers": one parser per source addr:port, pruned after inactivity.
+const udpPeers = new Map<string, { parser: FrameParser; lastSeen: number }>();
+const UDP_PEER_TTL_MS = 5 * 60 * 1000;
 
 /** Latest state for every tracked drone, with freshness flags. */
 export function getDronePositions() {
@@ -310,11 +315,18 @@ export function getDronePositions() {
 }
 
 export function getListenerStatus() {
+  const now = Date.now();
+  let activeUdpPeers = 0;
+  for (const peer of udpPeers.values()) {
+    if (now - peer.lastSeen <= UDP_PEER_TTL_MS) activeUdpPeers++;
+  }
   return {
     enabled: env.MAVLINK_ENABLE,
     host: env.MAVLINK_TCP_HOST,
     port: env.MAVLINK_TCP_PORT,
-    connections: parsers.size,
+    connections: parsers.size + activeUdpPeers,
+    tcp_connections: parsers.size,
+    udp_peers: activeUdpPeers,
     drones_tracked: drones.size,
   };
 }
@@ -354,4 +366,48 @@ export function startMavlinkListener() {
       error instanceof Error ? error.message : error,
     );
   }
+
+  // UDP on the same port — Mission Planner's default forwarding mode is UDP,
+  // so accept both transports. Each source addr:port gets its own parser.
+  void (async () => {
+    try {
+      udpServer = await (Bun as any).udpSocket({
+        hostname: env.MAVLINK_TCP_HOST,
+        port: env.MAVLINK_TCP_PORT,
+        socket: {
+          data(_socket: any, data: Uint8Array, _port: number, addr: string) {
+            const key = `${addr}:${_port}`;
+            let peer = udpPeers.get(key);
+            if (!peer) {
+              peer = { parser: new FrameParser(handleMessage), lastSeen: 0 };
+              udpPeers.set(key, peer);
+              console.log(`[MAVLink] UDP stream started from ${key}`);
+            }
+            peer.lastSeen = Date.now();
+            peer.parser.push(new Uint8Array(data));
+          },
+          error(_socket: any, error: Error) {
+            console.error("[MAVLink] UDP socket error:", error?.message || error);
+          },
+        },
+      });
+      console.log(`[MAVLink] UDP listener on ${env.MAVLINK_TCP_HOST}:${env.MAVLINK_TCP_PORT}`);
+    } catch (error) {
+      console.error(
+        "[MAVLink] failed to start UDP listener:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  })();
+
+  // Prune idle UDP peers so the map doesn't leak parsers.
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, peer] of udpPeers) {
+      if (now - peer.lastSeen > UDP_PEER_TTL_MS) {
+        udpPeers.delete(key);
+        console.log(`[MAVLink] UDP stream from ${key} idle — dropped`);
+      }
+    }
+  }, 60_000);
 }
