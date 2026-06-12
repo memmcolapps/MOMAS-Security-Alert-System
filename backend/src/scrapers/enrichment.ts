@@ -29,6 +29,77 @@ function cleanText(text) {
     .trim();
 }
 
+// Jina returns the whole page as markdown: header block, nav, "READ ALSO"
+// inserts, related-story links, share buttons. Off-article headlines carry
+// place names that hijack the geocoder (a Kogi campus killing got mapped to
+// Kano via a "fire razes market in Kano" sidebar link), so strip everything
+// that isn't prose before it reaches the classifier or the description.
+const JUNK_LINE_RE = new RegExp(
+  [
+    "^(read|see)\\s+also\\b",
+    "^related(\\s+(news|stories|posts|articles))?\\s*:?\\s*$",
+    "^(share|follow)\\s+(this|us)\\b",
+    "^advertisement\\b",
+    "^sponsored\\b",
+    "^subscribe\\b",
+    "^sign\\s+up\\b",
+    "^copyright\\b",
+    "all\\s+rights\\s+reserved",
+    "^tags?\\s*:",
+    "^more\\s+(stories|news)\\b",
+    "^trending\\b",
+    "^(home|news|politics|sports|entertainment)(\\s*[|>»]\\s*\\w+)+$",
+  ].join("|"),
+  "i",
+);
+
+function stripReaderJunk(text) {
+  let body = String(text || "");
+
+  // Drop Jina's metadata header ("Title: …\nURL Source: …\nMarkdown Content:")
+  const marker = body.indexOf("Markdown Content:");
+  if (marker !== -1) body = body.slice(marker + "Markdown Content:".length);
+
+  const kept = [];
+  for (const line of body.split("\n")) {
+    const t = line.trim();
+    if (!t) {
+      kept.push(line);
+      continue;
+    }
+    if (JUNK_LINE_RE.test(t)) continue;
+    // Link-only / image-only lines are nav or related-story widgets
+    if (/^\!?\[[^\]]*\]\([^)]*\)$/.test(t)) continue;
+    if (/^(\*|-|\d+\.)\s*\!?\[[^\]]*\]\([^)]*\)\s*$/.test(t)) continue;
+    kept.push(line);
+  }
+
+  return (
+    kept
+      .join("\n")
+      // unwrap remaining inline markdown links/images to their text
+      .replace(/\!\[[^\]]*\]\([^)]*\)/g, " ")
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+  );
+}
+
+/**
+ * Cut text to at most `max` chars, preferring a sentence boundary so
+ * descriptions don't end mid-word.
+ */
+function truncateAtSentence(text, max) {
+  const t = (text || "").trim();
+  if (t.length <= max) return t;
+  const slice = t.slice(0, max);
+  const cut = Math.max(
+    slice.lastIndexOf(". "),
+    slice.lastIndexOf("! "),
+    slice.lastIndexOf("? "),
+    slice.lastIndexOf(".\n"),
+  );
+  return cut > max * 0.5 ? slice.slice(0, cut + 1).trim() : slice;
+}
+
 function isLikelyAggregatorUrl(url) {
   try {
     const host = new URL(url).hostname.replace(/^www\./, "");
@@ -59,7 +130,7 @@ async function fetchFullText(url) {
       },
       maxRedirects: 5,
     });
-    const text = cleanText(String(resp.data || ""));
+    const text = cleanText(stripReaderJunk(String(resp.data || "")));
     const usable = text.length >= FULLTEXT_MIN_CHARS ? text.slice(0, FULLTEXT_MAX_CHARS) : "";
     cache.set(key, usable);
     return usable;
@@ -118,4 +189,4 @@ async function enrichCandidates(candidates, concurrency = 3) {
   return results;
 }
 
-export { enrichCandidate, enrichCandidates, fetchFullText };
+export { enrichCandidate, enrichCandidates, fetchFullText, truncateAtSentence };

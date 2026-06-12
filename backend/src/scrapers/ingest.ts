@@ -27,8 +27,17 @@ async function persistIncident({
 }) {
   const { type, fatalities, victims, severity } = result;
   const fullText = `${title} ${description}`;
-  const geo = geocode(fullText) || geocode(title);
-  const state = geo?.state || extractState(fullText) || null;
+
+  // Prefer the classifier's extracted location; body text can contain
+  // off-article place names that hijack first-match geocoding.
+  const locText = result.location_text || "";
+  let geo = geocode(locText);
+  let state = geo?.state || extractState(locText) || null;
+  if (!geo) {
+    const fallback = geocode(fullText) || geocode(title);
+    if (fallback && (!state || fallback.state === state)) geo = fallback;
+    state = state || fallback?.state || extractState(fullText) || null;
+  }
 
   const fp = buildFingerprint({ date, state, type, title, description });
   const matches = await db.findMatchingIncidents({ date, state, type });

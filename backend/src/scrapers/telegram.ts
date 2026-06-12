@@ -177,8 +177,18 @@ async function scrapeChannel(channel) {
 
     const { type, fatalities, victims, severity } = result;
     const fullText = `${title} ${description}`;
-    const geo = geocode(fullText) || geocode(title);
-    const state = geo?.state || extractState(fullText) || null;
+
+    // Prefer the classifier's extracted location over first-match geocoding
+    // of the raw text (see rss.ts for rationale).
+    const locText = result.location_text || "";
+    let geo = geocode(locText);
+    let state = geo?.state || extractState(locText) || null;
+    if (!geo) {
+      const fallback = geocode(fullText) || geocode(title);
+      if (fallback && (!state || fallback.state === state)) geo = fallback;
+      state = state || fallback?.state || extractState(fullText) || null;
+    }
+
     const date = msg.ts.toISOString().slice(0, 10);
 
     // Fingerprint dedup against same-day, same-state, same-type

@@ -7,7 +7,7 @@ import {
   fingerprintsMatch,
 } from "../classifier/fingerprint";
 import * as db from "../db";
-import { enrichCandidates } from "./enrichment";
+import { enrichCandidates, truncateAtSentence } from "./enrichment";
 
 const parser = new Parser({
   customFields: { item: ["media:content", "content:encoded"] },
@@ -102,9 +102,22 @@ const REQUEST_HEADERS = {
   "Accept-Language": "en-NG,en;q=0.9",
 };
 
-function stripHtml(str) {
+function decodeEntities(str) {
   return (str || "")
-    .replace(/<[^>]*>/g, " ")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(parseInt(n, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&amp;/gi, "&");
+}
+
+function stripHtml(str) {
+  return decodeEntities(
+    (str || "").replace(/<[^>]*>/g, " "),
+  )
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -299,8 +312,20 @@ async function scrapeFeed(feed) {
     const { type, fatalities, victims, severity } = result;
     const sourceUrl = newItems[i].resolvedUrl || item.link || null;
     const fullText = `${title} ${description}`;
-    const geo = geocode(fullText) || geocode(title);
-    const state = geo?.state || extractState(fullText) || null;
+
+    // Trust the classifier's extracted location first — the raw text can
+    // contain off-article place names (related-story links etc.) that
+    // hijack first-match geocoding. A body-text match only wins when it
+    // doesn't contradict the state named in location_text.
+    const locText = result.location_text || "";
+    let geo = geocode(locText);
+    let state = geo?.state || extractState(locText) || null;
+    if (!geo) {
+      const fallback = geocode(fullText) || geocode(title);
+      if (fallback && (!state || fallback.state === state)) geo = fallback;
+      state = state || fallback?.state || extractState(fullText) || null;
+    }
+
     const date = chooseIncidentDate(result.date, item.isoDate, item.pubDate);
 
     // Check for existing incident with matching fingerprint
@@ -341,7 +366,7 @@ async function scrapeFeed(feed) {
       const inserted = await db.insertIncident({
         external_id,
         title: title.slice(0, 500),
-        description: description.slice(0, 2000),
+        description: truncateAtSentence(description, 2000),
         date,
         location: geo
           ? geo.matched.charAt(0).toUpperCase() + geo.matched.slice(1)
