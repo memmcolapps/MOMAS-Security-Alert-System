@@ -1,4 +1,5 @@
 import axios from "axios";
+import { isGoogleNewsUrl, resolveGoogleNewsUrl } from "./gnews";
 
 const JINA_READER_BASE = process.env.JINA_READER_BASE || "https://r.jina.ai";
 const FULLTEXT_TIMEOUT_MS = parseInt(
@@ -77,9 +78,17 @@ function bestDescription({ description = "", contentText = "" }) {
 }
 
 async function enrichCandidate(candidate) {
-  const contentText = candidate.contentText || (await fetchFullText(candidate.source_url || candidate.url));
+  const rawUrl = candidate.source_url || candidate.url || candidate.item?.link;
+  // Google News RSS links point at a redirect page; resolve to the publisher
+  // URL so the full-text fetch (and the stored incident link) are usable.
+  const resolvedUrl = isGoogleNewsUrl(rawUrl)
+    ? await resolveGoogleNewsUrl(rawUrl)
+    : null;
+  const contentText =
+    candidate.contentText || (await fetchFullText(resolvedUrl || rawUrl));
   return {
     ...candidate,
+    resolvedUrl,
     contentText,
     description: bestDescription({
       description: candidate.description,

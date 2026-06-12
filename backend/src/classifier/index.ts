@@ -20,10 +20,22 @@ const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = process.env.GROQ_MODEL || "meta-llama/llama-4-scout-17b-16e-instruct";
 const GROQ_TIMEOUT_MS = parseInt(process.env.GROQ_TIMEOUT_MS || "30000", 10);
 const GROQ_MAX_RETRIES = parseInt(process.env.GROQ_MAX_RETRIES || "5", 10);
-// 15s interval ≈ 4 calls/min. With ~1.5K tokens/batch this stays under the
-// 6K TPM cap on llama-3.1-8b-instant while leaving RPM headroom.
+// 3s interval ≈ 20 calls/min. llama-4-scout's free tier allows 30 RPM /
+// 30K TPM, so ~1.5K-token batches leave plenty of headroom. Slots are
+// tracked per model, so the verify pass draws from its own quota bucket.
 const GROQ_MIN_INTERVAL_MS = parseInt(
-  process.env.GROQ_MIN_INTERVAL_MS || "15000",
+  process.env.GROQ_MIN_INTERVAL_MS || "3000",
+  10,
+);
+// Second-opinion pass on positives only. Different model on purpose: Groq
+// rate limits are per-model, so verification doesn't eat the triage quota.
+const GROQ_VERIFY_MODEL =
+  process.env.GROQ_VERIFY_MODEL || "llama-3.3-70b-versatile";
+const GROQ_VERIFY_ENABLED = process.env.GROQ_VERIFY_ENABLED !== "false";
+// Reject incidents whose extracted event date predates publication by more
+// than this many days — they're retrospectives, not fresh incidents.
+const MAX_EVENT_AGE_DAYS = parseInt(
+  process.env.CLASSIFIER_MAX_EVENT_AGE_DAYS || "3",
   10,
 );
 const GROQ_BATCH_SIZE = Math.max(
@@ -132,7 +144,9 @@ const ClassificationSchema = z.object({
   summary: z.string().nullable().optional(),
 });
 
-const SYSTEM_PROMPT = `You are a security analyst. Your job: identify events that require a NEW security intervention.
+const buildSystemPrompt = (today) => `You are a security analyst. Your job: identify events that require a NEW security intervention.
+
+Today's date is ${today}. Items may include a "Published:" line with the article's publication date — judge freshness against it.
 
 CRITICAL: You must distinguish between the VIOLENCE itself and everything that follows it (rescues, arrests, trials, condemnations, investigations). Only the violence is a new incident.
 
@@ -156,6 +170,7 @@ Set is_security_incident=false for everything else:
 - Political reactions/condemnations ("X condemns Y", "X calls for investigation")
 - Court/legal proceedings about past violence (bail, arraignment, trial, sentencing)
 - Retrospective/cumulative reports ("X killed since 2020", "toll rises this year")
+- Old events resurfacing: violence that happened more than a few days before the Published date, or that the text dates to a past month/year
 - Feature/analysis/opinion journalism
 - Road accidents, disease outbreaks, economics, appointments, weather
 
@@ -164,7 +179,7 @@ bombing | kidnapping | massacre | banditry | herder_clash | terrorism | armed_at
 
 STEP 4 — EXTRACT STRUCTURED INCIDENT FACTS (THIS incident only):
 - location_text: most specific location mentioned, or null
-- date: when it happened as YYYY-MM-DD if available from the text, else null
+- date: when the violence HAPPENED as YYYY-MM-DD. Resolve relative phrases ("on Thursday", "yesterday") against the Published date. null only if truly undeterminable.
 - actors: people/groups involved, or null
 - summary: one sentence describing only the new incident
 - fatalities: killed IN THIS EVENT (0 if unknown)
@@ -208,13 +223,13 @@ Now classify the real input. Respond ONLY with a JSON array. Each element must b
 {"id": <same id as input>, "reasoning": "<≤16 words>", "is_security_incident": boolean, "type": string|null, "location_text": string|null, "date": "YYYY-MM-DD"|null, "actors": string|null, "fatalities": integer, "victims": integer, "severity": string, "summary": string|null}
 Do not include any other text.`;
 
-// ── Slot-based rate limiter ────────────────────────────────────────────────
-let _nextSlot = 0;
+// ── Slot-based rate limiter (one slot chain per model) ─────────────────────
+const _nextSlotByModel = new Map();
 
-async function _enforceRateLimit() {
+async function _enforceRateLimit(model) {
   const now = Date.now();
-  const waitUntil = Math.max(_nextSlot, now);
-  _nextSlot = waitUntil + GROQ_MIN_INTERVAL_MS;
+  const waitUntil = Math.max(_nextSlotByModel.get(model) || 0, now);
+  _nextSlotByModel.set(model, waitUntil + GROQ_MIN_INTERVAL_MS);
   const waitMs = waitUntil - now;
   if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
 }
@@ -320,26 +335,35 @@ function extractJSON(text) {
   return null;
 }
 
-async function callGroqBatch(batch) {
-  const payload = batch.map((b, i) => ({
-    id: i,
-    text: `Headline: ${(b.title || "").slice(0, CLASSIFIER_MAX_TITLE_CHARS)}\n\nDescription: ${(b.description || "(none)").slice(0, CLASSIFIER_MAX_DESCRIPTION_CHARS)}`,
-  }));
+function itemText(b) {
+  const published = b.publishedAt
+    ? `\nPublished: ${String(b.publishedAt).slice(0, 10)}`
+    : "";
+  return `Headline: ${(b.title || "").slice(0, CLASSIFIER_MAX_TITLE_CHARS)}${published}\n\nDescription: ${(b.description || "(none)").slice(0, CLASSIFIER_MAX_DESCRIPTION_CHARS)}`;
+}
+
+/**
+ * One Groq chat call returning a JSON array, with per-model rate limiting
+ * and 429/503 retries. Throws on unrecoverable errors (incl. 413 — callers
+ * split the batch).
+ */
+async function callGroqArray({ model, systemPrompt, userContent, maxTokens, label }) {
+  let lastError = null;
 
   for (let attempt = 1; attempt <= GROQ_MAX_RETRIES; attempt++) {
-    await _enforceRateLimit();
+    await _enforceRateLimit(model);
 
     try {
       const resp = await axios.post(
         GROQ_API_URL,
         {
-          model: GROQ_MODEL,
+          model,
           messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content: JSON.stringify(payload) },
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userContent },
           ],
           temperature: 0,
-          max_tokens: 320 * batch.length + 200,
+          max_tokens: maxTokens,
         },
         {
           headers: {
@@ -357,20 +381,10 @@ async function callGroqBatch(batch) {
       if (!Array.isArray(parsed)) {
         throw new Error(`Expected JSON array, got: ${content.slice(0, 200)}`);
       }
-
-      const byId = new Map();
-      for (const r of parsed) {
-        if (r && Number.isInteger(r.id)) {
-          byId.set(r.id, r);
-          if (r.reasoning || r.reason) {
-            const verdict = r.is_security_incident ? `✓ ${r.type}` : "✗ skip";
-            console.log(`  [${verdict}] ${r.reasoning || r.reason}`);
-          }
-        }
-      }
-      return batch.map((_, i) => sanitize(byId.get(i)));
+      return parsed;
     } catch (err) {
       const status = err.response?.status;
+      lastError = err;
 
       if (status === 429 && attempt < GROQ_MAX_RETRIES) {
         const retryAfterMs =
@@ -381,9 +395,9 @@ async function callGroqBatch(batch) {
           60000,
         );
         console.warn(
-          `[classifier] 429 (attempt ${attempt}/${GROQ_MAX_RETRIES}), waiting ${Math.round(backoffMs / 1000)}s…`,
+          `[${label}] 429 (attempt ${attempt}/${GROQ_MAX_RETRIES}), waiting ${Math.round(backoffMs / 1000)}s…`,
         );
-        _nextSlot = Date.now() + backoffMs;
+        _nextSlotByModel.set(model, Date.now() + backoffMs);
         await new Promise((r) => setTimeout(r, backoffMs));
         continue;
       }
@@ -394,31 +408,117 @@ async function callGroqBatch(batch) {
           30000,
         );
         console.warn(
-          `[classifier] 503 (attempt ${attempt}/${GROQ_MAX_RETRIES}), waiting ${Math.round(backoffMs / 1000)}s…`,
+          `[${label}] 503 (attempt ${attempt}/${GROQ_MAX_RETRIES}), waiting ${Math.round(backoffMs / 1000)}s…`,
         );
         await new Promise((r) => setTimeout(r, backoffMs));
         continue;
       }
 
-      if (status === 413 && batch.length > 1) {
-        const mid = Math.ceil(batch.length / 2);
-        console.warn(
-          `[classifier] Batch too large (${batch.length}); splitting into ${mid}+${batch.length - mid}.`,
-        );
-        const left = await callGroqBatch(batch.slice(0, mid));
-        const right = await callGroqBatch(batch.slice(mid));
-        return [...left, ...right];
-      }
-
-      const msg = err.response?.data?.error?.message || err.message;
-      console.warn(
-        `[classifier] Groq batch failed (${status ?? "n/a"}): ${msg}. Dropping batch.`,
-      );
-      return batch.map(() => null);
+      throw err;
     }
   }
 
-  return batch.map(() => null);
+  throw lastError || new Error(`[${label}] retries exhausted`);
+}
+
+async function callGroqBatch(batch) {
+  const payload = batch.map((b, i) => ({ id: i, text: itemText(b) }));
+
+  try {
+    const parsed = await callGroqArray({
+      model: GROQ_MODEL,
+      systemPrompt: buildSystemPrompt(new Date().toISOString().slice(0, 10)),
+      userContent: JSON.stringify(payload),
+      maxTokens: 320 * batch.length + 200,
+      label: "classifier",
+    });
+
+    const byId = new Map();
+    for (const r of parsed) {
+      if (r && Number.isInteger(r.id)) {
+        byId.set(r.id, r);
+        if (r.reasoning || r.reason) {
+          const verdict = r.is_security_incident ? `✓ ${r.type}` : "✗ skip";
+          console.log(`  [${verdict}] ${r.reasoning || r.reason}`);
+        }
+      }
+    }
+    return batch.map((_, i) => sanitize(byId.get(i)));
+  } catch (err) {
+    const status = err.response?.status;
+
+    if (status === 413 && batch.length > 1) {
+      const mid = Math.ceil(batch.length / 2);
+      console.warn(
+        `[classifier] Batch too large (${batch.length}); splitting into ${mid}+${batch.length - mid}.`,
+      );
+      const left = await callGroqBatch(batch.slice(0, mid));
+      const right = await callGroqBatch(batch.slice(mid));
+      return [...left, ...right];
+    }
+
+    const msg = err.response?.data?.error?.message || err.message;
+    console.warn(
+      `[classifier] Groq batch failed (${status ?? "n/a"}): ${msg}. Dropping batch.`,
+    );
+    return batch.map(() => null);
+  }
+}
+
+const buildVerifySystemPrompt = (today) => `You audit security-incident classifications for a Nigeria operations map. Today's date is ${today}.
+
+For each item, a fast model already flagged it as a NEW security incident. Your job is to catch its mistakes. Confirm ONLY if the text is a report of a fresh act of violence or imminent threat in NIGERIA that occurred within the last few days (judge against the Published date when present).
+
+Reject (confirmed=false) if the item is actually:
+- A rescue, arrest, surrender, or security operation about violence that already happened
+- A political reaction, condemnation, condolence, or policy debate
+- A court or legal proceeding about past violence
+- A retrospective, cumulative toll, anniversary, analysis, opinion, or explainer piece
+- Violence that happened weeks or months before the Published date
+- An event outside Nigeria
+- Not about violence at all (accidents, disease, economics, sports)
+
+Respond ONLY with a JSON array: [{"id": <input id>, "confirmed": boolean, "reason": "<≤12 words>"}]`;
+
+/**
+ * Second-opinion check on triage positives. Returns one verdict per item:
+ * {confirmed, reason} or null when verification was unavailable (fail open).
+ */
+async function callVerifyBatch(batch) {
+  const payload = batch.map((b, i) => ({ id: i, text: itemText(b) }));
+
+  try {
+    const parsed = await callGroqArray({
+      model: GROQ_VERIFY_MODEL,
+      systemPrompt: buildVerifySystemPrompt(
+        new Date().toISOString().slice(0, 10),
+      ),
+      userContent: JSON.stringify(payload),
+      maxTokens: 60 * batch.length + 100,
+      label: "verify",
+    });
+
+    const byId = new Map();
+    for (const r of parsed) {
+      if (r && Number.isInteger(r.id)) byId.set(r.id, r);
+    }
+    return batch.map((_, i) => byId.get(i) ?? null);
+  } catch (err) {
+    const status = err.response?.status;
+
+    if (status === 413 && batch.length > 1) {
+      const mid = Math.ceil(batch.length / 2);
+      const left = await callVerifyBatch(batch.slice(0, mid));
+      const right = await callVerifyBatch(batch.slice(mid));
+      return [...left, ...right];
+    }
+
+    const msg = err.response?.data?.error?.message || err.message;
+    console.warn(
+      `[verify] Batch failed (${status ?? "n/a"}): ${msg}. Keeping triage results unverified.`,
+    );
+    return batch.map(() => null);
+  }
 }
 
 const ClassifierGraphState = Annotation.Root({
@@ -449,7 +549,13 @@ function classifierPrefilterNode(state) {
       continue;
     }
 
-    toCall.push({ index: i, key, title, description });
+    toCall.push({
+      index: i,
+      key,
+      title,
+      description,
+      publishedAt: state.items[i].publishedAt || null,
+    });
   }
 
   const filteredOrCached = state.items.length - toCall.length;
@@ -501,7 +607,11 @@ async function triageExtractNode(state) {
       `[graph:${state.runId}:triage_extract] Groq batch ${batchIndex + 1}/${batches.length}: ${batch.length} item(s)`,
     );
     const batchResults = await callGroqBatch(
-      batch.map((t) => ({ title: t.title, description: t.description })),
+      batch.map((t) => ({
+        title: t.title,
+        description: t.description,
+        publishedAt: t.publishedAt,
+      })),
     );
 
     for (let j = 0; j < batch.length; j++) {
@@ -529,6 +639,71 @@ async function triageExtractNode(state) {
   };
 }
 
+async function verifyNode(state) {
+  const results = [...state.results];
+  const keyByIndex = new Map(
+    (state.toCall || []).map((t) => [t.index, t.key]),
+  );
+
+  // Only re-check positives from THIS run's LLM calls — cached positives
+  // already survived verification when they were first classified.
+  const positives = [];
+  for (let i = 0; i < results.length; i++) {
+    if (results[i]?.is_security_incident && keyByIndex.has(i))
+      positives.push(i);
+  }
+
+  if (!positives.length || !GROQ_VERIFY_ENABLED || !isGroqEnabled()) {
+    if (positives.length) {
+      console.log(
+        `[graph:${state.runId}:verify] disabled — keeping ${positives.length} unverified positive(s)`,
+      );
+    }
+    return { results };
+  }
+
+  let rejected = 0;
+  for (let s = 0; s < positives.length; s += GROQ_BATCH_SIZE) {
+    const slice = positives.slice(s, s + GROQ_BATCH_SIZE);
+    const verdicts = await callVerifyBatch(
+      slice.map((i) => ({
+        title: state.items[i]?.title || "",
+        description: state.items[i]?.description || "",
+        publishedAt: state.items[i]?.publishedAt || null,
+      })),
+    );
+
+    for (let j = 0; j < slice.length; j++) {
+      const verdict = verdicts[j];
+      // null verdict = verification unavailable; fail open and keep the triage result
+      if (!verdict || verdict.confirmed !== false) continue;
+
+      const idx = slice[j];
+      rejected++;
+      results[idx] = {
+        ...NON_INCIDENT,
+        reasoning: `verify: ${verdict.reason || "rejected by second pass"}`,
+      };
+      console.log(`  [✗ verify] ${verdict.reason || "rejected"}`);
+      const key = keyByIndex.get(idx);
+      if (key) cacheSet(key, results[idx]);
+    }
+  }
+
+  console.log(
+    `[graph:${state.runId}:verify] ${positives.length} positive(s) -> ${rejected} rejected by ${GROQ_VERIFY_MODEL}`,
+  );
+
+  return {
+    results,
+    stats: {
+      ...state.stats,
+      incidents: Math.max(0, (state.stats.incidents || 0) - rejected),
+      verifyRejected: rejected,
+    },
+  };
+}
+
 function publishGuardNode(state) {
   const results = [...state.results];
   let guardRejected = 0;
@@ -545,6 +720,18 @@ function publishGuardNode(state) {
     const geo = geocode(locationText) || geocode(text);
     const stateName = geo?.state || extractState(guardText);
 
+    // Stale-event check: only enforceable when the caller supplied a
+    // publication date (hot RSS/Telegram items). Cold backfill sources
+    // (HAPI, ReliefWeb) omit publishedAt and skip this on purpose.
+    let staleDays = null;
+    if (result.date && item.publishedAt) {
+      const eventMs = new Date(result.date).getTime();
+      const publishedMs = new Date(item.publishedAt).getTime();
+      if (Number.isFinite(eventMs) && Number.isFinite(publishedMs)) {
+        staleDays = (publishedMs - eventMs) / 86400000;
+      }
+    }
+
     let reason = null;
     if (FOLLOW_UP_RE.test(text)) {
       reason = "Follow-up story, not a fresh incident";
@@ -552,6 +739,8 @@ function publishGuardNode(state) {
       reason = "Foreign or non-Nigeria story";
     } else if (!geo && !stateName) {
       reason = "No concrete Nigerian map location";
+    } else if (staleDays !== null && staleDays > MAX_EVENT_AGE_DAYS) {
+      reason = `Event predates publication by ${Math.round(staleDays)} days`;
     }
 
     if (reason) {
@@ -583,13 +772,15 @@ function publishGuardNode(state) {
 const classifierGraph = new StateGraph(ClassifierGraphState)
   .addNode("prefilter", classifierPrefilterNode)
   .addNode("triage_extract", triageExtractNode)
+  .addNode("verify", verifyNode)
   .addNode("publish_guard", publishGuardNode)
   .addEdge(START, "prefilter")
   .addConditionalEdges("prefilter", routeAfterPrefilter, {
     triage_extract: "triage_extract",
     done: END,
   })
-  .addEdge("triage_extract", "publish_guard")
+  .addEdge("triage_extract", "verify")
+  .addEdge("verify", "publish_guard")
   .addEdge("publish_guard", END)
   .compile();
 

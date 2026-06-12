@@ -16,6 +16,10 @@ import { isNewsAPIEnabled, scrapeNewsAPI } from "./scrapers/newsapi";
 import { isReliefWebEnabled, scrapeReliefWeb } from "./scrapers/reliefweb";
 import { scrapeAll } from "./scrapers/rss";
 import { isTelegramEnabled, scrapeTelegram } from "./scrapers/telegram";
+import {
+  isTelegramMtprotoEnabled,
+  startTelegramMtproto,
+} from "./scrapers/telegram-mtproto";
 
 const app = new Hono();
 const PORT = env.PORT;
@@ -76,6 +80,7 @@ app.get("/api/health", (c) =>
     sources: {
       rss_enabled: true,
       telegram_enabled: isTelegramEnabled(),
+      telegram_mtproto_enabled: isTelegramMtprotoEnabled(),
       gdelt_enabled: isGDELTEnabled(),
       hapi_enabled: isHAPIEnabled(),
       reliefweb_enabled: isReliefWebEnabled(),
@@ -152,6 +157,13 @@ try {
 ╚══════════════════════════════════════════════╝`);
 
   startMavlinkListener();
+
+  void startTelegramMtproto().catch((error) => {
+    console.error(
+      "[TG-MTProto] Failed to start:",
+      error instanceof Error ? error.message : error,
+    );
+  });
 
   if (START_SCRAPE_JOBS) {
     void runHot();

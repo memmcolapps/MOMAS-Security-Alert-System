@@ -157,7 +157,11 @@ async function scrapeChannel(channel) {
   }
 
   const results = await classifyMany(
-    newItems.map((i) => ({ title: i.title, description: i.description })),
+    newItems.map((i) => ({
+      title: i.title,
+      description: i.description,
+      publishedAt: i.msg.ts.toISOString(),
+    })),
   );
 
   let added = 0;

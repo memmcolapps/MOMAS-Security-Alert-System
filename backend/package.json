@@ -20,6 +20,7 @@
     "hono": "^4.12.15",
     "pg": "^8.11.3",
     "rss-parser": "^3.13.0",
+    "telegram": "^2.26.22",
     "zod": "^4.3.6"
   },
   "devDependencies": {

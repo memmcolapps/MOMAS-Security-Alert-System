@@ -119,6 +119,21 @@ function parseDate(isoDate, pubDate) {
   }
 }
 
+// Prefer the classifier's extracted event date when it sits in a sane window
+// around publication (events get reported up to ~2 weeks late, never much
+// before they happen). Otherwise fall back to the feed's publication date.
+function chooseIncidentDate(eventDate, isoDate, pubDate) {
+  const published = parseDate(isoDate, pubDate);
+  if (eventDate && /^\d{4}-\d{2}-\d{2}$/.test(eventDate)) {
+    const diffDays =
+      (new Date(published).getTime() - new Date(eventDate).getTime()) /
+      86400000;
+    if (Number.isFinite(diffDays) && diffDays >= -1 && diffDays <= 14)
+      return eventDate;
+  }
+  return published;
+}
+
 function buildId(source, item) {
   const base = item.link || item.guid || item.title || "";
   return `rss:${source}:${Buffer.from(base).toString("base64").slice(0, 40)}`;
@@ -258,7 +273,11 @@ async function scrapeFeed(feed) {
     };
 
   const results = await classifyMany(
-    newItems.map((ci) => ({ title: ci.title, description: ci.description })),
+    newItems.map((ci) => ({
+      title: ci.title,
+      description: ci.description,
+      publishedAt: ci.publishedAt,
+    })),
   );
 
   let added = 0;
@@ -278,10 +297,11 @@ async function scrapeFeed(feed) {
     }
 
     const { type, fatalities, victims, severity } = result;
+    const sourceUrl = newItems[i].resolvedUrl || item.link || null;
     const fullText = `${title} ${description}`;
     const geo = geocode(fullText) || geocode(title);
     const state = geo?.state || extractState(fullText) || null;
-    const date = parseDate(item.isoDate, item.pubDate);
+    const date = chooseIncidentDate(result.date, item.isoDate, item.pubDate);
 
     // Check for existing incident with matching fingerprint
     const fp = buildFingerprint({ date, state, type, title, description });
@@ -299,7 +319,7 @@ async function scrapeFeed(feed) {
       if (fingerprintsMatch(fp, existingFp)) {
         merged = await db.mergeIntoIncident(existing.id, {
           source: feed.name,
-          source_url: item.link,
+          source_url: sourceUrl,
           fatalities,
           victims,
         });
@@ -334,7 +354,7 @@ async function scrapeFeed(feed) {
         fatalities,
         victims,
         source: feed.name,
-        source_url: item.link || null,
+        source_url: sourceUrl,
         source_type: "rss",
         verified: 0,
       });
