@@ -71,6 +71,48 @@ async function fetchIDPData(daysBack = 30) {
 // ── Direct ACLED → internal mapping (no LLM) ──────────────────────────────
 // ACLED event_type values: Battles, Violence against civilians, Explosions/Remote violence,
 // Riots, Protests, Strategic developments.
+
+// Non-violent ACLED categories. These are protest/posture records, not
+// security incidents — without this filter they fall through mapEventType's
+// default into armed_attack and flood the map (see the "demonstration in
+// Aba North" duplicates).
+const NON_VIOLENT_EVENT_RE = /demonstration|protest|strategic/i;
+
+// Stable per-event id. The old format used resource_hdx_id, which is the
+// same for every row in the dataset, so distinct events collided while
+// merged events were never remembered at all.
+function conflictExternalId(event, date) {
+  const area = (
+    event.admin2_code ||
+    event.admin2_name ||
+    event.admin1_code ||
+    event.admin1_name ||
+    "ng"
+  )
+    .toString()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-");
+  const kind = (event.event_type || "conflict")
+    .toString()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-");
+  return `hapi:${kind}:${area}:${date}`;
+}
+
+function idpExternalId(idp, date) {
+  const area = (
+    idp.admin2_code ||
+    idp.admin2_name ||
+    idp.admin1_code ||
+    idp.admin1_name ||
+    "ng"
+  )
+    .toString()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-");
+  return `hapi:idp:${area}:${date}`;
+}
+
 function mapEventType(acledType) {
   const t = (acledType || '').toLowerCase();
   if (t.includes('explos') || t.includes('remote')) return 'bombing';
@@ -129,23 +171,80 @@ async function fetchHAPI(daysBack = 30) {
   }
 
   let added = 0;
+  let skippedNonViolent = 0;
 
+  // Build candidates up front so we can skip everything already ingested in
+  // ONE query instead of fingerprint-matching all 10K rows every cycle.
+  const conflictCandidates = [];
   for (const event of conflictEvents) {
+    if (NON_VIOLENT_EVENT_RE.test(event.event_type || '')) {
+      skippedNonViolent++;
+      continue;
+    }
+
     const fatalities = Number.isFinite(event.fatalities) ? Math.max(0, event.fatalities) : 0;
     const type = mapEventType(event.event_type);
-    const severity = severityFromFatalities(fatalities, type);
-
     const location = event.admin2_name || event.admin1_name || event.location_name || 'Nigeria';
     const state = event.admin1_name || null;
-    const title = `${(event.event_type || 'conflict event').replace(/_/g, ' ')} in ${location}${state && state !== location ? ` (${state})` : ''}`;
-    const description = `${event.events || 1} conflict event(s) recorded with ${fatalities} fatalities between ${event.reference_period_start?.slice(0, 10) || 'N/A'} and ${event.reference_period_end?.slice(0, 10) || 'N/A'}`;
-
-    const geo = geocode(location) || geocode(state || '');
     const date = event.reference_period_start?.slice(0, 10) || new Date().toISOString().slice(0, 10);
 
+    conflictCandidates.push({
+      external_id: conflictExternalId(event, date),
+      title: `${(event.event_type || 'conflict event').replace(/_/g, ' ')} in ${location}${state && state !== location ? ` (${state})` : ''}`,
+      description: `${event.events || 1} conflict event(s) recorded with ${fatalities} fatalities between ${event.reference_period_start?.slice(0, 10) || 'N/A'} and ${event.reference_period_end?.slice(0, 10) || 'N/A'}`,
+      date,
+      state,
+      type,
+      fatalities,
+      severity: severityFromFatalities(fatalities, type),
+      location,
+      geo: geocode(location) || geocode(state || ''),
+    });
+  }
+
+  if (skippedNonViolent) {
+    console.log(`[HAPI] Skipped ${skippedNonViolent} non-violent event(s) (demonstrations/strategic)`);
+  }
+
+  await db.upsertSourceItems(
+    conflictCandidates.map((c) => ({
+      external_id: c.external_id,
+      source_type: 'hapi',
+      source: 'HAPI (ACLED)',
+      title: c.title,
+      description: c.description,
+      source_url: 'https://hapi.humdata.org',
+      published_at: c.date,
+      raw: null,
+    })),
+  );
+
+  const knownConflictIds = await db.existingExternalIds(
+    conflictCandidates.map((c) => c.external_id),
+  );
+  const processedConflictIds = await db.existingProcessedSourceItemIds(
+    conflictCandidates.map((c) => c.external_id),
+  );
+  const freshConflict = conflictCandidates.filter(
+    (c) =>
+      !knownConflictIds.has(c.external_id) &&
+      !processedConflictIds.has(c.external_id),
+  );
+
+  console.log(
+    `[HAPI] ${conflictCandidates.length} violent event(s), ${conflictCandidates.length - freshConflict.length} already processed, ${freshConflict.length} fresh`,
+  );
+
+  for (const c of freshConflict) {
     // Check for existing incident with matching fingerprint
-    const fp = buildFingerprint({ date, state, type, title, description });
-    const matches = await db.findMatchingIncidents({ date, state, type });
+    const fp = buildFingerprint({
+      date: c.date,
+      state: c.state,
+      type: c.type,
+      title: c.title,
+      description: c.description,
+    });
+    const matches = await db.findMatchingIncidents({ date: c.date, state: c.state, type: c.type });
 
     let merged = false;
     for (const existing of matches) {
@@ -160,11 +259,15 @@ async function fetchHAPI(daysBack = 30) {
         merged = await db.mergeIntoIncident(existing.id, {
           source: 'HAPI (ACLED)',
           source_url: 'https://hapi.humdata.org',
-          fatalities,
+          fatalities: c.fatalities,
           victims: 0,
         });
         if (merged) {
-          console.log(`[HAPI] Merged into existing incident #${existing.id}: ${title.slice(0, 60)}…`);
+          await db.markSourceItemProcessed(c.external_id, {
+            status: 'merged',
+            incident_id: existing.id,
+          });
+          console.log(`[HAPI] Merged into existing incident #${existing.id}: ${c.title.slice(0, 60)}…`);
         }
         break;
       }
@@ -172,17 +275,17 @@ async function fetchHAPI(daysBack = 30) {
 
     if (!merged) {
       const inserted = await db.insertIncident({
-        external_id: `hapi:${event.resource_hdx_id}:${event.event_type}:${date}`,
-        title: title.slice(0, 500),
-        description: description.slice(0, 2000),
-        date,
-        location: geo ? geo.matched.charAt(0).toUpperCase() + geo.matched.slice(1) : location,
-        state: geo?.state || state,
-        lat: geo?.lat ?? null,
-        lon: geo?.lon ?? null,
-        type,
-        severity,
-        fatalities,
+        external_id: c.external_id,
+        title: c.title.slice(0, 500),
+        description: c.description.slice(0, 2000),
+        date: c.date,
+        location: c.geo ? c.geo.matched.charAt(0).toUpperCase() + c.geo.matched.slice(1) : c.location,
+        state: c.geo?.state || c.state,
+        lat: c.geo?.lat ?? null,
+        lon: c.geo?.lon ?? null,
+        type: c.type,
+        severity: c.severity,
+        fatalities: c.fatalities,
         victims: 0,
         source: 'HAPI (ACLED)',
         source_url: 'https://hapi.humdata.org',
@@ -190,25 +293,73 @@ async function fetchHAPI(daysBack = 30) {
         verified: 1,
       });
       if (inserted) added++;
+      await db.markSourceItemProcessed(c.external_id, {
+        status: 'incident',
+        incident_id: inserted?.id ?? null,
+      });
     }
   }
 
+  const idpCandidates = [];
   for (const idp of idpData) {
     const population = Number.isFinite(idp.population) ? Math.max(0, idp.population) : 0;
     if (population === 0) continue;
 
     const location = idp.admin2_name || idp.admin1_name || idp.location_name || 'Nigeria';
     const state = idp.admin1_name || null;
-    const title = `${population.toLocaleString()} IDPs in ${location}${state && state !== location ? ` (${state})` : ''}`;
-    const description = `Internally displaced persons (${idp.assessment_type || 'baseline assessment'}) — reporting round ${idp.reporting_round || 'N/A'}`;
-
-    const geo = geocode(location) || geocode(state || '');
-    const severity = severityFromDisplaced(population);
     const date = idp.reference_period_start?.slice(0, 10) || new Date().toISOString().slice(0, 10);
 
+    idpCandidates.push({
+      external_id: idpExternalId(idp, date),
+      title: `${population.toLocaleString()} IDPs in ${location}${state && state !== location ? ` (${state})` : ''}`,
+      description: `Internally displaced persons (${idp.assessment_type || 'baseline assessment'}) — reporting round ${idp.reporting_round || 'N/A'}`,
+      date,
+      state,
+      population,
+      severity: severityFromDisplaced(population),
+      location,
+      geo: geocode(location) || geocode(state || ''),
+    });
+  }
+
+  await db.upsertSourceItems(
+    idpCandidates.map((c) => ({
+      external_id: c.external_id,
+      source_type: 'hapi',
+      source: 'HAPI (IOM DTM)',
+      title: c.title,
+      description: c.description,
+      source_url: 'https://hapi.humdata.org',
+      published_at: c.date,
+      raw: null,
+    })),
+  );
+
+  const knownIdpIds = await db.existingExternalIds(
+    idpCandidates.map((c) => c.external_id),
+  );
+  const processedIdpIds = await db.existingProcessedSourceItemIds(
+    idpCandidates.map((c) => c.external_id),
+  );
+  const freshIdp = idpCandidates.filter(
+    (c) =>
+      !knownIdpIds.has(c.external_id) && !processedIdpIds.has(c.external_id),
+  );
+
+  console.log(
+    `[HAPI] ${idpCandidates.length} IDP record(s), ${idpCandidates.length - freshIdp.length} already processed, ${freshIdp.length} fresh`,
+  );
+
+  for (const c of freshIdp) {
     // Check for existing incident with matching fingerprint
-    const fp = buildFingerprint({ date, state, type: 'displacement', title, description });
-    const matches = await db.findMatchingIncidents({ date, state, type: 'displacement' });
+    const fp = buildFingerprint({
+      date: c.date,
+      state: c.state,
+      type: 'displacement',
+      title: c.title,
+      description: c.description,
+    });
+    const matches = await db.findMatchingIncidents({ date: c.date, state: c.state, type: 'displacement' });
 
     let merged = false;
     for (const existing of matches) {
@@ -224,10 +375,14 @@ async function fetchHAPI(daysBack = 30) {
           source: 'HAPI (IOM DTM)',
           source_url: 'https://hapi.humdata.org',
           fatalities: 0,
-          victims: Math.min(population, 4999),
+          victims: Math.min(c.population, 4999),
         });
         if (merged) {
-          console.log(`[HAPI] Merged into existing incident #${existing.id}: ${title.slice(0, 60)}…`);
+          await db.markSourceItemProcessed(c.external_id, {
+            status: 'merged',
+            incident_id: existing.id,
+          });
+          console.log(`[HAPI] Merged into existing incident #${existing.id}: ${c.title.slice(0, 60)}…`);
         }
         break;
       }
@@ -235,24 +390,28 @@ async function fetchHAPI(daysBack = 30) {
 
     if (!merged) {
       const inserted = await db.insertIncident({
-        external_id: `hapi:idp:${idp.resource_hdx_id}:${date}`,
-        title: title.slice(0, 500),
-        description: description.slice(0, 2000),
-        date,
-        location: geo ? geo.matched.charAt(0).toUpperCase() + geo.matched.slice(1) : location,
-        state: geo?.state || state,
-        lat: geo?.lat ?? null,
-        lon: geo?.lon ?? null,
+        external_id: c.external_id,
+        title: c.title.slice(0, 500),
+        description: c.description.slice(0, 2000),
+        date: c.date,
+        location: c.geo ? c.geo.matched.charAt(0).toUpperCase() + c.geo.matched.slice(1) : c.location,
+        state: c.geo?.state || c.state,
+        lat: c.geo?.lat ?? null,
+        lon: c.geo?.lon ?? null,
         type: 'displacement',
-        severity,
+        severity: c.severity,
         fatalities: 0,
-        victims: Math.min(population, 4999),
+        victims: Math.min(c.population, 4999),
         source: 'HAPI (IOM DTM)',
         source_url: 'https://hapi.humdata.org',
         source_type: 'hapi',
         verified: 1,
       });
       if (inserted) added++;
+      await db.markSourceItemProcessed(c.external_id, {
+        status: 'incident',
+        incident_id: inserted?.id ?? null,
+      });
     }
   }
 

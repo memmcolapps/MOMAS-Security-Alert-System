@@ -20,11 +20,12 @@ const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = process.env.GROQ_MODEL || "meta-llama/llama-4-scout-17b-16e-instruct";
 const GROQ_TIMEOUT_MS = parseInt(process.env.GROQ_TIMEOUT_MS || "30000", 10);
 const GROQ_MAX_RETRIES = parseInt(process.env.GROQ_MAX_RETRIES || "5", 10);
-// 3s interval ≈ 20 calls/min. llama-4-scout's free tier allows 30 RPM /
-// 30K TPM, so ~1.5K-token batches leave plenty of headroom. Slots are
-// tracked per model, so the verify pass draws from its own quota bucket.
+// 8s interval ≈ 7 calls/min ≈ 25K TPM with the ~1.5K-token system prompt
+// plus batch items — the binding free-tier limit on llama-4-scout is
+// 30K TPM, not the 30 RPM. Slots are tracked per model, so the verify
+// pass draws from its own quota bucket.
 const GROQ_MIN_INTERVAL_MS = parseInt(
-  process.env.GROQ_MIN_INTERVAL_MS || "3000",
+  process.env.GROQ_MIN_INTERVAL_MS || "8000",
   10,
 );
 // Second-opinion pass on positives only. Different model on purpose: Groq
