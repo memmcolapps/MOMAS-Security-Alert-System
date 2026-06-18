@@ -138,6 +138,30 @@ async function init() {
 
     CREATE INDEX IF NOT EXISTS idx_drones_org ON drones(organization_id);
 
+    -- Last-known telemetry per sysid, persisted so an offline drone keeps
+    -- showing its last seen position across restarts. Keyed by sysid (not a
+    -- FK to drones) so unregistered sysids are remembered too.
+    CREATE TABLE IF NOT EXISTS drone_telemetry (
+      sysid           INTEGER PRIMARY KEY,
+      lat             DOUBLE PRECISION,
+      lon             DOUBLE PRECISION,
+      alt_m           REAL,
+      relative_alt_m  REAL,
+      heading_deg     REAL,
+      ground_speed_ms REAL,
+      satellites      INTEGER,
+      gps_fix         INTEGER,
+      armed           BOOLEAN,
+      mav_type        INTEGER,
+      system_status   INTEGER,
+      custom_mode     BIGINT,
+      battery_pct     REAL,
+      battery_voltage REAL,
+      first_seen      TIMESTAMPTZ,
+      last_seen       TIMESTAMPTZ NOT NULL,
+      updated_at      TIMESTAMPTZ DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS organizations (
       id          SERIAL PRIMARY KEY,
       name        TEXT NOT NULL,
@@ -832,6 +856,45 @@ async function deleteDrone(sysid) {
   return rowCount > 0;
 }
 
+// ── Drone telemetry (last-known position) ──────────────────────────────────────
+
+/** Persist the latest telemetry snapshot for one drone. */
+async function upsertDroneTelemetry(s) {
+  await pool.query(
+    `INSERT INTO drone_telemetry
+       (sysid, lat, lon, alt_m, relative_alt_m, heading_deg, ground_speed_ms,
+        satellites, gps_fix, armed, mav_type, system_status, custom_mode,
+        battery_pct, battery_voltage, first_seen, last_seen, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+             to_timestamp($16/1000.0), to_timestamp($17/1000.0), NOW())
+     ON CONFLICT (sysid) DO UPDATE SET
+       lat = EXCLUDED.lat, lon = EXCLUDED.lon, alt_m = EXCLUDED.alt_m,
+       relative_alt_m = EXCLUDED.relative_alt_m, heading_deg = EXCLUDED.heading_deg,
+       ground_speed_ms = EXCLUDED.ground_speed_ms, satellites = EXCLUDED.satellites,
+       gps_fix = EXCLUDED.gps_fix, armed = EXCLUDED.armed, mav_type = EXCLUDED.mav_type,
+       system_status = EXCLUDED.system_status, custom_mode = EXCLUDED.custom_mode,
+       battery_pct = EXCLUDED.battery_pct, battery_voltage = EXCLUDED.battery_voltage,
+       last_seen = EXCLUDED.last_seen, updated_at = NOW()`,
+    [
+      s.sysid, s.lat, s.lon, s.alt_m, s.relative_alt_m, s.heading_deg,
+      s.ground_speed_ms, s.satellites, s.gps_fix, s.armed, s.mav_type,
+      s.system_status, s.custom_mode, s.battery_pct, s.battery_voltage,
+      s.first_seen, s.last_seen,
+    ],
+  );
+}
+
+/** Load all persisted telemetry snapshots, with epoch-ms timestamps. */
+async function listDroneTelemetry() {
+  const { rows } = await pool.query(
+    `SELECT *,
+            (EXTRACT(EPOCH FROM first_seen) * 1000)::bigint AS first_seen_ms,
+            (EXTRACT(EPOCH FROM last_seen)  * 1000)::bigint AS last_seen_ms
+       FROM drone_telemetry`,
+  );
+  return rows;
+}
+
 // ── Organizations / users ────────────────────────────────────────────────────
 
 function slugify(value) {
@@ -1213,6 +1276,8 @@ export {
   getDrone,
   updateDroneFields,
   deleteDrone,
+  upsertDroneTelemetry,
+  listDroneTelemetry,
   getUserByEmail,
   getUserById,
   updateUserPassword,

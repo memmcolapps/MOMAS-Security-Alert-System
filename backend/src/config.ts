@@ -30,6 +30,9 @@ const envSchema = z.object({
   MAVLINK_TCP_PORT: intFromEnv(5760),
   DRONE_STALE_SEC: intFromEnv(30),
   DRONE_FORGET_SEC: intFromEnv(3600),
+  // How often live drone telemetry is flushed to the DB so a last-seen
+  // position survives restarts.
+  DRONE_PERSIST_SEC: intFromEnv(15),
   AUTH_JWT_SECRET: z.string().min(16).default("momas-dev-secret-change-me"),
   EPAIL_ADMIN_EMAIL: z.string().email().optional(),
   EPAIL_ADMIN_PASSWORD: z.string().min(8).optional(),

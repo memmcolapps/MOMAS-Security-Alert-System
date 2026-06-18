@@ -60,17 +60,11 @@ export function sosPopup(alert) {
   `;
 }
 
-// Quadcopter glyph, drawn nose-up so rotating by heading_deg points it
-// in the direction of travel. Inherits color via currentColor.
+// Plane glyph, drawn nose-up (pointing toward 0°/north) so rotating by
+// heading_deg points it in the direction of travel. Inherits color via
+// currentColor.
 const DRONE_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-  <circle cx="5" cy="5" r="3.1" opacity="0.55"/>
-  <circle cx="19" cy="5" r="3.1" opacity="0.55"/>
-  <circle cx="5" cy="19" r="3.1" opacity="0.55"/>
-  <circle cx="19" cy="19" r="3.1" opacity="0.55"/>
-  <rect x="10.9" y="5.4" width="2.2" height="13.2" rx="1.1"/>
-  <rect x="5.4" y="10.9" width="13.2" height="2.2" rx="1.1"/>
-  <circle cx="12" cy="12" r="2.6"/>
-  <path d="M12 2.2 L14 6 L10 6 Z"/>
+  <path d="M12 2 C12.9 2 13.6 3.1 13.6 5 L13.6 9.4 L21 14 L21 15.8 L13.6 13.4 L13.6 18.6 L16 20.2 L16 21.6 L12 20.6 L8 21.6 L8 20.2 L10.4 18.6 L10.4 13.4 L3 15.8 L3 14 L10.4 9.4 L10.4 5 C10.4 3.1 11.1 2 12 2 Z"/>
 </svg>`;
 
 export function dronePopup(drone) {
@@ -122,18 +116,23 @@ export function OperationsMap({
       zoomControl: false,
       maxBounds: NIGERIA_BOUNDS.pad(0.2),
       maxBoundsViscosity: 0.85,
+      maxZoom: 21,
     }).setView(NIGERIA_CENTER, 6);
 
     const baseLayers = {
       dark: L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
         attribution: "&copy; OpenStreetMap &copy; CARTO",
+        maxZoom: 21,
+        maxNativeZoom: 20,
       }),
       streets: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: "&copy; OpenStreetMap",
+        maxZoom: 21,
+        maxNativeZoom: 19,
       }),
       satellite: L.tileLayer(
-        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        { attribution: "Tiles &copy; Esri" },
+        "https://clarity.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        { attribution: "Tiles &copy; Esri Clarity", maxZoom: 21, maxNativeZoom: 19 },
       ),
     };
 

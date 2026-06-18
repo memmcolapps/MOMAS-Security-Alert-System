@@ -10,6 +10,7 @@
  * Each drone must have a unique SYSID_THISMAV in ArduPilot.
  */
 import { env } from "../config";
+import * as db from "../db";
 
 // ── MAVLink message IDs we decode ─────────────────────────────────────────────
 const MSG = {
@@ -285,6 +286,55 @@ function handleMessage(msg: DecodedMessage) {
   }
 }
 
+// ── Persistence ─────────────────────────────────────────────────────────────
+// Last-known telemetry is mirrored to the DB so an offline drone keeps its
+// last seen position across restarts.
+
+/** Load persisted telemetry into the in-memory map on startup. */
+async function hydrateFromDb() {
+  try {
+    const rows = await db.listDroneTelemetry();
+    for (const r of rows) {
+      if (drones.has(r.sysid)) continue; // a live packet already arrived
+      drones.set(r.sysid, {
+        sysid: r.sysid,
+        compid: 1,
+        lat: r.lat,
+        lon: r.lon,
+        alt_m: r.alt_m,
+        relative_alt_m: r.relative_alt_m,
+        heading_deg: r.heading_deg,
+        ground_speed_ms: r.ground_speed_ms,
+        satellites: r.satellites,
+        gps_fix: r.gps_fix,
+        armed: r.armed,
+        mav_type: r.mav_type,
+        system_status: r.system_status,
+        custom_mode: r.custom_mode == null ? null : Number(r.custom_mode),
+        battery_pct: r.battery_pct,
+        battery_voltage: r.battery_voltage,
+        first_seen: Number(r.first_seen_ms) || Number(r.last_seen_ms),
+        last_seen: Number(r.last_seen_ms),
+      });
+    }
+    if (rows.length) console.log(`[MAVLink] hydrated ${rows.length} drone(s) from DB`);
+  } catch (err: any) {
+    console.warn("[MAVLink] telemetry hydrate failed:", err?.message || err);
+  }
+}
+
+/** Persist every tracked drone's latest snapshot. */
+async function flushToDb() {
+  for (const s of drones.values()) {
+    if (s.lat == null || s.lon == null) continue; // nothing worth plotting yet
+    try {
+      await db.upsertDroneTelemetry(s);
+    } catch (err: any) {
+      console.warn(`[MAVLink] telemetry flush failed for sysid=${s.sysid}:`, err?.message || err);
+    }
+  }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 const parsers = new Map<unknown, FrameParser>();
 let server: unknown = null;
@@ -294,17 +344,16 @@ let udpServer: unknown = null;
 const udpPeers = new Map<string, { parser: FrameParser; lastSeen: number }>();
 const UDP_PEER_TTL_MS = 5 * 60 * 1000;
 
-/** Latest state for every tracked drone, with freshness flags. */
+/**
+ * Latest state for every tracked drone, with freshness flags. Drones are kept
+ * indefinitely (last-known position is persisted in drone_telemetry), so an
+ * offline drone keeps showing where it was last seen rather than vanishing.
+ */
 export function getDronePositions() {
   const now = Date.now();
   const staleMs = env.DRONE_STALE_SEC * 1000;
-  const forgetMs = env.DRONE_FORGET_SEC * 1000;
   const out: Array<DroneState & { online: boolean; age_sec: number }> = [];
-  for (const [sysid, s] of drones) {
-    if (now - s.last_seen > forgetMs) {
-      drones.delete(sysid);
-      continue;
-    }
+  for (const s of drones.values()) {
     out.push({
       ...s,
       online: now - s.last_seen <= staleMs,
@@ -337,6 +386,10 @@ export function startMavlinkListener() {
     console.log("[MAVLink] listener disabled (MAVLINK_ENABLE=false)");
     return;
   }
+  // Restore last-known positions, then mirror live state back periodically.
+  void hydrateFromDb();
+  setInterval(() => void flushToDb(), env.DRONE_PERSIST_SEC * 1000);
+
   try {
     server = (Bun as any).listen({
       hostname: env.MAVLINK_TCP_HOST,
