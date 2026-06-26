@@ -3,8 +3,9 @@ import {
   Bell,
   ChevronLeft,
   ChevronRight,
-  Crosshair,
   Download,
+  ExternalLink,
+  FileSearch,
   Pause,
   Play,
   Radio,
@@ -20,6 +21,8 @@ import { OperationsMap, devicePopup, dronePopup, incidentPopup, sosPopup } from 
 import {
   acknowledgeSos,
   getDronePositions,
+  getIncidentEvidence,
+  getIncidentReport,
   getIncidents,
   getLocations,
   getMe,
@@ -76,6 +79,17 @@ function downloadCSV(rows) {
   URL.revokeObjectURL(url);
 }
 
+async function downloadIncidentReport(incidentId) {
+  const result = await getIncidentReport(incidentId);
+  const blob = new Blob([result.markdown || ""], { type: "text/markdown;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `incident-${incidentId}-intelligence-report.md`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 export function OperationsRoute() {
   const queryClient = useQueryClient();
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
@@ -91,6 +105,7 @@ export function OperationsRoute() {
   const [activeLayers, setActiveLayers] = useState({ live: true, heat: false, devices: true, drones: true });
   const [sosSoundMuted, setSosSoundMuted] = useState(false);
   const [focusTarget, setFocusTarget] = useState(null);
+  const [selectedIncidentId, setSelectedIncidentId] = useState(null);
   const knownSosIdsRef = useRef(null);
   const ringingSosIdsRef = useRef(new Set());
   const pendingSosFocusIdsRef = useRef(new Set());
@@ -127,6 +142,12 @@ export function OperationsRoute() {
     refetchInterval: 3000,
   });
 
+  const evidenceQuery = useQuery({
+    queryKey: ["incident-evidence", selectedIncidentId],
+    queryFn: () => getIncidentEvidence(selectedIncidentId),
+    enabled: Boolean(selectedIncidentId),
+  });
+
   const scrapeMutation = useMutation({
     mutationFn: triggerScrape,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["incidents"] }),
@@ -147,6 +168,13 @@ export function OperationsRoute() {
   const locations = locationsQuery.data?.data || [];
   const sosAlerts = sosQuery.data?.alerts || [];
   const drones = dronesQuery.data?.drones || [];
+  const selectedIncident = useMemo(
+    () =>
+      evidenceQuery.data?.incident ||
+      incidents.find((incident) => Number(incident.id) === Number(selectedIncidentId)) ||
+      null,
+    [evidenceQuery.data?.incident, incidents, selectedIncidentId],
+  );
   const latestDeviceLocations = useMemo(
     () => new Map(locations.map((location) => [String(location.Uid), location])),
     [locations],
@@ -395,6 +423,7 @@ export function OperationsRoute() {
         activeLayers={activeLayers}
         basemap={basemap}
         focusTarget={focusTarget}
+        onIncidentFocus={(incident) => setSelectedIncidentId(incident.id)}
       />
 
       {liveMode ? (
@@ -522,7 +551,13 @@ export function OperationsRoute() {
             </div>
           ) : visibleIncidents.length ? (
             visibleIncidents.map((incident) => (
-              <article className="cursor-default border-b border-white/5 px-3.5 py-2.5 hover:bg-white/[0.04]" key={incident.id || `${incident.date}-${incident.title}`}>
+              <article
+                className={`cursor-pointer border-b border-white/5 px-3.5 py-2.5 hover:bg-white/[0.04] ${
+                  Number(selectedIncidentId) === Number(incident.id) ? "bg-white/[0.06]" : ""
+                }`}
+                key={incident.id || `${incident.date}-${incident.title}`}
+                onClick={() => setSelectedIncidentId(incident.id)}
+              >
                 <div className="mb-1 flex items-start gap-2">
                   <i className={`fas ${iconForType(incident.type)} mt-0.5 text-xs`} style={{ color: severityColors[incident.severity] || "#aaa" }} />
                   <h3 className="flex-1 text-[11px] font-semibold leading-snug text-neutral-200">{incident.title || incident.type || "Incident"}</h3>
@@ -530,6 +565,10 @@ export function OperationsRoute() {
                 <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-neutral-500">
                   <span>{[incident.location, incident.state].filter(Boolean).join(", ") || "Nigeria"}</span>
                   <span className="ml-auto">{relativeDate(incident.date)}</span>
+                </div>
+                <div className="mt-1 flex items-center gap-2 text-[9px] text-neutral-600">
+                  <span>{incident.evidence_count || 0} evidence</span>
+                  {incident.confidence_score ? <span>{incident.confidence_score}% confidence</span> : null}
                 </div>
                 {incident.description ? <p className="mt-1 line-clamp-2 text-[10px] leading-snug text-neutral-600">{incident.description}</p> : null}
               </article>
@@ -553,6 +592,15 @@ export function OperationsRoute() {
           </button>
         </div>
       </aside>
+
+      {selectedIncident ? (
+        <IncidentEvidenceDrawer
+          evidence={evidenceQuery.data?.evidence || []}
+          incident={selectedIncident}
+          loading={evidenceQuery.isLoading || evidenceQuery.isFetching}
+          onClose={() => setSelectedIncidentId(null)}
+        />
+      ) : null}
 
       <button
         className={`glass-panel absolute top-1/2 z-[1001] flex h-12 w-7 -translate-y-1/2 items-center justify-center rounded-l-md text-ops-red transition-[right] ${
@@ -666,5 +714,115 @@ function Metric({ value, label, green }) {
       <div className={`text-[15px] font-bold ${green ? "text-ops-green" : "text-ops-red"}`}>{value}</div>
       <div className="mt-0.5 text-[8px] uppercase tracking-wide text-neutral-500">{label}</div>
     </div>
+  );
+}
+
+function sourceLabel(item) {
+  return [item.source_type, item.source].filter(Boolean).join(" / ") || "Unknown source";
+}
+
+function shortText(value, max = 190) {
+  const text = String(value || "").trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}...`;
+}
+
+function EvidenceScore({ value }) {
+  const score = Number(value || 0);
+  const color = score >= 75 ? "text-ops-green" : score >= 55 ? "text-yellow-300" : "text-orange-300";
+  return <span className={`font-black ${color}`}>{score || "-"}%</span>;
+}
+
+function IncidentEvidenceDrawer({ incident, evidence, loading, onClose }) {
+  return (
+    <section className="glass-panel absolute bottom-3 left-3 top-16 z-[1002] flex w-[380px] max-w-[calc(100vw-32px)] flex-col rounded-lg">
+      <div className="border-b border-white/10 p-3.5">
+        <div className="mb-2 flex items-start gap-2">
+          <FileSearch size={15} className="mt-0.5 shrink-0 text-ops-red" />
+          <div className="min-w-0 flex-1">
+            <h2 className="line-clamp-2 text-xs font-bold text-neutral-100">{incident.title || "Incident evidence"}</h2>
+            <p className="mt-1 text-[10px] text-neutral-500">
+              Incident #{incident.id} · {[incident.location, incident.state].filter(Boolean).join(", ") || "Nigeria"}
+            </p>
+          </div>
+          <button className="rounded p-1 text-neutral-500 hover:text-neutral-100" onClick={onClose}>
+            <X size={14} />
+          </button>
+        </div>
+        <button
+          className="mb-3 inline-flex items-center gap-2 rounded border border-ops-line bg-red-500/10 px-3 py-1.5 text-[10px] font-bold text-ops-red hover:bg-red-500/20"
+          onClick={() => downloadIncidentReport(incident.id)}
+        >
+          <Download size={12} /> Download report
+        </button>
+
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="rounded border border-white/10 bg-black/25 p-2">
+            <div className="text-base font-black text-ops-red">{evidence.length}</div>
+            <div className="text-[8px] uppercase tracking-wide text-neutral-600">Evidence</div>
+          </div>
+          <div className="rounded border border-white/10 bg-black/25 p-2">
+            <div className="text-base"><EvidenceScore value={incident.confidence_score} /></div>
+            <div className="text-[8px] uppercase tracking-wide text-neutral-600">Confidence</div>
+          </div>
+          <div className="rounded border border-white/10 bg-black/25 p-2">
+            <div className="text-base font-black text-neutral-200">{incident.report_count || 1}</div>
+            <div className="text-[8px] uppercase tracking-wide text-neutral-600">Reports</div>
+          </div>
+        </div>
+
+        {incident.confidence_reason ? (
+          <p className="mt-3 rounded border border-white/10 bg-black/25 p-2 text-[10px] leading-relaxed text-neutral-400">
+            {incident.confidence_reason}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-3.5">
+        {loading ? (
+          <div className="flex h-24 items-center justify-center gap-2 text-xs text-neutral-500">
+            <RefreshCw size={14} className="animate-spin" /> Loading evidence...
+          </div>
+        ) : evidence.length ? (
+          evidence.map((item) => (
+            <article className="mb-3 rounded border border-white/10 bg-black/25 p-3" key={item.id}>
+              <div className="mb-1 flex items-start gap-2">
+                <span className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[9px] font-bold text-neutral-400">
+                  {item.status}
+                </span>
+                <h3 className="line-clamp-2 flex-1 text-[11px] font-bold leading-snug text-neutral-200">
+                  {item.title || "Untitled evidence"}
+                </h3>
+              </div>
+              <div className="flex items-center gap-2 text-[10px] text-neutral-500">
+                <span className="min-w-0 flex-1 truncate">{sourceLabel(item)}</span>
+                <EvidenceScore value={item.confidence_score} />
+              </div>
+              {item.confidence_reason ? (
+                <p className="mt-2 text-[10px] leading-relaxed text-neutral-500">{item.confidence_reason}</p>
+              ) : null}
+              {item.description || item.content_text ? (
+                <p className="mt-2 text-[10px] leading-relaxed text-neutral-400">
+                  {shortText(item.description || item.content_text)}
+                </p>
+              ) : null}
+              <div className="mt-2 flex items-center justify-between text-[10px] text-neutral-600">
+                <span>{item.published_at ? relativeDate(item.published_at) : "No publish date"}</span>
+                {item.source_url ? (
+                  <a className="inline-flex items-center gap-1 text-ops-red hover:text-red-300" href={item.source_url} target="_blank" rel="noreferrer">
+                    Source <ExternalLink size={11} />
+                  </a>
+                ) : null}
+              </div>
+            </article>
+          ))
+        ) : (
+          <div className="flex h-56 flex-col items-center justify-center text-center text-xs text-neutral-600">
+            <FileSearch size={28} className="mb-2" />
+            No linked evidence yet. New OSINT links will appear here.
+          </div>
+        )}
+      </div>
+    </section>
   );
 }

@@ -7,6 +7,7 @@ import dronesRouter from "./routes/drones";
 import incidentsRouter from "./routes/incidents";
 import orgRouter from "./routes/org";
 import organizationsRouter from "./routes/organizations";
+import osintRouter from "./routes/osint";
 import pocstarsRouter from "./routes/pocstars";
 import { startMavlinkListener } from "./drones/mavlink-listener";
 import { isGDELTEnabled, scrapeGDELT } from "./scrapers/gdelt";
@@ -20,6 +21,7 @@ import {
   isTelegramMtprotoEnabled,
   startTelegramMtproto,
 } from "./scrapers/telegram-mtproto";
+import { cors } from "hono/cors";
 
 const app = new Hono();
 const PORT = env.PORT;
@@ -27,6 +29,8 @@ const HOT_INTERVAL_SEC = env.SCRAPE_HOT_SEC;
 const WARM_INTERVAL_SEC = env.SCRAPE_WARM_SEC;
 const COLD_INTERVAL_MIN = env.SCRAPE_COLD_MIN;
 const START_SCRAPE_JOBS = env.START_SCRAPE_JOBS;
+
+app.use(cors());
 
 function isDatabaseQuotaError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || "");
@@ -58,6 +62,7 @@ app.route("/api/drones", dronesRouter);
 app.route("/api/auth", authRouter);
 app.route("/api/organizations", organizationsRouter);
 app.route("/api/org", orgRouter);
+app.route("/api/osint", osintRouter);
 
 app.get("/api/config", (c) =>
   c.json({

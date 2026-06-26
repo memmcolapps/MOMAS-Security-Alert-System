@@ -24,6 +24,42 @@ function jsonError(error: unknown) {
   return { error: error instanceof Error ? error.message : String(error) };
 }
 
+function evidenceLine(item: any) {
+  const source = [item.source_type, item.source].filter(Boolean).join(" / ") || "Unknown source";
+  const date = item.published_at ? new Date(item.published_at).toISOString().slice(0, 10) : "undated";
+  return `- ${source} (${date}) - ${item.title || "Untitled"}${item.source_url ? `\n  ${item.source_url}` : ""}`;
+}
+
+async function incidentReportMarkdown(incident: any) {
+  const evidence = await db.getIncidentEvidence(incident.id);
+  const refreshed = await db.refreshIncidentConfidence(incident.id);
+  const row = refreshed || incident;
+  return [
+    `# Incident Intelligence Report #${row.id}`,
+    "",
+    `**Title:** ${row.title}`,
+    `**Date:** ${row.date ? new Date(row.date).toISOString().slice(0, 10) : "Unknown"}`,
+    `**Location:** ${[row.location, row.state].filter(Boolean).join(", ") || "Nigeria"}`,
+    `**Type:** ${row.type || "Unknown"}`,
+    `**Severity:** ${row.severity || "Unknown"}`,
+    `**Impact:** ${row.fatalities || 0} killed; ${row.victims || 0} abducted/victims`,
+    `**Confidence:** ${row.confidence_score || 0}%`,
+    row.confidence_reason ? `**Confidence rationale:** ${row.confidence_reason}` : null,
+    "",
+    "## Summary",
+    row.summary || row.description || "No summary available.",
+    "",
+    "## Evidence",
+    evidence.length ? evidence.map(evidenceLine).join("\n") : "No linked evidence.",
+    "",
+    "## Source Notes",
+    evidence
+      .filter((item: any) => item.analyst_note)
+      .map((item: any) => `- ${item.analyst_note}`)
+      .join("\n") || "No analyst notes recorded.",
+  ].filter(Boolean).join("\n");
+}
+
 function sseResponse(signal: AbortSignal, clients: Set<SseClient>) {
   const stream = new TransformStream<Uint8Array>();
   const writer = stream.writable.getWriter();
@@ -165,6 +201,32 @@ router.get("/reverse-geocode", (c) => {
   const result = reverseGeocode(lat, lon);
   if (!result) return c.json({ error: "valid lat and lon are required" }, 400);
   return c.json(result);
+});
+
+router.get("/:id/evidence", async (c) => {
+  try {
+    const incident = await db.getById(c.req.param("id"));
+    if (!incident) return c.json({ error: "Not found" }, 404);
+    const evidence = await db.getIncidentEvidence(incident.id);
+    const refreshed = await db.refreshIncidentConfidence(incident.id);
+    return c.json({
+      incident: refreshed || incident,
+      evidence,
+      count: evidence.length,
+    });
+  } catch (error) {
+    return c.json(jsonError(error), 500);
+  }
+});
+
+router.get("/:id/report", async (c) => {
+  try {
+    const incident = await db.getById(c.req.param("id"));
+    if (!incident) return c.json({ error: "Not found" }, 404);
+    return c.json({ markdown: await incidentReportMarkdown(incident) });
+  } catch (error) {
+    return c.json(jsonError(error), 500);
+  }
 });
 
 router.get("/:id", async (c) => {

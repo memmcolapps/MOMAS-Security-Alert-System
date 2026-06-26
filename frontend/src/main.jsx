@@ -20,6 +20,7 @@ import { DronesRoute } from "./routes/DronesRoute";
 import { LoginRoute } from "./routes/LoginRoute";
 import { OrgAdminRoute } from "./routes/OrgAdminRoute";
 import { OperationsRoute } from "./routes/OperationsRoute";
+import { OsintRoute } from "./routes/OsintRoute";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -121,6 +122,13 @@ const dronesRoute = createRoute({
   component: DronesRoute,
 });
 
+const osintRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/osint",
+  beforeLoad: requireReadySession,
+  component: OsintRoute,
+});
+
 const changePasswordRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/change-password",
@@ -159,6 +167,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   devicesRoute,
   dronesRoute,
+  osintRoute,
   loginRoute,
   changePasswordRoute,
   adminOrganizationsRoute,

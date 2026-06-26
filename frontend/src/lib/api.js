@@ -45,7 +45,10 @@ async function request(path, options = {}) {
   }
   if (!response.ok) {
     if (response.status === 401) setAuthToken(null);
-    throw new Error(body?.error || body?.message || response.statusText);
+    const error = new Error(body?.error || body?.message || response.statusText);
+    error.status = response.status;
+    error.body = body;
+    throw error;
   }
   return body;
 }
@@ -176,6 +179,132 @@ export function getIncidents(params = {}) {
 
 export function triggerScrape() {
   return request("/api/incidents/scrape", { method: "POST", body: "{}" });
+}
+
+export function getIncidentEvidence(id) {
+  return request(`/api/incidents/${encodeURIComponent(id)}/evidence`);
+}
+
+export function getIncidentReport(id) {
+  return request(`/api/incidents/${encodeURIComponent(id)}/report`);
+}
+
+export function listOsintItems(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") query.set(key, value);
+  });
+  return request(`/api/osint/items?${query}`);
+}
+
+export function getOsintItem(id) {
+  return request(`/api/osint/items/${encodeURIComponent(id)}`);
+}
+
+export function extractOsintItem(id) {
+  return request(`/api/osint/items/${encodeURIComponent(id)}/extract`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+export function reviewOsintItem(id, payload) {
+  return request(`/api/osint/items/${encodeURIComponent(id)}/review`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function linkOsintItem(id, payload) {
+  return request(`/api/osint/items/${encodeURIComponent(id)}/link`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function promoteOsintItem(id, payload = {}) {
+  return request(`/api/osint/items/${encodeURIComponent(id)}/promote`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listOsintSources() {
+  return request("/api/osint/sources");
+}
+
+export function saveOsintSource(payload) {
+  return request("/api/osint/sources", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listOsintWatchlists() {
+  return request("/api/osint/watchlists");
+}
+
+export function saveOsintWatchlist(payload) {
+  return request("/api/osint/watchlists", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteOsintWatchlist(id) {
+  return request(`/api/osint/watchlists/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function listOsintEntities(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") query.set(key, value);
+  });
+  return request(`/api/osint/entities?${query}`);
+}
+
+export function listOsintAlerts(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") query.set(key, value);
+  });
+  return request(`/api/osint/alerts?${query}`);
+}
+
+export function updateOsintAlertStatus(id, status) {
+  return request(`/api/osint/alerts/${encodeURIComponent(id)}/status`, {
+    method: "POST",
+    body: JSON.stringify({ status }),
+  });
+}
+
+export function evaluateOsintAlerts(payload = {}) {
+  return request("/api/osint/alerts/evaluate", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getOsintSourceAnalytics() {
+  return request("/api/osint/analytics/sources");
+}
+
+export function getOsintGraph(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") query.set(key, value);
+  });
+  return request(`/api/osint/graph?${query}`);
+}
+
+export function getOsintBrief(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") query.set(key, value);
+  });
+  return request(`/api/osint/reports/brief?${query}`);
 }
 
 export function reverseGeocode(lat, lon) {

@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 import { env } from "../config";
 import { bus } from "../events";
+import { scoreEvidenceItem, scoreIncident } from "../osint/confidence";
 
 const pool = new Pool({
   connectionString:
@@ -224,9 +225,62 @@ async function init() {
       created_at      TIMESTAMPTZ DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS osint_sources (
+      id                SERIAL PRIMARY KEY,
+      name              TEXT NOT NULL,
+      source_type       TEXT NOT NULL,
+      locator           TEXT NOT NULL,
+      keywords          TEXT DEFAULT '',
+      reliability_score INTEGER DEFAULT 50,
+      cadence_minutes   INTEGER DEFAULT 30,
+      enabled           BOOLEAN DEFAULT true,
+      notes             TEXT,
+      created_at        TIMESTAMPTZ DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(source_type, locator)
+    );
+
+    CREATE TABLE IF NOT EXISTS osint_watchlists (
+      id              SERIAL PRIMARY KEY,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      name            TEXT NOT NULL,
+      query_text      TEXT NOT NULL,
+      severity        TEXT DEFAULT 'YELLOW',
+      enabled         BOOLEAN DEFAULT true,
+      created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at      TIMESTAMPTZ DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS osint_entities (
+      id             SERIAL PRIMARY KEY,
+      source_item_id INTEGER NOT NULL REFERENCES source_items(id) ON DELETE CASCADE,
+      entity_type    TEXT NOT NULL,
+      value          TEXT NOT NULL,
+      confidence     INTEGER DEFAULT 70,
+      created_at     TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(source_item_id, entity_type, value)
+    );
+
+    CREATE TABLE IF NOT EXISTS osint_alerts (
+      id             SERIAL PRIMARY KEY,
+      watchlist_id   INTEGER REFERENCES osint_watchlists(id) ON DELETE CASCADE,
+      source_item_id INTEGER REFERENCES source_items(id) ON DELETE CASCADE,
+      title          TEXT,
+      reason         TEXT,
+      status         TEXT DEFAULT 'new',
+      matched_at     TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(watchlist_id, source_item_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_memberships_user ON organization_memberships(user_id);
     CREATE INDEX IF NOT EXISTS idx_units_org ON organization_units(organization_id);
     CREATE INDEX IF NOT EXISTS idx_audit_org ON audit_logs(organization_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_osint_sources_type ON osint_sources(source_type, enabled);
+    CREATE INDEX IF NOT EXISTS idx_osint_watchlists_enabled ON osint_watchlists(enabled);
+    CREATE INDEX IF NOT EXISTS idx_osint_entities_item ON osint_entities(source_item_id);
+    CREATE INDEX IF NOT EXISTS idx_osint_entities_value ON osint_entities(entity_type, value);
+    CREATE INDEX IF NOT EXISTS idx_osint_alerts_status ON osint_alerts(status, matched_at DESC);
   `);
 
   // Add new columns if they don't exist (idempotent migration)
@@ -237,6 +291,17 @@ async function init() {
       ALTER TABLE incidents ADD COLUMN IF NOT EXISTS summary TEXT;
       ALTER TABLE incidents ADD COLUMN IF NOT EXISTS confidence_score INTEGER DEFAULT 0;
       ALTER TABLE incidents ADD COLUMN IF NOT EXISTS confidence_reason TEXT;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS analyst_note TEXT;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS confidence_score INTEGER DEFAULT 0;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS confidence_reason TEXT;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL;
+      ALTER TABLE osint_watchlists ADD COLUMN IF NOT EXISTS rule_type TEXT DEFAULT 'all_terms';
+      ALTER TABLE osint_watchlists ADD COLUMN IF NOT EXISTS min_confidence INTEGER DEFAULT 0;
+      ALTER TABLE osint_watchlists ADD COLUMN IF NOT EXISTS window_hours INTEGER DEFAULT 24;
+      ALTER TABLE osint_alerts ADD COLUMN IF NOT EXISTS score INTEGER DEFAULT 0;
+      ALTER TABLE osint_alerts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS organization_id INTEGER;
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS unit_id INTEGER;
       ALTER TABLE organization_memberships ADD COLUMN IF NOT EXISTS unit_id INTEGER;
@@ -246,6 +311,8 @@ async function init() {
       ALTER TABLE organization_units ALTER COLUMN type DROP DEFAULT;
       CREATE INDEX IF NOT EXISTS idx_devices_org ON devices(organization_id);
       CREATE INDEX IF NOT EXISTS idx_devices_unit ON devices(unit_id);
+      CREATE INDEX IF NOT EXISTS idx_source_items_created ON source_items(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_source_items_org ON source_items(organization_id);
     `);
   } catch (err) {
     console.warn("[DB] Column migration note:", err.message);
@@ -363,7 +430,7 @@ async function upsertSourceItems(items) {
 }
 
 async function markSourceItemProcessed(externalId, { status, incident_id = null, content_text = null }) {
-  await queryWithRetry(
+  const { rows } = await queryWithRetry(
     `
     UPDATE source_items
        SET status = $2::TEXT,
@@ -372,9 +439,218 @@ async function markSourceItemProcessed(externalId, { status, incident_id = null,
            processed_at = NOW(),
            updated_at = NOW()
      WHERE external_id = $1
+     RETURNING id, incident_id
   `,
     [externalId, status, incident_id, content_text],
   );
+  const row = rows[0];
+  if (row) await refreshSourceItemConfidence(row.id).catch(() => null);
+  if (row?.incident_id) await refreshIncidentConfidence(row.incident_id).catch(() => null);
+}
+
+function normalizeSourceItemStatus(status) {
+  const value = String(status || "").trim().toLowerCase().replace(/[-\s]+/g, "_");
+  if (!value || value === "all") return "all";
+  if (value === "nonincident") return "non_incident";
+  if (value === "needsreview") return "needs_review";
+  return value;
+}
+
+function addSourceItemStatusCondition(conds, vals, i, status) {
+  const normalized = normalizeSourceItemStatus(status);
+  if (!normalized || normalized === "all") return i;
+  if (normalized === "incident") {
+    conds.push(`(si.status IN ('incident', 'merged', 'linked') OR si.incident_id IS NOT NULL)`);
+    return i;
+  }
+  if (normalized === "non_incident") {
+    conds.push(`si.status IN ('non_incident', 'non-incident', 'non incident')`);
+    return i;
+  }
+  conds.push(`si.status = $${i++}`);
+  vals.push(normalized);
+  return i;
+}
+
+async function listSourceItems({
+  status,
+  source_type,
+  q,
+  limit = 100,
+  offset = 0,
+  organizationId = null,
+}: any = {}) {
+  const conds = ["1=1"];
+  const vals = [];
+  let i = 1;
+
+  if (organizationId) {
+    conds.push(`(si.organization_id IS NULL OR si.organization_id = $${i++})`);
+    vals.push(organizationId);
+  }
+  i = addSourceItemStatusCondition(conds, vals, i, status);
+  if (source_type && source_type !== "all") {
+    conds.push(`si.source_type = $${i++}`);
+    vals.push(source_type);
+  }
+  if (q) {
+    conds.push(`(
+      si.title ILIKE $${i}
+      OR si.description ILIKE $${i}
+      OR si.content_text ILIKE $${i}
+      OR si.source ILIKE $${i}
+    )`);
+    vals.push(`%${q}%`);
+    i++;
+  }
+
+  vals.push(Math.min(Number(limit) || 50, 200), Number(offset) || 0);
+  const { rows } = await queryWithRetry(
+    `
+    SELECT si.id,
+           si.external_id,
+           si.source_type,
+           si.source,
+           si.title,
+           si.description,
+           si.source_url,
+           si.published_at,
+           si.status,
+           si.incident_id,
+           si.processed_at,
+           si.created_at,
+           si.updated_at,
+           si.analyst_note,
+           si.reviewed_at,
+           si.confidence_score,
+           si.confidence_reason,
+           i.title AS incident_title,
+           i.date AS incident_date,
+           u.email AS reviewed_by_email
+      FROM source_items si
+      LEFT JOIN incidents i ON i.id = si.incident_id
+      LEFT JOIN users u ON u.id = si.reviewed_by
+     WHERE ${conds.join(" AND ")}
+     ORDER BY si.created_at DESC, si.id DESC
+     LIMIT $${i++} OFFSET $${i}
+  `,
+    vals,
+  );
+  return rows;
+}
+
+async function countSourceItems({ status, source_type, q, organizationId = null }: any = {}) {
+  const conds = ["1=1"];
+  const vals = [];
+  let i = 1;
+
+  if (organizationId) {
+    conds.push(`(si.organization_id IS NULL OR si.organization_id = $${i++})`);
+    vals.push(organizationId);
+  }
+  i = addSourceItemStatusCondition(conds, vals, i, status);
+  if (source_type && source_type !== "all") {
+    conds.push(`si.source_type = $${i++}`);
+    vals.push(source_type);
+  }
+  if (q) {
+    conds.push(`(
+      si.title ILIKE $${i}
+      OR si.description ILIKE $${i}
+      OR si.content_text ILIKE $${i}
+      OR si.source ILIKE $${i}
+    )`);
+    vals.push(`%${q}%`);
+    i++;
+  }
+
+  const { rows } = await queryWithRetry(
+    `SELECT COUNT(*)::int AS total FROM source_items si WHERE ${conds.join(" AND ")}`,
+    vals,
+  );
+  return rows[0] || { total: 0 };
+}
+
+async function getSourceItem(id, organizationId = null) {
+  const { rows } = await queryWithRetry(
+    `SELECT si.*, i.title AS incident_title, i.date AS incident_date, u.email AS reviewed_by_email
+       FROM source_items si
+       LEFT JOIN incidents i ON i.id = si.incident_id
+       LEFT JOIN users u ON u.id = si.reviewed_by
+      WHERE si.id = $1
+        AND ($2::INTEGER IS NULL OR si.organization_id IS NULL OR si.organization_id = $2)`,
+    [id, organizationId],
+  );
+  return rows[0] ?? null;
+}
+
+async function updateSourceItemReview(id, { status, analyst_note, reviewed_by, confidence_score, confidence_reason, organization_id = null }) {
+  const { rows } = await queryWithRetry(
+    `
+    UPDATE source_items
+       SET status = COALESCE($2::TEXT, status),
+           analyst_note = $3::TEXT,
+           reviewed_by = COALESCE($4::INTEGER, reviewed_by),
+           reviewed_at = NOW(),
+           confidence_score = COALESCE($5::INTEGER, confidence_score),
+           confidence_reason = COALESCE($6::TEXT, confidence_reason),
+           organization_id = COALESCE(organization_id, $7::INTEGER),
+           processed_at = CASE
+             WHEN COALESCE($2::TEXT, status) IN ('dismissed', 'linked', 'incident', 'merged', 'non_incident')
+             THEN NOW()
+             ELSE processed_at
+           END,
+           updated_at = NOW()
+     WHERE id = $1
+       AND ($7::INTEGER IS NULL OR organization_id IS NULL OR organization_id = $7)
+     RETURNING *
+  `,
+    [
+      id,
+      status || null,
+      analyst_note ?? null,
+      reviewed_by || null,
+      Number.isInteger(confidence_score) ? confidence_score : null,
+      confidence_reason || null,
+      organization_id,
+    ],
+  );
+  const row = rows[0] ?? null;
+  if (row) {
+    await refreshSourceItemConfidence(row.id).catch(() => null);
+    if (row.incident_id) await refreshIncidentConfidence(row.incident_id).catch(() => null);
+  }
+  return row;
+}
+
+async function linkSourceItemToIncident(
+  id,
+  incidentId,
+  { analyst_note, reviewed_by, organization_id = null }: any = {},
+) {
+  const { rows } = await queryWithRetry(
+    `
+    UPDATE source_items
+       SET status = 'linked',
+           incident_id = $2,
+           analyst_note = COALESCE($3::TEXT, analyst_note),
+           reviewed_by = COALESCE($4::INTEGER, reviewed_by),
+           reviewed_at = NOW(),
+           organization_id = COALESCE(organization_id, $5::INTEGER),
+           processed_at = NOW(),
+           updated_at = NOW()
+     WHERE id = $1
+       AND ($5::INTEGER IS NULL OR organization_id IS NULL OR organization_id = $5)
+     RETURNING *
+  `,
+    [id, incidentId, analyst_note ?? null, reviewed_by || null, organization_id],
+  );
+  const row = rows[0] ?? null;
+  if (row) {
+    await refreshSourceItemConfidence(row.id).catch(() => null);
+    await refreshIncidentConfidence(incidentId).catch(() => null);
+  }
+  return row;
 }
 
 async function bootstrapPlatformAdmin() {
@@ -443,9 +719,20 @@ async function getIncidents({
 
   const { rows } = await queryWithRetry(
     `
-    SELECT * FROM incidents
+    SELECT i.*,
+           COALESCE(ev.evidence_count, 0)::int AS evidence_count,
+           COALESCE(ev.source_count, 0)::int AS evidence_source_count
+      FROM incidents i
+      LEFT JOIN (
+        SELECT incident_id,
+               COUNT(*)::int AS evidence_count,
+               COUNT(DISTINCT COALESCE(source_type, '') || ':' || COALESCE(source, ''))::int AS source_count
+          FROM source_items
+         WHERE incident_id IS NOT NULL
+         GROUP BY incident_id
+      ) ev ON ev.incident_id = i.id
     WHERE ${conds.join(" AND ")}
-    ORDER BY date DESC, id DESC
+    ORDER BY i.date DESC, i.id DESC
     LIMIT $${i++} OFFSET $${i}
   `,
     vals,
@@ -502,7 +789,7 @@ async function existingProcessedSourceItemIds(ids) {
     `SELECT external_id FROM source_items
       WHERE external_id = ANY($1)
         AND processed_at IS NOT NULL
-        AND status IN ('incident', 'merged', 'non_incident')`,
+        AND status IN ('incident', 'merged', 'non_incident', 'dismissed', 'linked')`,
     [ids],
   );
   return new Set(rows.map((r) => r.external_id));
@@ -609,6 +896,421 @@ async function getById(id) {
     id,
   ]);
   return rows[0] ?? null;
+}
+
+async function getIncidentEvidence(incidentId) {
+  const { rows } = await queryWithRetry(
+    `SELECT si.*, u.email AS reviewed_by_email
+       FROM source_items si
+       LEFT JOIN users u ON u.id = si.reviewed_by
+      WHERE si.incident_id = $1
+      ORDER BY COALESCE(si.published_at, si.created_at) DESC, si.id DESC`,
+    [incidentId],
+  );
+  return rows;
+}
+
+async function refreshSourceItemConfidence(id) {
+  const item = await getSourceItem(id);
+  if (!item) return null;
+  const confidence = scoreEvidenceItem(item);
+  const { rows } = await queryWithRetry(
+    `UPDATE source_items
+        SET confidence_score = $2,
+            confidence_reason = $3,
+            updated_at = NOW()
+      WHERE id = $1
+      RETURNING *`,
+    [id, confidence.score, confidence.reason],
+  );
+  return rows[0] ?? null;
+}
+
+async function refreshIncidentConfidence(incidentId) {
+  const incident = await getById(incidentId);
+  if (!incident) return null;
+  const evidence = await getIncidentEvidence(incidentId);
+  const scoredEvidence = [];
+  for (const item of evidence) {
+    if (!Number(item.confidence_score)) {
+      scoredEvidence.push((await refreshSourceItemConfidence(item.id)) || item);
+    } else {
+      scoredEvidence.push(item);
+    }
+  }
+  const confidence = scoreIncident(incident, scoredEvidence);
+  const { rows } = await queryWithRetry(
+    `UPDATE incidents
+        SET confidence_score = $2,
+            confidence_reason = $3,
+            updated_at = NOW()
+      WHERE id = $1
+      RETURNING *`,
+    [incidentId, confidence.score, confidence.reason],
+  );
+  return rows[0] ?? null;
+}
+
+async function listOsintSources() {
+  const { rows } = await queryWithRetry(
+    `SELECT * FROM osint_sources ORDER BY enabled DESC, source_type, name`,
+  );
+  return rows;
+}
+
+async function upsertOsintSource(p) {
+  const { rows } = await queryWithRetry(
+    `INSERT INTO osint_sources
+       (name, source_type, locator, keywords, reliability_score, cadence_minutes, enabled, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     ON CONFLICT (source_type, locator) DO UPDATE SET
+       name = EXCLUDED.name,
+       keywords = EXCLUDED.keywords,
+       reliability_score = EXCLUDED.reliability_score,
+       cadence_minutes = EXCLUDED.cadence_minutes,
+       enabled = EXCLUDED.enabled,
+       notes = EXCLUDED.notes,
+       updated_at = NOW()
+     RETURNING *`,
+    [
+      p.name,
+      p.source_type,
+      p.locator,
+      p.keywords || "",
+      Math.max(0, Math.min(100, Number(p.reliability_score ?? 50))),
+      Math.max(1, Number(p.cadence_minutes || 30)),
+      p.enabled !== false,
+      p.notes || null,
+    ],
+  );
+  return rows[0];
+}
+
+async function discoveredOsintSources() {
+  const { rows } = await queryWithRetry(
+    `SELECT source_type,
+            COALESCE(source, source_type) AS name,
+            COALESCE(source, source_type) AS locator,
+            COUNT(*)::int AS item_count,
+            MAX(created_at) AS last_seen
+       FROM source_items
+      GROUP BY source_type, COALESCE(source, source_type)
+      ORDER BY item_count DESC
+      LIMIT 100`,
+  );
+  return rows;
+}
+
+async function listWatchlists({ organizationId = null } = {}) {
+  const vals = [];
+  const conds = ["1=1"];
+  if (organizationId) {
+    vals.push(organizationId);
+    conds.push(`(organization_id = $${vals.length} OR organization_id IS NULL)`);
+  }
+  const { rows } = await queryWithRetry(
+    `SELECT * FROM osint_watchlists
+      WHERE ${conds.join(" AND ")}
+      ORDER BY enabled DESC, updated_at DESC, id DESC`,
+    vals,
+  );
+  return rows;
+}
+
+async function upsertWatchlist(p) {
+  if (p.id) {
+    const { rows } = await queryWithRetry(
+      `UPDATE osint_watchlists
+          SET name = COALESCE($2, name),
+              query_text = COALESCE($3, query_text),
+              severity = COALESCE($4, severity),
+              enabled = COALESCE($5, enabled),
+              rule_type = COALESCE($6, rule_type),
+              min_confidence = COALESCE($7, min_confidence),
+              window_hours = COALESCE($8, window_hours),
+              updated_at = NOW()
+        WHERE id = $1
+          AND ($9::INTEGER IS NULL OR organization_id = $9)
+        RETURNING *`,
+      [
+        p.id,
+        p.name || null,
+        p.query_text || null,
+        p.severity || null,
+        typeof p.enabled === "boolean" ? p.enabled : null,
+        p.rule_type || null,
+        Number.isFinite(Number(p.min_confidence)) ? Number(p.min_confidence) : null,
+        Number.isFinite(Number(p.window_hours)) ? Number(p.window_hours) : null,
+        p.organization_id || null,
+      ],
+    );
+    return rows[0] ?? null;
+  }
+  const { rows } = await queryWithRetry(
+    `INSERT INTO osint_watchlists
+       (organization_id, name, query_text, severity, enabled, created_by, rule_type, min_confidence, window_hours)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     RETURNING *`,
+    [
+      p.organization_id || null,
+      p.name,
+      p.query_text,
+      p.severity || "YELLOW",
+      p.enabled !== false,
+      p.created_by || null,
+      p.rule_type || "all_terms",
+      Math.max(0, Math.min(100, Number(p.min_confidence || 0))),
+      Math.max(1, Number(p.window_hours || 24)),
+    ],
+  );
+  return rows[0];
+}
+
+async function deleteWatchlist(id, organizationId = null) {
+  const { rowCount } = await queryWithRetry(
+    `DELETE FROM osint_watchlists
+      WHERE id = $1
+        AND ($2::INTEGER IS NULL OR organization_id = $2)`,
+    [id, organizationId],
+  );
+  return rowCount > 0;
+}
+
+async function upsertOsintEntities(sourceItemId, entities) {
+  const rows = [];
+  for (const entity of entities || []) {
+    const result = await queryWithRetry(
+      `INSERT INTO osint_entities (source_item_id, entity_type, value, confidence)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (source_item_id, entity_type, value) DO UPDATE SET
+         confidence = GREATEST(osint_entities.confidence, EXCLUDED.confidence)
+       RETURNING *`,
+      [sourceItemId, entity.entity_type, entity.value, entity.confidence || 70],
+    );
+    if (result.rows[0]) rows.push(result.rows[0]);
+  }
+  return rows;
+}
+
+async function listEntitiesForSourceItem(sourceItemId) {
+  const { rows } = await queryWithRetry(
+    `SELECT * FROM osint_entities WHERE source_item_id = $1 ORDER BY entity_type, value`,
+    [sourceItemId],
+  );
+  return rows;
+}
+
+async function listOsintEntities({ q, entity_type, limit = 100 }: any = {}) {
+  const conds = ["1=1"];
+  const vals = [];
+  let i = 1;
+  if (q) {
+    conds.push(`value ILIKE $${i++}`);
+    vals.push(`%${q}%`);
+  }
+  if (entity_type && entity_type !== "all") {
+    conds.push(`entity_type = $${i++}`);
+    vals.push(entity_type);
+  }
+  vals.push(Math.min(Number(limit) || 100, 500));
+  const { rows } = await queryWithRetry(
+    `SELECT entity_type, value, COUNT(*)::int AS mentions, MAX(created_at) AS last_seen
+       FROM osint_entities
+      WHERE ${conds.join(" AND ")}
+      GROUP BY entity_type, value
+      ORDER BY mentions DESC, last_seen DESC
+      LIMIT $${i}`,
+    vals,
+  );
+  return rows;
+}
+
+async function upsertOsintAlert({ watchlist_id, source_item_id, title, reason, score = 0 }) {
+  const { rows } = await queryWithRetry(
+    `INSERT INTO osint_alerts (watchlist_id, source_item_id, title, reason, score)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (watchlist_id, source_item_id) DO UPDATE SET
+       title = EXCLUDED.title,
+       reason = EXCLUDED.reason,
+       score = EXCLUDED.score,
+       matched_at = NOW(),
+       updated_at = NOW()
+     RETURNING *, xmax = 0 AS created`,
+    [watchlist_id, source_item_id, title || null, reason || null, score || 0],
+  );
+  return rows[0];
+}
+
+async function listOsintAlerts({ status = "new", limit = 100, organizationId = null } = {}) {
+  const vals = [];
+  const conds = ["1=1"];
+  let i = 1;
+  if (status && status !== "all") {
+    conds.push(`a.status = $${i++}`);
+    vals.push(status);
+  }
+  if (organizationId) {
+    conds.push(`w.organization_id = $${i++}`);
+    vals.push(organizationId);
+  }
+  vals.push(Math.min(Number(limit) || 100, 500));
+  const { rows } = await queryWithRetry(
+    `SELECT a.*, w.name AS watchlist_name, w.severity AS watchlist_severity,
+            si.source_type, si.source, si.source_url, si.published_at
+       FROM osint_alerts a
+       LEFT JOIN osint_watchlists w ON w.id = a.watchlist_id
+       LEFT JOIN source_items si ON si.id = a.source_item_id
+      WHERE ${conds.join(" AND ")}
+      ORDER BY a.matched_at DESC
+      LIMIT $${i}`,
+    vals,
+  );
+  return rows;
+}
+
+async function updateOsintAlertStatus(id, status, organizationId = null) {
+  const { rows } = await queryWithRetry(
+    `UPDATE osint_alerts a
+        SET status = $2,
+            updated_at = NOW()
+       FROM osint_watchlists w
+      WHERE a.id = $1
+        AND w.id = a.watchlist_id
+        AND ($3::INTEGER IS NULL OR w.organization_id = $3)
+     RETURNING a.*`,
+    [id, status, organizationId],
+  );
+  return rows[0] ?? null;
+}
+
+async function recentSourceItems({ hours = 24, limit = 500 } = {}) {
+  const { rows } = await queryWithRetry(
+    `SELECT * FROM source_items
+      WHERE created_at >= NOW() - ($1::TEXT || ' hours')::INTERVAL
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [String(Math.max(1, Number(hours || 24))), Math.min(Number(limit) || 500, 1000)],
+  );
+  return rows;
+}
+
+async function getSourceAnalytics() {
+  const { rows } = await queryWithRetry(
+    `SELECT
+       COALESCE(source_type, 'unknown') AS source_type,
+       COALESCE(source, source_type, 'unknown') AS source,
+       COUNT(*)::int AS item_count,
+       COUNT(*) FILTER (WHERE incident_id IS NOT NULL)::int AS evidence_count,
+       COUNT(*) FILTER (WHERE status IN ('incident', 'merged', 'linked'))::int AS useful_count,
+       COUNT(*) FILTER (WHERE status IN ('dismissed', 'non_incident'))::int AS rejected_count,
+       ROUND(AVG(NULLIF(confidence_score, 0)))::int AS avg_confidence,
+       MAX(created_at) AS last_seen
+     FROM source_items
+     GROUP BY COALESCE(source_type, 'unknown'), COALESCE(source, source_type, 'unknown')
+     ORDER BY useful_count DESC, item_count DESC
+     LIMIT 100`,
+  );
+  return rows;
+}
+
+async function getAdvancedSourceAnalytics() {
+  const [sources, trendsResult, alertsResult] = await Promise.all([
+    getSourceAnalytics(),
+    queryWithRetry(
+      `SELECT date_trunc('day', created_at)::date::text AS day,
+              COALESCE(source_type, 'unknown') AS source_type,
+              COUNT(*)::int AS items,
+              COUNT(*) FILTER (WHERE incident_id IS NOT NULL)::int AS evidence
+         FROM source_items
+        WHERE created_at >= NOW() - INTERVAL '30 days'
+        GROUP BY date_trunc('day', created_at)::date, COALESCE(source_type, 'unknown')
+        ORDER BY day`,
+    ),
+    queryWithRetry(
+      `SELECT COALESCE(si.source_type, 'unknown') AS source_type,
+              COALESCE(si.source, si.source_type, 'unknown') AS source,
+              COUNT(a.*)::int AS alert_count,
+              ROUND(AVG(NULLIF(a.score, 0)))::int AS avg_alert_score
+         FROM osint_alerts a
+         LEFT JOIN source_items si ON si.id = a.source_item_id
+        GROUP BY COALESCE(si.source_type, 'unknown'), COALESCE(si.source, si.source_type, 'unknown')
+        ORDER BY alert_count DESC
+        LIMIT 100`,
+    ),
+  ]);
+
+  const alertMap = new Map(
+    alertsResult.rows.map((row) => [`${row.source_type}:${row.source}`, row]),
+  );
+  const enriched = sources.map((source) => {
+    const usefulRate = Number(source.item_count) ? Math.round((Number(source.useful_count) / Number(source.item_count)) * 100) : 0;
+    const rejectionRate = Number(source.item_count) ? Math.round((Number(source.rejected_count) / Number(source.item_count)) * 100) : 0;
+    const alert: any = alertMap.get(`${source.source_type}:${source.source}`);
+    const reliabilityIndex = Math.max(
+      0,
+      Math.min(
+        100,
+        Math.round(
+          (Number(source.avg_confidence || 0) * 0.45) +
+          (usefulRate * 0.35) +
+          (Math.min(Number(source.evidence_count || 0), 20) * 1) -
+          (rejectionRate * 0.25),
+        ),
+      ),
+    );
+    return {
+      ...source,
+      useful_rate: usefulRate,
+      rejection_rate: rejectionRate,
+      alert_count: alert?.alert_count || 0,
+      avg_alert_score: alert?.avg_alert_score || 0,
+      reliability_index: reliabilityIndex,
+    };
+  });
+
+  return { sources: enriched, trends: trendsResult.rows };
+}
+
+async function getOsintGraph({ limit = 80 } = {}) {
+  const max = Math.min(Number(limit) || 80, 150);
+  const { rows } = await queryWithRetry(
+    `SELECT e.entity_type, e.value, COUNT(*)::int AS mentions,
+            ARRAY_AGG(DISTINCT COALESCE(si.source, si.source_type, 'unknown')) AS sources,
+            ARRAY_AGG(DISTINCT si.incident_id) FILTER (WHERE si.incident_id IS NOT NULL) AS incident_ids
+       FROM osint_entities e
+       JOIN source_items si ON si.id = e.source_item_id
+      GROUP BY e.entity_type, e.value
+      ORDER BY mentions DESC
+      LIMIT $1`,
+    [max],
+  );
+
+  const nodes: any[] = [];
+  const edges: any[] = [];
+  const nodeIds = new Set<string>();
+
+  function addNode(id: string, label: string, type: string, weight = 1) {
+    if (nodeIds.has(id)) return;
+    nodeIds.add(id);
+    nodes.push({ id, label, type, weight });
+  }
+
+  for (const row of rows) {
+    const entityId = `entity:${row.entity_type}:${row.value}`;
+    addNode(entityId, row.value, row.entity_type, Number(row.mentions || 1));
+    for (const source of row.sources || []) {
+      const sourceId = `source:${source}`;
+      addNode(sourceId, source, "source", 1);
+      edges.push({ source: sourceId, target: entityId, type: "mentions", weight: Number(row.mentions || 1) });
+    }
+    for (const incidentId of row.incident_ids || []) {
+      const incidentNodeId = `incident:${incidentId}`;
+      addNode(incidentNodeId, `Incident #${incidentId}`, "incident", 2);
+      edges.push({ source: entityId, target: incidentNodeId, type: "supports", weight: 1 });
+    }
+  }
+
+  return { nodes, edges };
 }
 
 // ── SOS alerts ────────────────────────────────────────────────────────────────
@@ -1257,6 +1959,11 @@ export {
   upsertSourceItem,
   upsertSourceItems,
   markSourceItemProcessed,
+  listSourceItems,
+  countSourceItems,
+  getSourceItem,
+  updateSourceItemReview,
+  linkSourceItemToIncident,
   getIncidents,
   countIncidents,
   existingExternalIds,
@@ -1265,6 +1972,25 @@ export {
   mergeIntoIncident,
   getStats,
   getById,
+  getIncidentEvidence,
+  refreshSourceItemConfidence,
+  refreshIncidentConfidence,
+  listOsintSources,
+  upsertOsintSource,
+  discoveredOsintSources,
+  listWatchlists,
+  upsertWatchlist,
+  deleteWatchlist,
+  upsertOsintEntities,
+  listEntitiesForSourceItem,
+  listOsintEntities,
+  upsertOsintAlert,
+  listOsintAlerts,
+  updateOsintAlertStatus,
+  recentSourceItems,
+  getSourceAnalytics,
+  getAdvancedSourceAnalytics,
+  getOsintGraph,
   clearAll,
   listDevices,
   upsertDevice,
