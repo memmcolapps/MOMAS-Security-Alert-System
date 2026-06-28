@@ -36,6 +36,7 @@ const envSchema = z.object({
   AUTH_JWT_SECRET: z.string().min(16).default("momas-dev-secret-change-me"),
   EPAIL_ADMIN_EMAIL: z.string().email().optional(),
   EPAIL_ADMIN_PASSWORD: z.string().min(8).optional(),
+  environment: z.enum(["local", "production"]).default("production"),
 });
 
 export const env = envSchema.parse(process.env);

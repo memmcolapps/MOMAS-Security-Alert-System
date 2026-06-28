@@ -3,10 +3,36 @@ import { z } from "zod";
 import { requireAuth, scopeForUser } from "../auth";
 import { classify } from "../classifier";
 import * as db from "../db";
-import { extractEntitiesFromText } from "../osint/entities";
+import { bus } from "../events";
+import { runWatchlistMatch, sourceText } from "../osint/matcher";
 import { persistIncident } from "../scrapers/ingest";
 
 const router = new Hono();
+
+// ── Live alert stream ───────────────────────────────────────────────────────
+// Newly created alerts are emitted on the bus by the matcher (ingest + analyst
+// paths). Each SSE client only receives alerts for its own org (or global
+// watchlists); platform admins see everything.
+type AlertSseClient = {
+  write: (chunk: string) => Promise<void>;
+  close: () => Promise<void>;
+  orgId: number | null;
+  isAdmin: boolean;
+};
+const alertClients = new Set<AlertSseClient>();
+const alertEncoder = new TextEncoder();
+
+bus.on("osint:alert", (alert: any) => {
+  const message = `event: osint_alert\ndata: ${JSON.stringify(alert)}\n\n`;
+  for (const client of alertClients) {
+    const orgMatch =
+      client.isAdmin ||
+      alert.organization_id == null ||
+      Number(alert.organization_id) === Number(client.orgId);
+    if (!orgMatch) continue;
+    void client.write(message).catch(() => alertClients.delete(client));
+  }
+});
 
 router.use("*", requireAuth);
 
@@ -58,78 +84,44 @@ router.use("*", async (c, next) => {
   await next();
 });
 
-function sourceText(item: any) {
-  return [item.description, item.content_text].filter(Boolean).join("\n\n").trim();
-}
-
 function publishedDate(item: any) {
   const value = item.published_at || item.created_at || new Date().toISOString();
   return new Date(value).toISOString().slice(0, 10);
 }
 
-function itemSearchText(item: any, entities: any[] = []) {
-  return [
-    item.title,
-    item.description,
-    item.content_text,
-    item.source,
-    item.source_type,
-    ...entities.map((entity) => entity.value),
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-}
+router.get("/events", (c) => {
+  const user = currentUser(c);
+  const stream = new TransformStream<Uint8Array>();
+  const writer = stream.writable.getWriter();
+  const client: AlertSseClient = {
+    write: (chunk) => writer.write(alertEncoder.encode(chunk)),
+    close: () => writer.close(),
+    orgId: primaryOrgId(user),
+    isAdmin: user?.platform_role === "admin",
+  };
+  alertClients.add(client);
+  void client.write(":ok\n\n");
 
-function watchlistTerms(queryText: string) {
-  return String(queryText || "")
-    .split(/[,\n]+|\s+\+\s+/)
-    .map((term) => term.trim().toLowerCase())
-    .filter(Boolean);
-}
+  const heartbeat = setInterval(() => {
+    void client.write(":heartbeat\n\n").catch(() => {});
+  }, 25_000);
 
-function watchlistMatches(watchlist: any, haystack: string, item: any) {
-  const terms = watchlistTerms(watchlist.query_text);
-  if (!terms.length) return null;
-  const sourceConfidence = Number(item.confidence_score || 0);
-  if (sourceConfidence < Number(watchlist.min_confidence || 0)) return null;
+  const cleanup = () => {
+    clearInterval(heartbeat);
+    alertClients.delete(client);
+    void client.close().catch(() => {});
+  };
+  c.req.raw.signal.addEventListener("abort", cleanup, { once: true });
 
-  const hits = terms.filter((term) => haystack.includes(term));
-  const ruleType = watchlist.rule_type || "all_terms";
-  const matched =
-    ruleType === "any_term" ? hits.length > 0 :
-    ruleType === "source" ? haystack.includes(String(item.source || "").toLowerCase()) && hits.length > 0 :
-    hits.length === terms.length;
-  if (!matched) return null;
-
-  const score = Math.min(100, Math.round((hits.length / terms.length) * 60 + Math.min(sourceConfidence, 100) * 0.4));
-  return { terms, hits, score };
-}
-
-async function extractAndMatch(item: any, organizationId: number | null = null) {
-  const text = sourceText(item) || item.title || "";
-  const extracted = extractEntitiesFromText(`${item.title || ""}\n${text}`);
-  const entities = await db.upsertOsintEntities(item.id, extracted);
-  const watchlists = await db.listWatchlists({ organizationId });
-  const haystack = itemSearchText(item, entities.length ? entities : extracted);
-  const alerts = [];
-
-  for (const watchlist of watchlists.filter((w: any) => w.enabled)) {
-    const match = watchlistMatches(watchlist, haystack, item);
-    if (!match) continue;
-    alerts.push(
-      await db.upsertOsintAlert({
-        watchlist_id: watchlist.id,
-        source_item_id: item.id,
-        title: item.title,
-        reason: `Matched ${watchlist.rule_type || "all_terms"}: ${match.hits.join(", ")}`,
-        score: match.score,
-      }),
-    );
-  }
-
-  return { entities: entities.length ? entities : extracted, alerts };
-}
+  return new Response(stream.readable, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
+});
 
 router.get("/sources", async (c) => {
   try {
@@ -221,6 +213,20 @@ router.post("/sources", async (c) => {
   try {
     const source = await db.upsertOsintSource(input);
     return c.json({ source });
+  } catch (error) {
+    return c.json(jsonError(error), 500);
+  }
+});
+
+router.delete("/sources/:id", async (c) => {
+  const denied = requireAnalyst(c);
+  if (denied) return denied;
+  const id = parse(c, idSchema, c.req.param("id"));
+  if (isResponse(id)) return id;
+  try {
+    const ok = await db.deleteOsintSource(id);
+    if (!ok) return c.json({ error: "Source not found" }, 404);
+    return c.json({ ok: true });
   } catch (error) {
     return c.json(jsonError(error), 500);
   }
@@ -347,7 +353,7 @@ router.post("/alerts/evaluate", async (c) => {
     const items = await db.recentSourceItems({ hours: maxWindow, limit: input.limit });
     const alerts = [];
     for (const item of items) {
-      const result = await extractAndMatch(item, organizationId);
+      const result = await runWatchlistMatch(item, { organizationId, watchlists });
       alerts.push(...result.alerts);
     }
     return c.json({
@@ -406,7 +412,7 @@ router.post("/items/:id/extract", async (c) => {
   try {
     const item = await db.getSourceItem(id, primaryOrgId(currentUser(c)));
     if (!item) return c.json({ error: "OSINT item not found" }, 404);
-    const result = await extractAndMatch(item, primaryOrgId(currentUser(c)));
+    const result = await runWatchlistMatch(item, { organizationId: primaryOrgId(currentUser(c)) });
     return c.json(result);
   } catch (error) {
     return c.json(jsonError(error), 500);
@@ -438,7 +444,7 @@ router.post("/items/:id/review", async (c) => {
       organization_id: primaryOrgId(user),
     });
     if (!item) return c.json({ error: "OSINT item not found" }, 404);
-    await extractAndMatch(item, primaryOrgId(user)).catch(() => null);
+    await runWatchlistMatch(item, { organizationId: primaryOrgId(user) }).catch(() => null);
 
     await db.createAuditLog({
       organization_id: primaryOrgId(user),
@@ -483,7 +489,7 @@ router.post("/items/:id/link", async (c) => {
       organization_id: primaryOrgId(user),
     });
     if (!item) return c.json({ error: "OSINT item not found" }, 404);
-    await extractAndMatch(item, primaryOrgId(user)).catch(() => null);
+    await runWatchlistMatch(item, { organizationId: primaryOrgId(user) }).catch(() => null);
 
     await db.mergeIntoIncident(incidentId, {
       source: item.source,
@@ -574,7 +580,7 @@ router.post("/items/:id/promote", async (c) => {
       confidence_reason: result.reasoning || "Promoted by analyst from OSINT inbox",
       organization_id: primaryOrgId(user),
     });
-    await extractAndMatch(reviewed, primaryOrgId(user)).catch(() => null);
+    await runWatchlistMatch(reviewed, { organizationId: primaryOrgId(user) }).catch(() => null);
 
     await db.createAuditLog({
       organization_id: primaryOrgId(user),

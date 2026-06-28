@@ -240,6 +240,12 @@ export function saveOsintSource(payload) {
   });
 }
 
+export function deleteOsintSource(id) {
+  return request(`/api/osint/sources/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
 export function listOsintWatchlists() {
   return request("/api/osint/watchlists");
 }
@@ -289,6 +295,17 @@ export function evaluateOsintAlerts(payload = {}) {
 
 export function getOsintSourceAnalytics() {
   return request("/api/osint/analytics/sources");
+}
+
+// Builds the authenticated URL for the OSINT live alert SSE stream. EventSource
+// cannot set headers, so the token and active org ride along as query params.
+export function osintEventsUrl() {
+  const query = new URLSearchParams();
+  const token = getAuthToken();
+  const org = getActiveOrganizationId();
+  if (token) query.set("access_token", token);
+  if (org) query.set("organization_id", org);
+  return `${config.apiBase}/api/osint/events?${query}`;
 }
 
 export function getOsintGraph(params = {}) {

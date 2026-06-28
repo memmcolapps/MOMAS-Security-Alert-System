@@ -2,6 +2,7 @@ import axios from "axios";
 import { geocode } from "../geocoder";
 import { buildFingerprint, fingerprintsMatch } from "../classifier/fingerprint";
 import * as db from "../db";
+import { ingestAndMatch } from "../osint/matcher";
 
 const HAPI_BASE = 'https://hapi.humdata.org/api/v2';
 const APP_NAME = process.env.HAPI_APP_NAME || 'momas-security-alert';
@@ -206,7 +207,7 @@ async function fetchHAPI(daysBack = 30) {
     console.log(`[HAPI] Skipped ${skippedNonViolent} non-violent event(s) (demonstrations/strategic)`);
   }
 
-  await db.upsertSourceItems(
+  await ingestAndMatch(
     conflictCandidates.map((c) => ({
       external_id: c.external_id,
       source_type: 'hapi',
@@ -322,7 +323,7 @@ async function fetchHAPI(daysBack = 30) {
     });
   }
 
-  await db.upsertSourceItems(
+  await ingestAndMatch(
     idpCandidates.map((c) => ({
       external_id: c.external_id,
       source_type: 'hapi',

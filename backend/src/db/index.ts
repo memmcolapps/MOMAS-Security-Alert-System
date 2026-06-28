@@ -405,7 +405,7 @@ async function upsertSourceItem(p) {
                        ELSE EXCLUDED.raw
                      END,
       updated_at   = NOW()
-    RETURNING *
+    RETURNING *, (xmax = 0) AS _inserted
   `,
     [
       p.external_id,
@@ -984,6 +984,14 @@ async function upsertOsintSource(p) {
     ],
   );
   return rows[0];
+}
+
+async function deleteOsintSource(id) {
+  const { rowCount } = await queryWithRetry(
+    `DELETE FROM osint_sources WHERE id = $1`,
+    [id],
+  );
+  return rowCount > 0;
 }
 
 async function discoveredOsintSources() {
@@ -1977,6 +1985,7 @@ export {
   refreshIncidentConfidence,
   listOsintSources,
   upsertOsintSource,
+  deleteOsintSource,
   discoveredOsintSources,
   listWatchlists,
   upsertWatchlist,

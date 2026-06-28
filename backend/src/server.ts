@@ -30,7 +30,10 @@ const WARM_INTERVAL_SEC = env.SCRAPE_WARM_SEC;
 const COLD_INTERVAL_MIN = env.SCRAPE_COLD_MIN;
 const START_SCRAPE_JOBS = env.START_SCRAPE_JOBS;
 
-app.use(cors());
+if (env.environment === "local") {
+  console.log("[Startup] Development mode enabled");
+  app.use(cors());
+}
 
 function isDatabaseQuotaError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || "");

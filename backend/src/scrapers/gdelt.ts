@@ -3,6 +3,7 @@ import { classifyMany } from "../classifier";
 import { geocode, extractState } from "../geocoder";
 import { buildFingerprint, fingerprintsMatch } from "../classifier/fingerprint";
 import * as db from "../db";
+import { ingestAndMatch } from "../osint/matcher";
 import { enrichCandidate } from "./enrichment";
 
 const GDELT_URL = 'https://api.gdeltproject.org/api/v2/doc/doc';
@@ -299,7 +300,7 @@ async function scrapeGDELT(daysBack = 7) {
     return { found: 0, added: 0 };
   }
 
-  await db.upsertSourceItems(
+  await ingestAndMatch(
     articles.map((a) => ({
       external_id: buildGDELTExternalId(a.url),
       source_type: 'gdelt',

@@ -7,6 +7,7 @@ import {
   fingerprintsMatch,
 } from "../classifier/fingerprint";
 import * as db from "../db";
+import { ingestAndMatch } from "../osint/matcher";
 import { enrichCandidates, truncateAtSentence } from "./enrichment";
 
 const parser = new Parser({
@@ -230,7 +231,7 @@ async function scrapeFeed(feed) {
     return { title, description, item, external_id, publishedAt };
   });
 
-  await db.upsertSourceItems(
+  await ingestAndMatch(
     classifyItems.map((ci) => ({
       external_id: ci.external_id,
       source_type: "rss",

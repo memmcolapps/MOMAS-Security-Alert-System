@@ -49,14 +49,16 @@ function verifyToken(token: string): TokenPayload | null {
 
 async function currentUserFromRequest(c: Context) {
   const auth = c.req.header("authorization") || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  // EventSource (used by the OSINT live alert stream) cannot set headers, so we
+  // accept the token and active org via query params as a fallback for SSE.
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : c.req.query("access_token") || "";
   if (!token) return null;
   const payload = verifyToken(token);
   if (!payload) return null;
   const user = await db.getUserById(payload.sub);
   if (!user || user.status !== "active") return null;
   const memberships = await db.getMembershipsForUser(user.id);
-  const requestedOrganizationId = Number(c.req.header("x-organization-id") || "");
+  const requestedOrganizationId = Number(c.req.header("x-organization-id") || c.req.query("organization_id") || "");
   const activeMembership =
     memberships.find((membership) => Number(membership.organization_id) === requestedOrganizationId) ||
     memberships[0] ||

@@ -3,6 +3,7 @@ import { classifyMany } from "../classifier";
 import { geocode, extractState } from "../geocoder";
 import { buildFingerprint, fingerprintsMatch } from "../classifier/fingerprint";
 import * as db from "../db";
+import { ingestAndMatch } from "../osint/matcher";
 
 const RELIEFWEB_URL = 'https://api.reliefweb.int/v2/reports';
 const APPNAME = process.env.RELIEFWEB_APPNAME || 'momas-security-alert';
@@ -135,7 +136,7 @@ async function scrapeReliefWeb(daysBack = 30) {
     };
   });
 
-  await db.upsertSourceItems(
+  await ingestAndMatch(
     reportItems.map((ri) => ({
       external_id: `reliefweb:${ri.reportId}`,
       source_type: 'reliefweb',
