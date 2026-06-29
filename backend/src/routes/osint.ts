@@ -145,9 +145,17 @@ router.get("/analytics/sources", async (c) => {
 
 router.get("/graph", async (c) => {
   try {
-    const query = parse(c, z.object({ limit: limitSchema.default(80) }), c.req.query());
+    const query = parse(c, z.object({
+      limit: limitSchema.default(80),
+      min_edge: z.coerce.number().int().min(1).max(10).default(2),
+      include_sources: z.coerce.number().int().min(0).max(1).default(0),
+    }), c.req.query());
     if (isResponse(query)) return query;
-    return c.json(await db.getOsintGraph(query));
+    return c.json(await db.getOsintGraph({
+      limit: query.limit,
+      minEdge: query.min_edge,
+      includeSources: query.include_sources === 1,
+    }));
   } catch (error) {
     return c.json(jsonError(error), 500);
   }

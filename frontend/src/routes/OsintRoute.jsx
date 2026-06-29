@@ -119,6 +119,8 @@ export function OsintRoute() {
   const [toast, setToast] = useState(null);
   const [liveAlerts, setLiveAlerts] = useState(0);
   const [streamLive, setStreamLive] = useState(false);
+  const [graphMinEdge, setGraphMinEdge] = useState(2);
+  const [graphSources, setGraphSources] = useState(false);
 
   const notify = useCallback((message, type = "info") => {
     if (message) setToast({ message: String(message), type });
@@ -171,8 +173,8 @@ export function OsintRoute() {
     enabled: tab === "analytics",
   });
   const graphQuery = useQuery({
-    queryKey: ["osint-graph"],
-    queryFn: () => getOsintGraph({ limit: 90 }),
+    queryKey: ["osint-graph", graphMinEdge, graphSources],
+    queryFn: () => getOsintGraph({ limit: 90, min_edge: graphMinEdge, include_sources: graphSources ? 1 : 0 }),
     enabled: tab === "graph",
   });
   const briefQuery = useQuery({
@@ -815,7 +817,14 @@ export function OsintRoute() {
       ) : null}
 
       {tab === "graph" ? (
-        <GraphPanel graph={graphQuery.data || { nodes: [], edges: [] }} loading={graphQuery.isLoading} />
+        <GraphPanel
+          graph={graphQuery.data || { nodes: [], edges: [] }}
+          loading={graphQuery.isLoading}
+          minEdge={graphMinEdge}
+          onMinEdge={setGraphMinEdge}
+          showSources={graphSources}
+          onToggleSources={() => setGraphSources((value) => !value)}
+        />
       ) : null}
 
       {tab === "reports" ? (
@@ -1186,7 +1195,7 @@ const GRAPH_TYPE_COLORS = {
 const graphColorFor = (type) => GRAPH_TYPE_COLORS[type] || "#a3a3a3";
 const graphNodeRadius = (node) => Math.max(3, Math.min(12, 3 + Math.sqrt(Number(node.weight) || 1)));
 
-function GraphPanel({ graph, loading }) {
+function GraphPanel({ graph, loading, minEdge, onMinEdge, showSources, onToggleSources }) {
   const rawNodes = graph.nodes || [];
   const rawEdges = graph.edges || [];
 
@@ -1199,8 +1208,10 @@ function GraphPanel({ graph, loading }) {
   const [hidden, setHidden] = useState(() => new Set());
 
   // Which entity types actually appear, in a stable order — drives filters + legend.
+  // Actors lead now that the graph is entity-centric; source (provenance overlay)
+  // trails at the end.
   const presentTypes = useMemo(() => {
-    const order = ["source", "actor", "organization", "location", "route", "impact", "incident"];
+    const order = ["actor", "organization", "location", "route", "impact", "incident", "source"];
     const seen = new Set(rawNodes.map((node) => node.type));
     return order.filter((type) => seen.has(type));
   }, [rawNodes]);
@@ -1210,7 +1221,7 @@ function GraphPanel({ graph, loading }) {
   const data = useMemo(() => {
     const nodes = rawNodes
       .filter((node) => !hidden.has(node.type))
-      .map((node) => ({ id: node.id, label: node.label, type: node.type, weight: Number(node.weight) || 1 }));
+      .map((node) => ({ id: node.id, label: node.label, type: node.type, weight: Number(node.weight) || 1, sources: node.sources || [] }));
     const visible = new Set(nodes.map((node) => node.id));
     const links = rawEdges
       .filter((edge) => visible.has(edge.source) && visible.has(edge.target))
@@ -1328,9 +1339,35 @@ function GraphPanel({ graph, loading }) {
 
   return (
     <section className="p-5">
-      <Panel title="Entity / source graph" loading={loading}>
+      <Panel title="Relationship graph" loading={loading}>
         {rawNodes.length ? (
           <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2 border-b border-white/5 pb-3">
+              <label className="flex items-center gap-1.5 text-[11px] text-neutral-400">
+                Link strength ≥
+                <select
+                  value={minEdge}
+                  onChange={(event) => onMinEdge(Number(event.target.value))}
+                  className="rounded border border-white/10 bg-black/40 px-2 py-1 text-[11px] text-neutral-200 outline-none"
+                >
+                  <option value={1}>1 shared item</option>
+                  <option value={2}>2 shared items</option>
+                  <option value={3}>3 shared items</option>
+                  <option value={4}>4 shared items</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={onToggleSources}
+                className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
+                  showSources ? "border-sky-400/40 bg-sky-400/10 text-sky-200" : "border-white/10 bg-white/[0.03] text-neutral-400 hover:text-neutral-100"
+                }`}
+              >
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: showSources ? GRAPH_TYPE_COLORS.source : "#525252" }} />
+                Source overlay
+              </button>
+              <span className="text-[10px] text-neutral-600">Edges = entities co-mentioned in the same item</span>
+            </div>
             <div className="flex flex-wrap items-center gap-2">
               <div className="relative">
                 <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-neutral-500" />
@@ -1379,6 +1416,11 @@ function GraphPanel({ graph, loading }) {
                 cooldownTicks={120}
                 onEngineStop={() => fgRef.current?.zoomToFit(400, 50)}
                 nodeRelSize={4}
+                nodeLabel={(node) => {
+                  const head = `${node.label} · ${node.type}${node.weight ? ` · ${node.weight} mention(s)` : ""}`;
+                  const prov = (node.sources || []).length ? `\nseen in: ${node.sources.slice(0, 5).join(", ")}` : "";
+                  return `${head}${prov}`;
+                }}
                 nodeCanvasObject={paintNode}
                 nodePointerAreaPaint={paintPointerArea}
                 linkColor={linkColor}
@@ -1392,7 +1434,7 @@ function GraphPanel({ graph, loading }) {
             </div>
 
             <p className="text-[11px] text-neutral-600">
-              Hover a node to trace its connections · click to pin focus · drag to reposition · scroll to zoom · toggle types above.
+              Entities linked by co-mention · hover to trace connections &amp; provenance · click to pin focus · raise link strength to keep only recurring relationships · toggle the source overlay for where a link came from.
             </p>
           </div>
         ) : (

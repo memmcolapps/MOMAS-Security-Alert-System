@@ -1279,9 +1279,19 @@ async function getAdvancedSourceAnalytics() {
   return { sources: enriched, trends: trendsResult.rows };
 }
 
-async function getOsintGraph({ limit = 80 } = {}) {
+// Entity-centric link graph. The backbone is entity↔entity *co-occurrence*
+// (two entities mentioned in the same source item are likely related), so
+// actors/orgs/locations form the structure. Incidents stay as anchors. Sources
+// are demoted to provenance — kept as an attribute on each node, and only drawn
+// as nodes when `includeSources` is set (the optional overlay).
+async function getOsintGraph({ limit = 80, minEdge = 2, includeSources = false } = {}) {
   const max = Math.min(Number(limit) || 80, 150);
-  const { rows } = await queryWithRetry(
+  const minWeight = Math.max(1, Math.min(Number(minEdge) || 2, 10));
+  const edgeCap = 400;
+
+  // Top entities by mention volume — these become the node set and bound the
+  // pairwise co-occurrence below.
+  const { rows: entityRows } = await queryWithRetry(
     `SELECT e.entity_type, e.value, COUNT(*)::int AS mentions,
             ARRAY_AGG(DISTINCT COALESCE(si.source, si.source_type, 'unknown')) AS sources,
             ARRAY_AGG(DISTINCT si.incident_id) FILTER (WHERE si.incident_id IS NOT NULL) AS incident_ids
@@ -1293,28 +1303,79 @@ async function getOsintGraph({ limit = 80 } = {}) {
     [max],
   );
 
+  // Co-occurrence pairs restricted to those same top entities. ROW(...) < ROW(...)
+  // yields each unordered pair once and excludes self-pairs; weight = number of
+  // distinct items the pair shares.
+  const { rows: pairRows } = await queryWithRetry(
+    `WITH ranked AS (
+       SELECT entity_type, value
+         FROM osint_entities
+        GROUP BY entity_type, value
+        ORDER BY COUNT(*) DESC
+        LIMIT $1
+     ),
+     kept AS (
+       SELECT e.source_item_id, e.entity_type, e.value
+         FROM osint_entities e
+         JOIN ranked r ON r.entity_type = e.entity_type AND r.value = e.value
+     )
+     SELECT a.entity_type AS a_type, a.value AS a_value,
+            b.entity_type AS b_type, b.value AS b_value,
+            COUNT(DISTINCT a.source_item_id)::int AS weight
+       FROM kept a
+       JOIN kept b
+         ON a.source_item_id = b.source_item_id
+        AND ROW(a.entity_type, a.value) < ROW(b.entity_type, b.value)
+      GROUP BY a.entity_type, a.value, b.entity_type, b.value
+     HAVING COUNT(DISTINCT a.source_item_id) >= $2
+      ORDER BY weight DESC
+      LIMIT $3`,
+    [max, minWeight, edgeCap],
+  );
+
   const nodes: any[] = [];
   const edges: any[] = [];
   const nodeIds = new Set<string>();
 
-  function addNode(id: string, label: string, type: string, weight = 1) {
+  function addNode(id: string, label: string, type: string, weight = 1, extra: any = {}) {
     if (nodeIds.has(id)) return;
     nodeIds.add(id);
-    nodes.push({ id, label, type, weight });
+    nodes.push({ id, label, type, weight, ...extra });
   }
 
-  for (const row of rows) {
-    const entityId = `entity:${row.entity_type}:${row.value}`;
-    addNode(entityId, row.value, row.entity_type, Number(row.mentions || 1));
-    for (const source of row.sources || []) {
-      const sourceId = `source:${source}`;
-      addNode(sourceId, source, "source", 1);
-      edges.push({ source: sourceId, target: entityId, type: "mentions", weight: Number(row.mentions || 1) });
-    }
+  const entityNodeId = (type: string, value: string) => `entity:${type}:${value}`;
+
+  for (const row of entityRows) {
+    const id = entityNodeId(row.entity_type, row.value);
+    addNode(id, row.value, row.entity_type, Number(row.mentions || 1), {
+      sources: row.sources || [], // provenance kept on the node, not as a hub
+    });
     for (const incidentId of row.incident_ids || []) {
       const incidentNodeId = `incident:${incidentId}`;
       addNode(incidentNodeId, `Incident #${incidentId}`, "incident", 2);
-      edges.push({ source: entityId, target: incidentNodeId, type: "supports", weight: 1 });
+      edges.push({ source: id, target: incidentNodeId, type: "supports", weight: 1 });
+    }
+  }
+
+  // Co-occurrence backbone — both endpoints are guaranteed present (drawn above).
+  for (const row of pairRows) {
+    edges.push({
+      source: entityNodeId(row.a_type, row.a_value),
+      target: entityNodeId(row.b_type, row.b_value),
+      type: "related",
+      weight: Number(row.weight || 1),
+    });
+  }
+
+  // Optional provenance overlay: re-introduce source nodes + mention edges.
+  if (includeSources) {
+    for (const row of entityRows) {
+      const id = entityNodeId(row.entity_type, row.value);
+      for (const source of row.sources || []) {
+        const sourceId = `source:${source}`;
+        addNode(sourceId, source, "source", 1);
+        edges.push({ source: sourceId, target: id, type: "mentions", weight: Number(row.mentions || 1) });
+      }
     }
   }
 
