@@ -243,6 +243,12 @@ export function OperationsRoute() {
   }, [ensureAudioContext, sosSoundMuted]);
 
   useEffect(() => {
+    // Wait for the first fetch to land before deciding what counts as "already
+    // known". This effect also runs on the very first render, when the query is
+    // still pending and `activeAlerts` is empty — seeding from that empty list
+    // made every alarm that was already open look like a brand-new arrival on
+    // each page load, siren and auto-focus included.
+    if (!alertsQuery.isSuccess) return;
     const activeIds = activeAlerts.map((alert) => String(alert.alert_key || `pocstars:${alert.sos_msg_id}`)).filter(Boolean);
     if (!knownSosIdsRef.current) {
       knownSosIdsRef.current = new Set(activeIds);
@@ -281,7 +287,7 @@ export function OperationsRoute() {
     pendingSosFocusIdsRef.current.forEach((id) => {
       if (!activeSet.has(id)) pendingSosFocusIdsRef.current.delete(id);
     });
-  }, [activeAlerts]);
+  }, [activeAlerts, alertsQuery.isSuccess]);
 
   // "Show on operations map" hands an alarm over from the alarms screen.
   useEffect(() => {

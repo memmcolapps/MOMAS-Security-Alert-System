@@ -30,13 +30,26 @@ const UPSTREAM_REJECTIONS: Record<number, string> = {
   504: "The radio network has this alarm in a different state. Refresh the alarm and try again.",
 };
 
+/**
+ * The service does not always deliver its rejection inside a 200 envelope — it
+ * has been seen returning `{code, message}` under an HTTP 403. Read the body's
+ * code whichever way it arrives, or the rejection gets misread as an auth
+ * failure and the operator is told to call an administrator about a problem
+ * they could have cleared themselves.
+ */
+function upstreamCodeOf(error: any) {
+  const fromBody = Number(error?.response?.data?.code);
+  if (Number.isFinite(fromBody) && fromBody) return fromBody;
+  return Number(error?.upstreamCode) || 0;
+}
+
 export function describeSyncFailure(error: any): SyncFailure {
   const upstreamText = String(
     error?.response?.data?.message || error?.upstreamMessage || error?.message || error || "",
   ).slice(0, 900);
   const transportCode = String(error?.code || "");
   const httpStatus = Number(error?.response?.status) || 0;
-  const upstreamCode = Number(error?.upstreamCode) || 0;
+  const upstreamCode = upstreamCodeOf(error);
   // Kept for administrators only: the code is what makes this diagnosable.
   const detail = [
     upstreamCode ? `upstream code ${upstreamCode}` : null,
@@ -61,6 +74,11 @@ export function describeSyncFailure(error: any): SyncFailure {
   }
   if (UPSTREAM_REJECTIONS[upstreamCode]) {
     return { message: UPSTREAM_REJECTIONS[upstreamCode], detail };
+  }
+  // Same rejection as 503, seen in the wild carrying no code at all. Matched on
+  // the service's own wording so it is not mistaken for an authorisation problem.
+  if (/one at a time/i.test(upstreamText)) {
+    return { message: UPSTREAM_REJECTIONS[503], detail };
   }
   if (httpStatus === 401 || httpStatus === 403) {
     return {
