@@ -1,46 +1,112 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import {
   AlertTriangle,
   CheckCircle2,
   ChevronRight,
   Clock3,
+  Map as MapIcon,
   MapPin,
+  RadioTower,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldCheck,
   Siren,
+  Undo2,
   UserRoundCheck,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { alertsEventsUrl, getAlarm, listAlarms, resolveAlarm, startAlarmResponse } from "../lib/api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlarmMiniMap } from "../components/AlarmMiniMap";
+import { alertsEventsUrl, getAlarm, listAlarms, reopenAlarm, resolveAlarm, startAlarmResponse } from "../lib/api";
 
 const FILTERS = [
   ["open", "Open"],
   ["new", "New"],
   ["in_progress", "In progress"],
-  ["sync_failed", "Sync failed"],
+  ["sync_failed", "Needs attention"],
   ["resolved", "Resolved"],
   ["all", "All"],
 ];
 
+const SORTS = [
+  ["newest", "Newest first"],
+  ["longest", "Longest open"],
+  ["oldest", "Oldest first"],
+];
+
+// The radio network is an integration detail. Everything here is phrased as
+// what happened to the alarm, never as what happened to the vendor's server.
 const EVENT_LABELS = {
-  received: "Alarm received from POCSTARS",
+  received: "Panic button pressed on radio",
+  breach: "Asset left the geofence",
+  returned: "Asset returned inside the geofence",
   response_requested: "Response requested",
   response_started: "Response started",
   resolution_requested: "Resolution requested",
   resolved: "Alarm resolved",
-  sync_failed: "POCSTARS synchronization failed",
-  breach: "Asset left the geofence",
-  returned: "Asset returned inside the geofence",
+  reopen_requested: "Reopen requested",
+  reopened: "Alarm reopened",
+  sync_failed: "Radio was not updated",
 };
 
-function alarmStatus(alert) {
-  if (alert.sync_status === "syncing") return { label: "Synchronizing", className: "border-blue-400/40 bg-blue-400/10 text-blue-300" };
-  if (alert.sync_status === "failed") return { label: "Sync failed", className: "border-red-400/50 bg-red-500/10 text-red-300" };
-  if (Number(alert.status) === 2) return { label: "Resolved", className: "border-green-400/40 bg-green-400/10 text-green-300" };
-  if (Number(alert.status) === 1) return { label: "In progress", className: "border-amber-400/40 bg-amber-400/10 text-amber-300" };
-  return { label: "New", className: "border-red-400/50 bg-red-500/10 text-red-300" };
+const LIFECYCLE = {
+  0: { label: "New", className: "border-red-400/50 bg-red-500/10 text-red-300" },
+  1: { label: "In progress", className: "border-amber-400/40 bg-amber-400/10 text-amber-300" },
+  2: { label: "Resolved", className: "border-green-400/40 bg-green-400/10 text-green-300" },
+};
+
+const ALARM_KINDS = {
+  geofence: { label: "Geofence", icon: MapPin, className: "text-sky-300" },
+  radio: { label: "Radio SOS", icon: RadioTower, className: "text-red-300" },
+};
+
+/**
+ * Lifecycle only. Whether the handset has caught up is a separate axis — mixing
+ * the two used to hide "In progress" behind a transport error.
+ */
+function lifecycle(alert) {
+  return LIFECYCLE[Number(alert?.status)] || LIFECYCLE[0];
+}
+
+function alarmKind(alert) {
+  return alert?.source === "geofence" ? ALARM_KINDS.geofence : ALARM_KINDS.radio;
+}
+
+/** A platform reference the operator can quote, with no vendor identifier in it. */
+function alarmReference(alert) {
+  if (!alert) return "—";
+  const prefix = alert.source === "geofence" ? "GEO" : "RAD";
+  return `${prefix}-${String(alert.id ?? "").padStart(5, "0")}`;
+}
+
+const SYNC_CONSEQUENCES = {
+  0: "The handset still shows this alarm as unanswered.",
+  1: "The handset still shows this alarm as active.",
+  2: "The handset still shows this alarm as closed.",
+};
+
+/**
+ * Geofence alarms are raised and closed inside this platform, so only radio
+ * alarms can fall out of step with the handset.
+ */
+function radioSync(alert) {
+  if (!alert || alert.source === "geofence") return null;
+  if (alert.sync_status === "syncing") {
+    return { state: "syncing", label: "Updating radio", message: "Sending this update to the handset…" };
+  }
+  if (alert.sync_status === "failed") {
+    return {
+      state: "failed",
+      label: "Radio not updated",
+      message: alert.last_sync_error || "The radio network did not accept the last update.",
+      // The alarm never advanced — only the push did — so the handset is still
+      // showing whatever it showed before the operator acted.
+      consequence: SYNC_CONSEQUENCES[Number(alert.status)] || SYNC_CONSEQUENCES[0],
+    };
+  }
+  return null;
 }
 
 function formatDateTime(value) {
@@ -54,15 +120,24 @@ function formatDateTime(value) {
   });
 }
 
-function elapsed(value, until = null) {
+function elapsed(value, until = null, now = Date.now()) {
   if (!value) return "—";
-  const milliseconds = Math.max(0, new Date(until || Date.now()).getTime() - new Date(value).getTime());
+  const milliseconds = Math.max(0, new Date(until || now).getTime() - new Date(value).getTime());
   const minutes = Math.floor(milliseconds / 60000);
   if (minutes < 1) return "< 1 min";
   if (minutes < 60) return `${minutes} min`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ${minutes % 60}m`;
   return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+
+/** An alarm nobody has closed gets louder the longer it sits. */
+function ageTone(alert, now) {
+  if (Number(alert.status) === 2) return "text-neutral-500";
+  const minutes = (now - new Date(alert.triggered_at).getTime()) / 60000;
+  if (minutes >= 60) return "text-red-300";
+  if (minutes >= 20) return "text-amber-300";
+  return "text-neutral-300";
 }
 
 function matchesFilter(alert, filter) {
@@ -75,19 +150,57 @@ function matchesFilter(alert, filter) {
   return true;
 }
 
+function sortAlarms(alerts, sort, now) {
+  const byTriggered = (alert) => new Date(alert.triggered_at).getTime();
+  const openFor = (alert) => (alert.resolved_at ? new Date(alert.resolved_at).getTime() : now) - byTriggered(alert);
+  const sorted = [...alerts];
+  if (sort === "oldest") return sorted.sort((a, b) => byTriggered(a) - byTriggered(b));
+  if (sort === "longest") return sorted.sort((a, b) => openFor(b) - openFor(a));
+  return sorted.sort((a, b) => byTriggered(b) - byTriggered(a));
+}
+
 function displayName(alert) {
   return alert.asset_name || alert.dev_name || alert.device_name || `Device ${alert.device_id || alert.asset_id}`;
+}
+
+function coordinates(alert) {
+  const lat = Number(alert?.location_lat);
+  const lon = Number(alert?.location_lon);
+  return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
+}
+
+/**
+ * Keeps "elapsed" honest between the 12-second refetches. Ticks only while
+ * something is still open, and at minute-display granularity rather than every
+ * second — the list can carry hundreds of rows.
+ */
+function useNow(active) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return undefined;
+    const timer = window.setInterval(() => setNow(Date.now()), 15_000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  return now;
 }
 
 export function AlarmsRoute() {
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState("open");
+  const [sort, setSort] = useState("newest");
   const [search, setSearch] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [selectedId, setSelectedId] = useState(null);
+  const [responseNote, setResponseNote] = useState("");
   const [resolutionNote, setResolutionNote] = useState("");
+  const [reopenReason, setReopenReason] = useState("");
+  const [reopening, setReopening] = useState(false);
   const [feedback, setFeedback] = useState(null);
+  const [feedConnected, setFeedConnected] = useState(false);
+  const rowRefs = useRef(new Map());
+  const drawerRef = useRef(null);
+  const closeButtonRef = useRef(null);
 
   const alarmsQuery = useQuery({
     queryKey: ["alarms", search, from, to],
@@ -101,29 +214,102 @@ export function AlarmsRoute() {
   });
 
   const alerts = useMemo(() => alarmsQuery.data?.alerts || [], [alarmsQuery.data?.alerts]);
-  const visibleAlerts = useMemo(() => alerts.filter((alert) => matchesFilter(alert, filter)), [alerts, filter]);
-  const counts = useMemo(
-    () => Object.fromEntries(FILTERS.map(([key]) => [key, alerts.filter((alert) => matchesFilter(alert, key)).length])),
-    [alerts],
+  const hasOpenAlarms = useMemo(() => alerts.some((alert) => Number(alert.status) < 2), [alerts]);
+  const now = useNow(hasOpenAlarms);
+  const visibleAlerts = useMemo(
+    () => sortAlarms(alerts.filter((alert) => matchesFilter(alert, filter)), sort, now),
+    [alerts, filter, sort, now],
   );
+  // Counted server-side over the whole matching population — a tally taken from
+  // the capped page would undercount once the archive grows past the limit.
+  const counts = alarmsQuery.data?.counts || {};
   const selected = detailQuery.data?.alert || alerts.find((alert) => String(alert.alert_key) === String(selectedId)) || null;
-  const actionsConfigured = selected?.source === "geofence" || alarmsQuery.data?.actionsConfigured !== false;
+  const sync = radioSync(selected);
+  const radioDispatchReady = selected?.source === "geofence" || alarmsQuery.data?.actionsConfigured !== false;
+  const isFiltered = Boolean(search || from || to);
+  const busy = detailQuery.isFetching && !detailQuery.data;
+
+  // Read through a ref so opening an alarm does not tear down and rebuild the
+  // live feed — that reconnect made the status light flicker on every click.
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
 
   useEffect(() => {
     const source = new window.EventSource(alertsEventsUrl());
     const refresh = () => {
       queryClient.invalidateQueries({ queryKey: ["alarms"] });
-      if (selectedId) queryClient.invalidateQueries({ queryKey: ["alarm", selectedId] });
+      if (selectedIdRef.current) queryClient.invalidateQueries({ queryKey: ["alarm", selectedIdRef.current] });
     };
+    source.onopen = () => setFeedConnected(true);
+    source.onerror = () => setFeedConnected(false);
     source.addEventListener("alert_new", refresh);
     source.addEventListener("alert_updated", refresh);
-    return () => source.close();
-  }, [queryClient, selectedId]);
+    return () => {
+      source.close();
+      setFeedConnected(false);
+    };
+  }, [queryClient]);
 
+  // Keyed to the selection alone: a background refetch must never clear a
+  // half-typed note or wipe the confirmation the operator just earned.
   useEffect(() => {
     setResolutionNote(selected?.resolution_note || "");
+    setResponseNote("");
+    setReopenReason("");
+    setReopening(false);
     setFeedback(null);
-  }, [selectedId, selected?.resolution_note]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
+
+  const closeDrawer = useCallback(() => setSelectedId(null), []);
+
+  // Escape closes the drawer, and Tab stays inside it while it is open.
+  const drawerOpen = Boolean(selected);
+  useEffect(() => {
+    if (!drawerOpen) return undefined;
+    const restoreTo = document.activeElement;
+    closeButtonRef.current?.focus();
+
+    const onWindowKeyDown = (event) => {
+      if (event.key === "Escape") closeDrawer();
+    };
+    const onDrawerKeyDown = (event) => {
+      if (event.key !== "Tab" || !drawerRef.current) return;
+      const focusable = [
+        ...drawerRef.current.querySelectorAll(
+          'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])',
+        ),
+      ];
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    const drawer = drawerRef.current;
+    window.addEventListener("keydown", onWindowKeyDown);
+    drawer?.addEventListener("keydown", onDrawerKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onWindowKeyDown);
+      drawer?.removeEventListener("keydown", onDrawerKeyDown);
+      if (restoreTo instanceof window.HTMLElement) restoreTo.focus();
+    };
+  }, [drawerOpen, selectedId, closeDrawer]);
+
+  function onListKeyDown(event) {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const index = visibleAlerts.findIndex((alert) => rowRefs.current.get(alert.alert_key) === document.activeElement);
+    if (index < 0) return;
+    event.preventDefault();
+    const next = visibleAlerts[index + (event.key === "ArrowDown" ? 1 : -1)];
+    if (next) rowRefs.current.get(next.alert_key)?.focus();
+  }
 
   async function refreshAlarm(alertKey) {
     await Promise.all([
@@ -133,39 +319,91 @@ export function AlarmsRoute() {
     ]);
   }
 
-  const startMutation = useMutation({
-    mutationFn: startAlarmResponse,
-    onSuccess: async (_, alertKey) => {
-      setFeedback({ type: "success", message: "Response started." });
-      await refreshAlarm(alertKey);
-    },
-    onError: async (error) => {
-      setFeedback({ type: "error", message: error.body?.message || error.message });
-      await refreshAlarm(selectedId);
-    },
-  });
+  /**
+   * `error.message` is already the operator-facing sentence the API sent; raw
+   * upstream text never reaches this screen.
+   */
+  function alarmMutation(mutationFn, successMessage, afterSuccess) {
+    return {
+      mutationFn,
+      onSuccess: async (_, variables) => {
+        setFeedback({ type: "success", message: successMessage });
+        afterSuccess?.();
+        await refreshAlarm(variables.alertKey);
+      },
+      onError: async (error) => {
+        setFeedback({ type: "error", message: error.message });
+        await refreshAlarm(selectedId);
+      },
+    };
+  }
 
-  const resolveMutation = useMutation({
-    mutationFn: resolveAlarm,
-    onSuccess: async (_, variables) => {
-      setFeedback({ type: "success", message: "Alarm resolved." });
-      await refreshAlarm(variables.alertKey || variables.sosMsgId);
-    },
-    onError: async (error) => {
-      setFeedback({ type: "error", message: error.body?.message || error.message });
-      await refreshAlarm(selectedId);
-    },
-  });
+  const startMutation = useMutation(alarmMutation(startAlarmResponse, "Response started."));
+  const resolveMutation = useMutation(alarmMutation(resolveAlarm, "Alarm resolved."));
+  const reopenMutation = useMutation(
+    alarmMutation(reopenAlarm, "Alarm reopened.", () => {
+      setReopening(false);
+      setReopenReason("");
+    }),
+  );
+
+  const pending = startMutation.isPending || resolveMutation.isPending || reopenMutation.isPending;
+  const actionsBlocked = !radioDispatchReady || pending || sync?.state === "syncing";
+
+  function startResponse() {
+    if (!selected) return;
+    startMutation.mutate({ alertKey: selected.alert_key, note: responseNote.trim() });
+  }
 
   function submitResolution(event) {
     event.preventDefault();
     if (!selected) return;
     if (!resolutionNote.trim()) {
-      setFeedback({ type: "error", message: "Add a short resolution outcome before closing the alarm." });
+      setFeedback({ type: "error", message: "Record what was confirmed before closing the alarm." });
       return;
     }
-    resolveMutation.mutate({ alertKey: selected.alert_key, resolution_note: resolutionNote.trim() });
+    resolveMutation.mutate({ alertKey: selected.alert_key, note: resolutionNote.trim() });
   }
+
+  function submitReopen(event) {
+    event.preventDefault();
+    if (!selected) return;
+    if (!reopenReason.trim()) {
+      setFeedback({ type: "error", message: "Record why this alarm is being reopened." });
+      return;
+    }
+    reopenMutation.mutate({ alertKey: selected.alert_key, note: reopenReason.trim() });
+  }
+
+  /**
+   * Re-attempts whichever update the handset refused. The alarm never advanced
+   * — only the push failed — so the retry is the same action as before, which
+   * the current status tells us.
+   */
+  function retrySync() {
+    if (!selected) return;
+    const status = Number(selected.status);
+    if (status === 0) {
+      startResponse();
+      return;
+    }
+    if (status === 1) {
+      if (!resolutionNote.trim()) {
+        setFeedback({ type: "error", message: "Record the resolution outcome, then retry." });
+        return;
+      }
+      resolveMutation.mutate({ alertKey: selected.alert_key, note: resolutionNote.trim() });
+      return;
+    }
+    if (!reopenReason.trim()) {
+      setReopening(true);
+      setFeedback({ type: "error", message: "Record why this alarm is being reopened, then retry." });
+      return;
+    }
+    reopenMutation.mutate({ alertKey: selected.alert_key, note: reopenReason.trim() });
+  }
+
+  const position = coordinates(selected);
 
   return (
     <main className="min-h-screen bg-ops-bg px-4 pb-10 pt-20 text-neutral-200 md:px-6">
@@ -175,24 +413,27 @@ export function AlarmsRoute() {
             <Siren size={21} /> Alarm Operations
           </h1>
           <p className="mt-1 text-[11px] text-neutral-500">
-            SOS and geofence alarms are retained as an operational record.
+            Radio SOS and geofence alarms are retained as an operational record.
           </p>
         </div>
         <div className="flex items-center gap-2 text-[10px] text-neutral-500">
-          <span className="h-2 w-2 rounded-full bg-green-400" />
-          {alarmsQuery.isFetching ? "Refreshing…" : "Monitoring feed connected"}
+          <span className={`h-2 w-2 rounded-full ${feedConnected ? "bg-green-400" : "bg-neutral-600"}`} />
+          {alarmsQuery.isFetching ? "Refreshing…" : feedConnected ? "Live feed connected" : "Live feed reconnecting…"}
           <button className="rounded p-1.5 hover:bg-white/5 hover:text-neutral-200" onClick={() => alarmsQuery.refetch()} title="Refresh alarms">
             <RefreshCw size={13} className={alarmsQuery.isFetching ? "animate-spin" : ""} />
           </button>
         </div>
       </header>
 
-      {selected?.source === "pocstars" && !actionsConfigured ? (
+      {alarmsQuery.data?.actionsConfigured === false ? (
         <section className="mb-5 flex items-start gap-3 rounded-lg border border-amber-400/30 bg-amber-400/[0.07] px-4 py-3 text-[11px] text-amber-200">
           <AlertTriangle size={16} className="mt-0.5 shrink-0" />
           <div>
-            <strong>POCSTARS dispatcher UID not configured.</strong>
-            <p className="mt-0.5 text-amber-100/60">Alarms will continue to log, but response and resolution actions remain disabled until a dispatcher UID is configured.</p>
+            <strong>Radio dispatch is not configured.</strong>
+            <p className="mt-0.5 text-amber-100/60">
+              Radio alarms keep logging, but responding and resolving them stays disabled until an administrator finishes setup.
+              Geofence alarms are unaffected.
+            </p>
           </div>
         </section>
       ) : null}
@@ -213,7 +454,7 @@ export function AlarmsRoute() {
             <input className="field-input" type="date" value={to} onChange={(event) => setTo(event.target.value)} aria-label="To date" />
           </label>
         </div>
-        <div className="mt-3 flex flex-wrap gap-1.5">
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
           {FILTERS.map(([key, label]) => (
             <button
               className={`rounded-md border px-3 py-1.5 text-[10px] font-bold ${
@@ -222,16 +463,25 @@ export function AlarmsRoute() {
               key={key}
               onClick={() => setFilter(key)}
             >
-              {label} <span className="ml-1 text-[9px] opacity-60">{counts[key] || 0}</span>
+              {label} <span className="ml-1 text-[9px] opacity-60">{counts[key] ?? 0}</span>
             </button>
           ))}
+          <label className="ml-auto flex items-center gap-2 text-[9px] font-bold uppercase tracking-wide text-neutral-600">
+            Sort
+            <select className="field-input w-[130px] py-1 text-[10px]" value={sort} onChange={(event) => setSort(event.target.value)}>
+              {SORTS.map(([key, label]) => (
+                <option key={key} value={key}>{label}</option>
+              ))}
+            </select>
+          </label>
         </div>
       </section>
 
       <section className="glass-panel overflow-hidden rounded-lg">
-        <div className="hidden grid-cols-[minmax(210px,1.4fr)_minmax(130px,0.8fr)_120px_130px_110px_24px] gap-3 border-b border-white/10 px-4 py-2 text-[9px] font-bold uppercase tracking-wider text-neutral-600 md:grid">
-          <span>Source</span>
-          <span>Scope</span>
+        <div className="hidden grid-cols-[minmax(190px,1.4fr)_120px_minmax(120px,0.8fr)_130px_130px_100px_24px] gap-3 border-b border-white/10 px-4 py-2 text-[9px] font-bold uppercase tracking-wider text-neutral-600 md:grid">
+          <span>Alarm</span>
+          <span>Type</span>
+          <span>Assignment</span>
           <span>Status</span>
           <span>Raised</span>
           <span>Elapsed</span>
@@ -242,33 +492,56 @@ export function AlarmsRoute() {
             <RefreshCw size={15} className="animate-spin" /> Loading alarms…
           </div>
         ) : visibleAlerts.length ? (
-          visibleAlerts.map((alert) => {
-            const state = alarmStatus(alert);
-            return (
-              <button
-                className={`grid w-full gap-3 border-b border-white/5 px-4 py-3 text-left hover:bg-white/[0.035] md:grid-cols-[minmax(210px,1.4fr)_minmax(130px,0.8fr)_120px_130px_110px_24px] md:items-center ${
-                  String(selectedId) === String(alert.alert_key) ? "bg-white/[0.05]" : ""
-                }`}
-                key={alert.alert_key}
-                onClick={() => setSelectedId(alert.alert_key)}
-              >
-                <span className="min-w-0">
-                  <span className="block truncate text-[12px] font-bold text-neutral-200">{displayName(alert)}</span>
-                  <span className="mt-0.5 block truncate font-mono text-[9px] text-neutral-600">
-                    {alert.source === "geofence" ? "GEOFENCE" : `SOS #${alert.sos_msg_id}`} · {alert.device_id}
+          // Arrow keys walk the rows; each row stays a real button so Enter and
+          // Space keep working and screen readers still announce it as one.
+          <div onKeyDown={onListKeyDown}>
+            {visibleAlerts.map((alert) => {
+              const state = lifecycle(alert);
+              const rowSync = radioSync(alert);
+              return (
+                <button
+                  className={`grid w-full gap-3 border-b border-white/5 px-4 py-3 text-left hover:bg-white/[0.035] focus:bg-white/[0.06] focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-red-400/60 md:grid-cols-[minmax(190px,1.4fr)_120px_minmax(120px,0.8fr)_130px_130px_100px_24px] md:items-center ${
+                    String(selectedId) === String(alert.alert_key) ? "bg-white/[0.05]" : ""
+                  }`}
+                  key={alert.alert_key}
+                  ref={(node) => {
+                    if (node) rowRefs.current.set(alert.alert_key, node);
+                    else rowRefs.current.delete(alert.alert_key);
+                  }}
+                  onClick={() => setSelectedId(alert.alert_key)}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-[12px] font-bold text-neutral-200">{displayName(alert)}</span>
+                    <span className="mt-0.5 block truncate font-mono text-[9px] text-neutral-600">
+                      {alarmReference(alert)} · {alert.device_id}
+                    </span>
                   </span>
-                </span>
-                <span className="min-w-0 text-[10px] text-neutral-500">
-                  <span className="block truncate">{alert.unit_name || alert.pocstars_group_name || alert.organization_name || "Unassigned"}</span>
-                  {alert.organization_name && alert.unit_name ? <span className="block truncate text-[9px] text-neutral-700">{alert.organization_name}</span> : null}
-                </span>
-                <span><span className={`inline-flex rounded-full border px-2 py-1 text-[9px] font-bold ${state.className}`}>{state.label}</span></span>
-                <span className="text-[10px] text-neutral-500">{formatDateTime(alert.triggered_at)}</span>
-                <span className="text-[10px] font-bold text-neutral-400">{elapsed(alert.triggered_at, alert.resolved_at)}</span>
-                <ChevronRight size={14} className="hidden text-neutral-700 md:block" />
-              </button>
-            );
-          })
+                  <KindTag alert={alert} />
+                  <span className="min-w-0 text-[10px] text-neutral-500">
+                    <span className="block truncate">{alert.unit_name || alert.pocstars_group_name || alert.organization_name || "Unassigned"}</span>
+                    {alert.organization_name && alert.unit_name ? <span className="block truncate text-[9px] text-neutral-700">{alert.organization_name}</span> : null}
+                  </span>
+                  <span>
+                    <span className={`inline-flex rounded-full border px-2 py-1 text-[9px] font-bold ${state.className}`}>{state.label}</span>
+                    {rowSync ? (
+                      <span className={`mt-1 flex items-center gap-1 text-[8px] font-bold ${rowSync.state === "failed" ? "text-amber-300" : "text-blue-300"}`}>
+                        <AlertTriangle size={9} /> {rowSync.label}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="text-[10px] text-neutral-500">{formatDateTime(alert.triggered_at)}</span>
+                  <span className={`text-[10px] font-bold ${ageTone(alert, now)}`}>{elapsed(alert.triggered_at, alert.resolved_at, now)}</span>
+                  <ChevronRight size={14} className="hidden text-neutral-700 md:block" />
+                </button>
+              );
+            })}
+          </div>
+        ) : filter === "open" && !isFiltered ? (
+          <div className="flex h-52 flex-col items-center justify-center text-center text-xs text-green-300/80">
+            <ShieldCheck size={28} className="mb-2 text-green-400/60" />
+            All clear
+            <span className="mt-1 text-[10px] text-neutral-600">No alarms are currently open.</span>
+          </div>
         ) : (
           <div className="flex h-52 flex-col items-center justify-center text-center text-xs text-neutral-600">
             <ShieldCheck size={28} className="mb-2 text-neutral-700" />
@@ -278,34 +551,66 @@ export function AlarmsRoute() {
       </section>
 
       {selected ? (
-        <div className="fixed inset-0 z-[1200] flex justify-end bg-black/55" onMouseDown={(event) => event.target === event.currentTarget && setSelectedId(null)}>
-          <aside className="h-full w-full max-w-lg overflow-y-auto border-l border-red-500/30 bg-[#080808] p-5 shadow-2xl">
+        <div className="fixed inset-0 z-[1200] flex justify-end bg-black/55" onMouseDown={(event) => event.target === event.currentTarget && closeDrawer()}>
+          <aside
+            ref={drawerRef}
+            aria-label={`Alarm ${alarmReference(selected)}`}
+            aria-modal="true"
+            className="h-full w-full max-w-lg overflow-y-auto border-l border-red-500/30 bg-[#080808] p-5 shadow-2xl"
+            role="dialog"
+          >
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="mb-2 flex items-center gap-2">
-                  <span className={`inline-flex rounded-full border px-2 py-1 text-[9px] font-bold ${alarmStatus(selected).className}`}>{alarmStatus(selected).label}</span>
-                  <span className="font-mono text-[9px] text-neutral-700">
-                    {selected.source === "geofence" ? `GEOFENCE #${selected.id}` : `SOS #${selected.sos_msg_id}`}
-                  </span>
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <span className={`inline-flex rounded-full border px-2 py-1 text-[9px] font-bold ${lifecycle(selected).className}`}>{lifecycle(selected).label}</span>
+                  <KindTag alert={selected} size={11} />
+                  <span className="font-mono text-[9px] text-neutral-700">{alarmReference(selected)}</span>
                 </div>
                 <h2 className="text-lg font-bold text-neutral-100">{displayName(selected)}</h2>
-                <p className="mt-1 text-[10px] text-neutral-500">{formatDateTime(selected.triggered_at)} · {elapsed(selected.triggered_at, selected.resolved_at)}</p>
+                <p className="mt-1 text-[10px] text-neutral-500">
+                  {formatDateTime(selected.triggered_at)} · {elapsed(selected.triggered_at, selected.resolved_at, now)}
+                </p>
               </div>
-              <button className="rounded p-1 text-neutral-500 hover:bg-white/5 hover:text-neutral-100" onClick={() => setSelectedId(null)}>
+              <button
+                ref={closeButtonRef}
+                className="rounded p-1 text-neutral-500 hover:bg-white/5 hover:text-neutral-100"
+                onClick={closeDrawer}
+                aria-label="Close alarm details"
+              >
                 <X size={18} />
               </button>
             </div>
 
             {feedback ? (
-              <div className={`mt-4 rounded-md border px-3 py-2 text-[10px] ${feedback.type === "error" ? "border-red-400/40 bg-red-500/10 text-red-200" : "border-green-400/30 bg-green-400/10 text-green-200"}`}>
+              <div
+                className={`mt-4 rounded-md border px-3 py-2 text-[10px] ${feedback.type === "error" ? "border-red-400/40 bg-red-500/10 text-red-200" : "border-green-400/30 bg-green-400/10 text-green-200"}`}
+                role="status"
+              >
                 {feedback.message}
               </div>
             ) : null}
 
-            {selected.last_sync_error ? (
-              <div className="mt-4 rounded-md border border-red-400/30 bg-red-500/[0.08] px-3 py-2 text-[10px] text-red-200">
-                <strong>Last synchronization error</strong>
-                <p className="mt-1 text-red-100/60">{selected.last_sync_error}</p>
+            {sync ? (
+              <div
+                className={`mt-4 rounded-md border px-3 py-2 text-[10px] ${
+                  sync.state === "failed" ? "border-amber-400/40 bg-amber-400/[0.08] text-amber-200" : "border-blue-400/30 bg-blue-400/[0.08] text-blue-200"
+                }`}
+              >
+                <strong className="flex items-center gap-1.5">
+                  {sync.state === "failed" ? <AlertTriangle size={12} /> : <RefreshCw size={12} className="animate-spin" />}
+                  {sync.label}
+                </strong>
+                <p className="mt-1 opacity-70">{sync.message}</p>
+                {sync.consequence ? <p className="mt-1 opacity-70">{sync.consequence}</p> : null}
+                {sync.state === "failed" ? (
+                  <button
+                    className="mt-2 inline-flex items-center gap-1.5 rounded border border-amber-400/40 px-2.5 py-1.5 text-[10px] font-bold text-amber-200 hover:bg-amber-400/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={actionsBlocked}
+                    onClick={retrySync}
+                  >
+                    <RotateCcw size={11} /> Retry radio update
+                  </button>
+                ) : null}
               </div>
             ) : null}
 
@@ -319,23 +624,61 @@ export function AlarmsRoute() {
             </section>
 
             <section className="mt-3 rounded-lg border border-white/10 bg-white/[0.025] p-3">
-              <div className="flex items-center gap-2 text-[10px] font-bold text-neutral-400"><MapPin size={13} /> Alarm location</div>
-              <p className="mt-2 font-mono text-[11px] text-neutral-300">
-                {Number.isFinite(Number(selected.location_lat)) && Number.isFinite(Number(selected.location_lon))
-                  ? `${Number(selected.location_lat).toFixed(6)}, ${Number(selected.location_lon).toFixed(6)}`
-                  : "Location was not supplied"}
-              </p>
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-2 text-[10px] font-bold text-neutral-400"><MapPin size={13} /> Alarm location</span>
+                {/* The map carries open alarms only, so a resolved one has nothing to focus. */}
+                {position && Number(selected.status) < 2 ? (
+                  <Link
+                    className="inline-flex items-center gap-1 rounded border border-white/10 px-2 py-1 text-[9px] font-bold text-neutral-400 hover:bg-white/5 hover:text-neutral-100"
+                    search={{ focus: selected.alert_key }}
+                    to="/"
+                  >
+                    <MapIcon size={10} /> Show on operations map
+                  </Link>
+                ) : null}
+              </div>
+              {position ? (
+                <>
+                  <div className="mt-2">
+                    <AlarmMiniMap
+                      accent={selected.source === "geofence" ? "#38bdf8" : "#ff4444"}
+                      label={displayName(selected)}
+                      lat={position.lat}
+                      lon={position.lon}
+                    />
+                  </div>
+                  <p className="mt-2 font-mono text-[10px] text-neutral-500">
+                    {position.lat.toFixed(6)}, {position.lon.toFixed(6)}
+                  </p>
+                </>
+              ) : (
+                <p className="mt-2 text-[11px] text-neutral-500">
+                  No location was reported with this alarm. Confirm the position by voice before dispatching.
+                </p>
+              )}
             </section>
 
             {Number(selected.status) === 0 ? (
-              <button
-                className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-md bg-amber-400 px-4 py-2.5 text-xs font-bold text-black disabled:cursor-not-allowed disabled:opacity-40"
-                disabled={!actionsConfigured || startMutation.isPending || selected.sync_status === "syncing"}
-                onClick={() => startMutation.mutate(selected.alert_key)}
-              >
-                {startMutation.isPending ? <RefreshCw size={14} className="animate-spin" /> : <UserRoundCheck size={14} />}
-                Start response
-              </button>
+              <section className="mt-5 rounded-lg border border-amber-400/20 bg-amber-400/[0.035] p-4">
+                <label className="text-[10px] font-bold uppercase tracking-wide text-neutral-500" htmlFor="response-note">
+                  Who is responding? <span className="font-normal normal-case tracking-normal text-neutral-600">(optional)</span>
+                </label>
+                <textarea
+                  id="response-note"
+                  className="field-input mt-2 min-h-16 resize-y"
+                  value={responseNote}
+                  onChange={(event) => setResponseNote(event.target.value)}
+                  placeholder="Unit, patrol, or contact being sent"
+                />
+                <button
+                  className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md bg-amber-400 px-4 py-2.5 text-xs font-bold text-black disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={actionsBlocked}
+                  onClick={startResponse}
+                >
+                  {startMutation.isPending ? <RefreshCw size={14} className="animate-spin" /> : <UserRoundCheck size={14} />}
+                  Start response
+                </button>
+              </section>
             ) : null}
 
             {Number(selected.status) === 1 ? (
@@ -350,43 +693,100 @@ export function AlarmsRoute() {
                 />
                 <button
                   className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md bg-green-400 px-4 py-2.5 text-xs font-bold text-black disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={!actionsConfigured || resolveMutation.isPending || selected.sync_status === "syncing"}
+                  disabled={actionsBlocked}
                   type="submit"
                 >
                   {resolveMutation.isPending ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                  {selected.source === "geofence" ? "Resolve alarm" : "Resolve on POCSTARS"}
+                  Resolve alarm
                 </button>
               </form>
             ) : null}
 
-            {Number(selected.status) === 2 && selected.resolution_note ? (
+            {Number(selected.status) === 2 ? (
               <section className="mt-5 rounded-lg border border-green-400/20 bg-green-400/[0.035] p-4">
                 <h3 className="text-[10px] font-bold uppercase tracking-wide text-green-300">Resolution outcome</h3>
-                <p className="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed text-neutral-300">{selected.resolution_note}</p>
+                <p className="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed text-neutral-300">
+                  {selected.resolution_note || "No outcome was recorded."}
+                </p>
+                {reopening ? (
+                  <form className="mt-3 border-t border-white/10 pt-3" onSubmit={submitReopen}>
+                    <label className="text-[10px] font-bold uppercase tracking-wide text-neutral-500" htmlFor="reopen-reason">Why is this being reopened?</label>
+                    <textarea
+                      id="reopen-reason"
+                      className="field-input mt-2 min-h-16 resize-y"
+                      value={reopenReason}
+                      onChange={(event) => setReopenReason(event.target.value)}
+                      placeholder="Closed in error, situation continued, new information…"
+                    />
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        className="inline-flex flex-1 items-center justify-center gap-2 rounded-md border border-amber-400/40 px-3 py-2 text-[11px] font-bold text-amber-200 hover:bg-amber-400/10 disabled:cursor-not-allowed disabled:opacity-40"
+                        disabled={actionsBlocked}
+                        type="submit"
+                      >
+                        {reopenMutation.isPending ? <RefreshCw size={12} className="animate-spin" /> : <Undo2 size={12} />}
+                        Reopen alarm
+                      </button>
+                      <button className="rounded-md border border-white/10 px-3 py-2 text-[11px] text-neutral-400 hover:text-neutral-100" onClick={() => setReopening(false)} type="button">
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <button
+                    className="mt-3 inline-flex items-center gap-1.5 text-[10px] font-bold text-neutral-500 hover:text-amber-200"
+                    onClick={() => setReopening(true)}
+                    type="button"
+                  >
+                    <Undo2 size={11} /> Reopen this alarm
+                  </button>
+                )}
               </section>
             ) : null}
 
             <section className="mt-6">
               <h3 className="mb-3 flex items-center gap-2 text-[11px] font-bold text-neutral-300"><Clock3 size={13} /> Activity</h3>
-              <div className="space-y-0">
-                {(detailQuery.data?.events || []).map((event, index, events) => (
-                  <div className="relative flex gap-3 pb-4" key={event.id}>
-                    {index < events.length - 1 ? <span className="absolute left-[5px] top-3 h-full w-px bg-white/10" /> : null}
-                    <span className={`relative mt-1 h-[11px] w-[11px] shrink-0 rounded-full border ${event.event_type === "sync_failed" ? "border-red-400 bg-red-500/30" : "border-green-400/50 bg-green-500/20"}`} />
-                    <div>
-                      <p className="text-[10px] font-bold text-neutral-300">{EVENT_LABELS[event.event_type] || event.event_type}</p>
-                      <p className="mt-0.5 text-[9px] text-neutral-600">{formatDateTime(event.created_at)}{event.actor_name || event.actor_email ? ` · ${event.actor_name || event.actor_email}` : ""}</p>
-                      {event.note ? <p className="mt-1 text-[10px] text-neutral-500">{event.note}</p> : null}
-                      {event.event_type === "sync_failed" && event.metadata?.error ? <p className="mt-1 text-[10px] text-red-300/70">{event.metadata.error}</p> : null}
+              {busy ? (
+                <p className="text-[10px] text-neutral-600">Loading activity…</p>
+              ) : (
+                <div className="space-y-0">
+                  {(detailQuery.data?.events || []).map((event, index, events) => (
+                    <div className="relative flex gap-3 pb-4" key={event.id}>
+                      {index < events.length - 1 ? <span className="absolute left-[5px] top-3 h-full w-px bg-white/10" /> : null}
+                      <span className={`relative mt-1 h-[11px] w-[11px] shrink-0 rounded-full border ${event.event_type === "sync_failed" ? "border-amber-400 bg-amber-500/30" : "border-green-400/50 bg-green-500/20"}`} />
+                      <div>
+                        <p className="text-[10px] font-bold text-neutral-300">{EVENT_LABELS[event.event_type] || event.event_type}</p>
+                        <p className="mt-0.5 text-[9px] text-neutral-600">{formatDateTime(event.created_at)}{event.actor_name || event.actor_email ? ` · ${event.actor_name || event.actor_email}` : ""}</p>
+                        {event.note ? <p className="mt-1 text-[10px] text-neutral-500">{event.note}</p> : null}
+                        {event.event_type === "sync_failed" && event.metadata?.error ? (
+                          <p className="mt-1 text-[10px] text-amber-300/70">{event.metadata.error}</p>
+                        ) : null}
+                        {event.event_type === "reopened" && event.metadata?.discarded_resolution_note ? (
+                          <p className="mt-1 text-[10px] text-neutral-600">
+                            Previous outcome: {event.metadata.discarded_resolution_note}
+                          </p>
+                        ) : null}
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </section>
           </aside>
         </div>
       ) : null}
     </main>
+  );
+}
+
+/** What raised the alarm — the operator's real question, in place of a vendor name. */
+function KindTag({ alert, size = 12 }) {
+  const kind = alarmKind(alert);
+  const Icon = kind.icon;
+  return (
+    <span className={`flex items-center gap-1.5 text-[10px] font-bold ${kind.className}`}>
+      <Icon size={size} /> {kind.label}
+    </span>
   );
 }
 

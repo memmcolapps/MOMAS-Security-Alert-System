@@ -228,14 +228,20 @@ export async function markAssetReturned(fence: any, position: any) {
   return rows;
 }
 
-export async function listOperationalAlerts(scope: Scope = {}, filters: any = {}) {
+/** Shared predicate so the alarm list and its badge counts describe one population. */
+function operationalAlertFilterSql(scope: Scope = {}, filters: any = {}, { includeStatus = true } = {}) {
   const scoped = scopeSql(scope, "a");
   const values = [...scoped.values];
   const conditions = [...scoped.conditions];
-  if (filters.status === "open") conditions.push("a.status < 2");
-  if (filters.status === "new") conditions.push("a.status = 0");
-  if (filters.status === "in_progress") conditions.push("a.status = 1");
-  if (filters.status === "resolved") conditions.push("a.status = 2");
+  if (includeStatus) {
+    if (filters.status === "open") conditions.push("a.status < 2");
+    if (filters.status === "new") conditions.push("a.status = 0");
+    if (filters.status === "in_progress") conditions.push("a.status = 1");
+    if (filters.status === "resolved") conditions.push("a.status = 2");
+    // Geofence alarms are raised and closed inside this platform, so they have
+    // no radio-network push to fail. "sync_failed" can never match one.
+    if (filters.status === "sync_failed") conditions.push("FALSE");
+  }
   if (filters.search) {
     values.push(`%${String(filters.search).trim()}%`);
     conditions.push(`(a.asset_id ILIKE $${values.length} OR COALESCE(a.asset_name,'') ILIKE $${values.length} OR COALESCE(a.geofence_name,'') ILIKE $${values.length})`);
@@ -248,8 +254,12 @@ export async function listOperationalAlerts(scope: Scope = {}, filters: any = {}
     values.push(filters.to);
     conditions.push(`a.triggered_at < ($${values.length}::date + INTERVAL '1 day')`);
   }
+  return { values, where: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "" };
+}
+
+export async function listOperationalAlerts(scope: Scope = {}, filters: any = {}) {
+  const { values, where } = operationalAlertFilterSql(scope, filters);
   values.push(Math.min(Math.max(Number(filters.limit) || 200, 1), 500));
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const { rows } = await pool.query(
     `SELECT a.*, o.name AS organization_name, ou.name AS unit_name
        FROM operational_alerts a
@@ -261,6 +271,22 @@ export async function listOperationalAlerts(scope: Scope = {}, filters: any = {}
     values,
   );
   return rows;
+}
+
+export async function countOperationalAlerts(scope: Scope = {}, filters: any = {}) {
+  const { values, where } = operationalAlertFilterSql(scope, filters, { includeStatus: false });
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int                             AS all,
+            COUNT(*) FILTER (WHERE a.status < 2)::int AS open,
+            COUNT(*) FILTER (WHERE a.status = 0)::int AS new,
+            COUNT(*) FILTER (WHERE a.status = 1)::int AS in_progress,
+            COUNT(*) FILTER (WHERE a.status = 2)::int AS resolved,
+            0                                         AS sync_failed
+       FROM operational_alerts a
+       ${where}`,
+    values,
+  );
+  return rows[0];
 }
 
 export async function getOperationalAlert(id: number, scope: Scope = {}) {
@@ -295,23 +321,45 @@ export async function listOperationalAlertEvents(id: number, scope: Scope = {}) 
   return { alert, events: rows };
 }
 
-export async function updateOperationalAlert(id: number, userId: number, action: "start" | "resolve", note?: string) {
-  const resolved = action === "resolve";
+const OPERATIONAL_ALERT_SQL = {
+  start: `UPDATE operational_alerts SET status=1, acknowledged_at=COALESCE(acknowledged_at,NOW()),
+            acknowledged_by=COALESCE(acknowledged_by,$2), updated_at=NOW()
+          WHERE id=$1 AND status=0 RETURNING *`,
+  resolve: `UPDATE operational_alerts SET status=2, resolved_at=NOW(), resolved_by=$2,
+              resolution_note=$3, updated_at=NOW() WHERE id=$1 AND status<2 RETURNING *`,
+  // Rewind to "in progress" and clear the resolution. The discarded outcome
+  // stays on the reopen event so the operational record remains complete.
+  reopen: `UPDATE operational_alerts SET status=1, resolved_at=NULL, resolved_by=NULL,
+             resolution_note=NULL, acknowledged_at=COALESCE(acknowledged_at,NOW()),
+             acknowledged_by=COALESCE(acknowledged_by,$2), updated_at=NOW()
+           WHERE id=$1 AND status=2 RETURNING *`,
+};
+
+const OPERATIONAL_ALERT_EVENTS = { start: "response_started", resolve: "resolved", reopen: "reopened" };
+
+export async function updateOperationalAlert(
+  id: number,
+  userId: number,
+  action: "start" | "resolve" | "reopen",
+  note?: string,
+) {
+  const previous = action === "reopen" ? await getOperationalAlert(id) : null;
   const { rows } = await pool.query(
-    resolved
-      ? `UPDATE operational_alerts SET status=2, resolved_at=NOW(), resolved_by=$2,
-           resolution_note=$3, updated_at=NOW() WHERE id=$1 AND status<2 RETURNING *`
-      : `UPDATE operational_alerts SET status=1, acknowledged_at=COALESCE(acknowledged_at,NOW()),
-           acknowledged_by=COALESCE(acknowledged_by,$2), updated_at=NOW()
-         WHERE id=$1 AND status=0 RETURNING *`,
-    resolved ? [id, userId, note || null] : [id, userId],
+    OPERATIONAL_ALERT_SQL[action],
+    action === "resolve" ? [id, userId, note || null] : [id, userId],
   );
   const alert = rows[0] || (await pool.query("SELECT * FROM operational_alerts WHERE id=$1", [id])).rows[0];
   if (rows[0]) {
     await pool.query(
-      `INSERT INTO operational_alert_events (alert_id, actor_user_id, event_type, note)
-       VALUES ($1,$2,$3,$4)`,
-      [id, userId, resolved ? "resolved" : "response_started", note || null],
+      `INSERT INTO operational_alert_events (alert_id, actor_user_id, event_type, note, metadata)
+       VALUES ($1,$2,$3,$4,$5::jsonb)`,
+      [
+        id,
+        userId,
+        OPERATIONAL_ALERT_EVENTS[action],
+        note || null,
+        JSON.stringify(action === "reopen" ? { discarded_resolution_note: previous?.resolution_note || null } : {}),
+      ],
     );
   }
   return alert || null;

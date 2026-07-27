@@ -17,6 +17,8 @@ const router = new Hono();
 const clients = new Set<Client>();
 const encoder = new TextEncoder();
 
+const COUNT_KEYS = ["all", "open", "new", "in_progress", "resolved", "sync_failed"] as const;
+
 function normalizeSos(alert: any) {
   return {
     ...alert,
@@ -115,15 +117,22 @@ router.get("/", async (c) => {
       to: query.to,
       limit: query.limit || 500,
     };
-    const [sos, geofence] = await Promise.all([
+    const [sos, geofence, sosCounts, geofenceCounts] = await Promise.all([
       db.listSosAlerts(requestScope(c), filters),
       store.listOperationalAlerts(requestScope(c), filters),
+      db.countSosAlerts(requestScope(c), filters),
+      store.countOperationalAlerts(requestScope(c), filters),
     ]);
     const alerts = [
       ...sos.map(normalizeSos),
       ...geofence.map(normalizeGeofence),
     ].sort((a, b) => new Date(b.triggered_at).getTime() - new Date(a.triggered_at).getTime());
-    return c.json({ alerts, actionsConfigured: Boolean(env.POCSTARS_DISPATCHER_UID) });
+    // Counted in the database rather than over `alerts`, which is capped by
+    // `limit` — a client-side tally silently undercounts once history grows.
+    const counts = Object.fromEntries(
+      COUNT_KEYS.map((key) => [key, Number(sosCounts?.[key] || 0) + Number(geofenceCounts?.[key] || 0)]),
+    );
+    return c.json({ alerts, counts, actionsConfigured: Boolean(env.POCSTARS_DISPATCHER_UID) });
   } catch (error: any) {
     return c.json({ error: error?.message || String(error) }, 500);
   }
@@ -150,13 +159,20 @@ router.get("/:source/:id", async (c) => {
   }
 });
 
+/** One note field per action: who is responding, the outcome, or the reason for reopening. */
+function actionNote(body: any) {
+  const raw = typeof body?.note === "string" ? body.note : body?.resolution_note;
+  return String(raw || "").trim();
+}
+
 router.post("/geofence/:id/start-response", async (c) => {
   const user: any = (c as any).get("user");
   const id = Number(c.req.param("id"));
-  if (!Number.isInteger(id)) return c.json({ error: "Invalid alert id." }, 400);
+  if (!Number.isInteger(id)) return c.json({ error: "invalid_alarm_reference", message: "Invalid alarm reference." }, 400);
+  const note = actionNote(await c.req.json().catch(() => ({})));
   const visible = await store.getOperationalAlert(id, requestScope(c));
-  if (!visible) return c.json({ error: "Alarm not found." }, 404);
-  const alert = await store.updateOperationalAlert(id, user.id, "start");
+  if (!visible) return c.json({ error: "alarm_not_found", message: "This alarm is no longer available in your operational scope." }, 404);
+  const alert = await store.updateOperationalAlert(id, user.id, "start", note || undefined);
   bus.emit("operational-alert:updated", alert);
   return c.json({ alert: normalizeGeofence(alert) });
 });
@@ -164,15 +180,45 @@ router.post("/geofence/:id/start-response", async (c) => {
 router.post("/geofence/:id/resolve", async (c) => {
   const user: any = (c as any).get("user");
   const id = Number(c.req.param("id"));
-  if (!Number.isInteger(id)) return c.json({ error: "Invalid alert id." }, 400);
-  const body = await c.req.json().catch(() => ({}));
-  const note = String(body.resolution_note || "").trim();
-  if (!note) return c.json({ error: "A resolution note is required." }, 400);
+  if (!Number.isInteger(id)) return c.json({ error: "invalid_alarm_reference", message: "Invalid alarm reference." }, 400);
+  const note = actionNote(await c.req.json().catch(() => ({})));
+  if (!note) return c.json({ error: "resolution_note_required", message: "Record what was confirmed before closing the alarm." }, 400);
   const visible = await store.getOperationalAlert(id, requestScope(c));
-  if (!visible) return c.json({ error: "Alarm not found." }, 404);
+  if (!visible) return c.json({ error: "alarm_not_found", message: "This alarm is no longer available in your operational scope." }, 404);
   const alert = await store.updateOperationalAlert(id, user.id, "resolve", note);
   bus.emit("operational-alert:updated", alert);
   return c.json({ alert: normalizeGeofence(alert) });
+});
+
+router.post("/geofence/:id/reopen", async (c) => {
+  const user: any = (c as any).get("user");
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id)) return c.json({ error: "invalid_alarm_reference", message: "Invalid alarm reference." }, 400);
+  const note = actionNote(await c.req.json().catch(() => ({})));
+  if (!note) return c.json({ error: "reopen_reason_required", message: "Record why this alarm is being reopened." }, 400);
+  const visible = await store.getOperationalAlert(id, requestScope(c));
+  if (!visible) return c.json({ error: "alarm_not_found", message: "This alarm is no longer available in your operational scope." }, 404);
+  if (Number(visible.status) !== 2) {
+    return c.json({ error: "alarm_not_resolved", message: "Only a resolved alarm can be reopened." }, 409);
+  }
+  try {
+    const alert = await store.updateOperationalAlert(id, user.id, "reopen", note);
+    bus.emit("operational-alert:updated", alert);
+    return c.json({ alert: normalizeGeofence(alert) });
+  } catch (error: any) {
+    // Only one alarm may be active per fence/asset pair. If the asset breached
+    // again after this one closed, the newer alarm owns that slot.
+    if (error?.code === "23505") {
+      return c.json(
+        {
+          error: "alarm_superseded",
+          message: "A newer alarm is already open for this asset and fence. Work that alarm instead.",
+        },
+        409,
+      );
+    }
+    return c.json({ error: "alarm_reopen_failed", message: "The alarm could not be reopened." }, 500);
+  }
 });
 
 export default router;

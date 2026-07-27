@@ -1630,13 +1630,19 @@ async function insertSosAlert({
   return getSosAlert(rows[0].sos_msg_id);
 }
 
+const SOS_REQUEST_EVENTS = {
+  process: "response_requested",
+  close: "resolution_requested",
+  reopen: "reopen_requested",
+};
+
+/** Status an alarm must be in before the given action may be attempted. */
+const SOS_REQUIRED_STATUS = { process: 0, close: 1, reopen: 2 };
+
 async function beginSosAction(sos_msg_id, action, actor_user_id, scope: any = {}) {
   const alert = await getSosAlert(sos_msg_id, scope);
   if (!alert) return { state: "not_found", alert: null };
-  if (action === "process" && Number(alert.status) !== 0) {
-    return { state: "invalid_status", alert };
-  }
-  if (action === "close" && Number(alert.status) !== 1) {
+  if (Number(alert.status) !== SOS_REQUIRED_STATUS[action]) {
     return { state: "invalid_status", alert };
   }
   if (alert.sync_status === "syncing") return { state: "syncing", alert };
@@ -1664,7 +1670,7 @@ async function beginSosAction(sos_msg_id, action, actor_user_id, scope: any = {}
       [
         alert.id,
         actor_user_id || null,
-        action === "process" ? "response_requested" : "resolution_requested",
+        SOS_REQUEST_EVENTS[action],
         JSON.stringify({ upstream_operation: action }),
       ],
     );
@@ -1678,41 +1684,64 @@ async function beginSosAction(sos_msg_id, action, actor_user_id, scope: any = {}
   }
 }
 
+const SOS_COMPLETION_SQL = {
+  process: `UPDATE sos_alerts
+               SET status=1,
+                   upstream_status=1,
+                   sync_status='synced',
+                   acknowledged_at=COALESCE(acknowledged_at, NOW()),
+                   acknowledged_by=COALESCE(acknowledged_by, $2),
+                   upstream_processed_at=NOW(),
+                   last_sync_error=NULL,
+                   updated_at=NOW()
+             WHERE sos_msg_id=$1
+             RETURNING id`,
+  close: `UPDATE sos_alerts
+             SET status=2,
+                 upstream_status=2,
+                 sync_status='synced',
+                 resolved_at=NOW(),
+                 resolved_by=$2,
+                 resolution_note=$3,
+                 upstream_closed_at=NOW(),
+                 last_sync_error=NULL,
+                 updated_at=NOW()
+           WHERE sos_msg_id=$1
+           RETURNING id`,
+  // Reopening rewinds the alarm to "in progress" and clears the resolution.
+  // The discarded outcome is kept on the reopen event so the record stays whole.
+  reopen: `UPDATE sos_alerts
+              SET status=1,
+                  upstream_status=1,
+                  sync_status='synced',
+                  resolved_at=NULL,
+                  resolved_by=NULL,
+                  resolution_note=NULL,
+                  upstream_closed_at=NULL,
+                  upstream_processed_at=NOW(),
+                  acknowledged_by=COALESCE(acknowledged_by, $2),
+                  last_sync_error=NULL,
+                  updated_at=NOW()
+            WHERE sos_msg_id=$1 AND status=2
+            RETURNING id`,
+};
+
+const SOS_COMPLETION_EVENTS = { process: "response_started", close: "resolved", reopen: "reopened" };
+
 async function completeSosAction(
   sos_msg_id,
   action,
   actor_user_id,
-  { note = null, upstreamResponse = null }: any = {},
+  { note = null, upstreamResponse = null, previousNote = null }: any = {},
 ) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const { rows } = await client.query(
-      action === "process"
-        ? `UPDATE sos_alerts
-              SET status=1,
-                  upstream_status=1,
-                  sync_status='synced',
-                  acknowledged_at=COALESCE(acknowledged_at, NOW()),
-                  acknowledged_by=COALESCE(acknowledged_by, $2),
-                  upstream_processed_at=NOW(),
-                  last_sync_error=NULL,
-                  updated_at=NOW()
-            WHERE sos_msg_id=$1
-            RETURNING id`
-        : `UPDATE sos_alerts
-              SET status=2,
-                  upstream_status=2,
-                  sync_status='synced',
-                  resolved_at=NOW(),
-                  resolved_by=$2,
-                  resolution_note=$3,
-                  upstream_closed_at=NOW(),
-                  last_sync_error=NULL,
-                  updated_at=NOW()
-            WHERE sos_msg_id=$1
-            RETURNING id`,
-      action === "process" ? [sos_msg_id, actor_user_id || null] : [sos_msg_id, actor_user_id || null, note || null],
+    const { rows } = await client.query<{ id: number }>(
+      SOS_COMPLETION_SQL[action],
+      action === "close"
+        ? [sos_msg_id, actor_user_id || null, note || null]
+        : [sos_msg_id, actor_user_id || null],
     );
     if (!rows[0]) {
       await client.query("ROLLBACK");
@@ -1724,9 +1753,13 @@ async function completeSosAction(
       [
         rows[0].id,
         actor_user_id || null,
-        action === "process" ? "response_started" : "resolved",
+        SOS_COMPLETION_EVENTS[action],
         note || null,
-        JSON.stringify({ upstream_operation: action, upstream_response: upstreamResponse }),
+        JSON.stringify({
+          upstream_operation: action,
+          upstream_response: upstreamResponse,
+          ...(action === "reopen" ? { discarded_resolution_note: previousNote || null } : {}),
+        }),
       ],
     );
     await client.query("COMMIT");
@@ -1739,7 +1772,11 @@ async function completeSosAction(
   }
 }
 
-async function failSosAction(sos_msg_id, action, actor_user_id, errorMessage) {
+/**
+ * `message` is operator-facing and is what the UI renders; `detail` is the raw
+ * upstream text, kept on the event for administrators and debugging only.
+ */
+async function failSosAction(sos_msg_id, action, actor_user_id, message, detail = null) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -1750,7 +1787,7 @@ async function failSosAction(sos_msg_id, action, actor_user_id, errorMessage) {
               updated_at=NOW()
         WHERE sos_msg_id=$1
         RETURNING id`,
-      [sos_msg_id, String(errorMessage).slice(0, 1000)],
+      [sos_msg_id, String(message).slice(0, 1000)],
     );
     if (rows[0]) {
       await client.query(
@@ -1759,7 +1796,11 @@ async function failSosAction(sos_msg_id, action, actor_user_id, errorMessage) {
         [
           rows[0].id,
           actor_user_id || null,
-          JSON.stringify({ upstream_operation: action, error: String(errorMessage).slice(0, 1000) }),
+          JSON.stringify({
+            upstream_operation: action,
+            error: String(message).slice(0, 1000),
+            detail: detail ? String(detail).slice(0, 1000) : null,
+          }),
         ],
       );
     }
@@ -1787,16 +1828,23 @@ async function listSosEvents(sos_msg_id, scope: any = {}) {
   return { alert, events: rows };
 }
 
-async function listSosAlerts(scope: any = {}, filters: any = {}) {
+/**
+ * Shared scope + search/date predicate for the alarm list and its counts, so a
+ * badge count can never describe a different population than the rows below it.
+ * `includeStatus: false` leaves the status axis open for FILTER aggregates.
+ */
+function sosFilterSql(scope: any = {}, filters: any = {}, { includeStatus = true } = {}) {
   const scoped = sosScopeSql(scope);
   const vals = [...scoped.vals];
   const conds = [...scoped.conds];
-  const status = filters.status || "all";
-  if (status === "open") conds.push("s.status < 2");
-  if (status === "new") conds.push("s.status = 0");
-  if (status === "in_progress") conds.push("s.status = 1");
-  if (status === "resolved") conds.push("s.status = 2");
-  if (status === "sync_failed") conds.push("s.sync_status = 'failed'");
+  if (includeStatus) {
+    const status = filters.status || "all";
+    if (status === "open") conds.push("s.status < 2");
+    if (status === "new") conds.push("s.status = 0");
+    if (status === "in_progress") conds.push("s.status = 1");
+    if (status === "resolved") conds.push("s.status = 2");
+    if (status === "sync_failed") conds.push("s.sync_status = 'failed'");
+  }
   if (filters.search) {
     vals.push(`%${String(filters.search).trim()}%`);
     conds.push(`(
@@ -1817,9 +1865,12 @@ async function listSosAlerts(scope: any = {}, filters: any = {}) {
     vals.push(filters.to);
     conds.push(`s.triggered_at < ($${vals.length}::date + INTERVAL '1 day')`);
   }
-  const limit = Math.min(Math.max(Number(filters.limit) || 200, 1), 500);
-  vals.push(limit);
-  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+  return { vals, where: conds.length ? `WHERE ${conds.join(" AND ")}` : "" };
+}
+
+async function listSosAlerts(scope: any = {}, filters: any = {}) {
+  const { vals, where } = sosFilterSql(scope, filters);
+  vals.push(Math.min(Math.max(Number(filters.limit) || 200, 1), 500));
   const { rows } = await pool.query(`
     SELECT ${SOS_WITH_DEVICE_COLS}
       FROM sos_alerts s
@@ -1829,6 +1880,22 @@ async function listSosAlerts(scope: any = {}, filters: any = {}) {
      LIMIT $${vals.length}
   `, vals);
   return rows;
+}
+
+async function countSosAlerts(scope: any = {}, filters: any = {}) {
+  const { vals, where } = sosFilterSql(scope, filters, { includeStatus: false });
+  const { rows } = await pool.query(`
+    SELECT COUNT(*)::int                                          AS all,
+           COUNT(*) FILTER (WHERE s.status < 2)::int              AS open,
+           COUNT(*) FILTER (WHERE s.status = 0)::int              AS new,
+           COUNT(*) FILTER (WHERE s.status = 1)::int              AS in_progress,
+           COUNT(*) FILTER (WHERE s.status = 2)::int              AS resolved,
+           COUNT(*) FILTER (WHERE s.sync_status = 'failed')::int  AS sync_failed
+      FROM sos_alerts s
+      ${SOS_JOINS}
+      ${where}
+  `, vals);
+  return rows[0];
 }
 
 async function allSosMsgIds(scope: any = {}) {
@@ -2472,5 +2539,6 @@ export {
   failSosAction,
   listSosEvents,
   listSosAlerts,
+  countSosAlerts,
   allSosMsgIds,
 };

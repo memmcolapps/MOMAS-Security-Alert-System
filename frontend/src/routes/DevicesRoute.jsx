@@ -148,7 +148,7 @@ export function DevicesRoute() {
           </h1>
           <p className="mt-1 text-[11px] text-neutral-500">
             {isPlatformAdmin
-              ? "Manage POCSTARS radios and vehicle trackers"
+              ? "Manage radios and vehicle trackers"
               : "View your assigned devices and update operational details"}
           </p>
         </div>

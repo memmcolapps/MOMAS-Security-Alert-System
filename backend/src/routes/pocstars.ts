@@ -5,6 +5,7 @@ import { env } from "../config";
 import * as db from "../db";
 import { bus } from "../events";
 import { fetchLastLocations } from "../pocstars/locations";
+import { actionMessage, describeSyncFailure } from "../pocstars/messages";
 
 type SseClient = {
   write: (chunk: string) => Promise<void>;
@@ -163,10 +164,31 @@ async function persistAndBroadcast(rows: any[]) {
   }
 }
 
-async function callPocstarsAction(action: "process" | "close", sosMsgId: number) {
-  const endpoint = action === "process" ? "handle/begin" : "handle/end";
+type SosAction = "process" | "close" | "reopen";
+
+// Reopening a closed alarm puts it back into the dispatcher's hands upstream,
+// which is the same "begin handling" operation as starting a response.
+const UPSTREAM_ENDPOINTS: Record<SosAction, string> = {
+  process: "handle/begin",
+  close: "handle/end",
+  reopen: "handle/begin",
+};
+
+const AUDIT_ACTIONS: Record<SosAction, string> = {
+  process: "sos.response_started",
+  close: "sos.resolved",
+  reopen: "sos.reopened",
+};
+
+const INVALID_STATUS_CODES: Record<SosAction, string> = {
+  process: "alarm_already_started",
+  close: "alarm_already_resolved",
+  reopen: "alarm_not_resolved",
+};
+
+async function callPocstarsAction(action: SosAction, sosMsgId: number) {
   const { data } = await axios.put(
-    `${SOS_BASE.replace(/\/$/, "")}/sos/mg/${endpoint}`,
+    `${SOS_BASE.replace(/\/$/, "")}/sos/mg/${UPSTREAM_ENDPOINTS[action]}`,
     null,
     {
       params: { uid: DISPATCHER_UID, sosMsgId },
@@ -175,39 +197,50 @@ async function callPocstarsAction(action: "process" | "close", sosMsgId: number)
   );
   if (Number(data?.code) !== 200 || data?.success === false) {
     const upstreamCode = Number(data?.code);
-    const error: any = new Error(data?.message || `POCSTARS ${action} operation was rejected.`);
+    const error: any = new Error("The radio network rejected the update.");
     error.status = upstreamCode === 501 ? 403 : [502, 503, 504].includes(upstreamCode) ? 409 : 502;
-    error.code = "pocstars_action_rejected";
+    error.code = "alarm_radio_sync_failed";
     error.upstreamCode = Number.isFinite(upstreamCode) ? upstreamCode : null;
+    // Raw vendor text is kept for the audit trail only — never rendered to operators.
+    error.upstreamMessage = data?.message || null;
     throw error;
   }
   return data;
 }
 
-function actionError(error: any) {
-  return {
-    error: error?.code || "pocstars_action_failed",
-    message: error?.response?.data?.message || error?.message || String(error),
-  };
-}
-
-async function handleSosAction(c: any, action: "process" | "close") {
+async function handleSosAction(c: any, action: SosAction) {
   const sosMsgId = parseInt(c.req.param("sosMsgId"), 10);
-  if (!sosMsgId) return c.json({ error: "invalid sosMsgId" }, 400);
+  if (!sosMsgId) return c.json({ error: "invalid_alarm_reference", message: "Invalid alarm reference." }, 400);
+  if (!DISPATCHER_UID) {
+    return c.json(
+      { error: "alarm_dispatch_not_configured", message: actionMessage("alarm_dispatch_not_configured") },
+      503,
+    );
+  }
   const user = c.get("user");
   const body = await c.req.json().catch(() => ({}));
-  const note = typeof body?.resolution_note === "string" ? body.resolution_note.trim() : null;
+  // One note field per action: the outcome when resolving, the reason when
+  // reopening, and who/what is responding when starting.
+  const note =
+    typeof body?.note === "string"
+      ? body.note.trim()
+      : typeof body?.resolution_note === "string"
+        ? body.resolution_note.trim()
+        : null;
+
   const start = await db.beginSosAction(sosMsgId, action, user?.id, orgScope(c));
-  if (start.state === "not_found") return c.json({ error: "alarm_not_found" }, 404);
-  if (start.state === "syncing") return c.json({ error: "alarm_action_in_progress", alert: start.alert }, 409);
-  if (start.state === "invalid_status") {
+  if (start.state === "not_found") {
+    return c.json({ error: "alarm_not_found", message: actionMessage("alarm_not_found") }, 404);
+  }
+  if (start.state === "syncing") {
     return c.json(
-      {
-        error: action === "process" ? "alarm_already_started" : "alarm_already_resolved",
-        alert: start.alert,
-      },
+      { error: "alarm_action_in_progress", message: actionMessage("alarm_action_in_progress"), alert: start.alert },
       409,
     );
+  }
+  if (start.state === "invalid_status") {
+    const code = INVALID_STATUS_CODES[action];
+    return c.json({ error: code, message: actionMessage(code), alert: start.alert }, 409);
   }
 
   try {
@@ -215,23 +248,28 @@ async function handleSosAction(c: any, action: "process" | "close") {
     const alert = await db.completeSosAction(sosMsgId, action, user?.id, {
       note,
       upstreamResponse,
+      previousNote: start.alert?.resolution_note || null,
     });
     await db.createAuditLog({
       organization_id: alert?.organization_id || null,
       actor_user_id: user?.id || null,
-      action: action === "process" ? "sos.response_started" : "sos.resolved",
+      action: AUDIT_ACTIONS[action],
       target_type: "sos_alert",
       target_id: String(sosMsgId),
-      metadata: { resolution_note: note, upstream: true },
+      metadata: { note, upstream: true },
     });
     broadcastSse("sos_updated", alert);
     bus.emit("pocstars-alert:updated", alert);
     return c.json({ alert });
   } catch (error: any) {
-    const alert = await db.failSosAction(sosMsgId, action, user?.id, actionError(error).message);
+    const { message, detail } = describeSyncFailure(error);
+    const alert = await db.failSosAction(sosMsgId, action, user?.id, message, detail);
     broadcastSse("sos_updated", alert);
     bus.emit("pocstars-alert:updated", alert);
-    return c.json({ ...actionError(error), alert }, error?.status || statusFromAxios(error));
+    return c.json(
+      { error: error?.code || "alarm_radio_sync_failed", message, alert },
+      error?.status || statusFromAxios(error),
+    );
   }
 }
 
@@ -391,6 +429,7 @@ router.get("/alarms/:sosMsgId", async (c) => {
 
 router.post("/alarms/:sosMsgId/start-response", (c) => handleSosAction(c, "process"));
 router.post("/alarms/:sosMsgId/resolve", (c) => handleSosAction(c, "close"));
+router.post("/alarms/:sosMsgId/reopen", (c) => handleSosAction(c, "reopen"));
 
 router.get("/config", async (c) => {
   const devices = await db.listDevices(orgScope(c)).catch(() => []);

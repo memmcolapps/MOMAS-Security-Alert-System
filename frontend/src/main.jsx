@@ -107,6 +107,9 @@ const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   beforeLoad: requireReadySession,
+  // `focus` carries an alarm key so the alarms screen can hand an alarm to the
+  // operations map ("Show on operations map").
+  validateSearch: (search) => (search.focus ? { focus: String(search.focus) } : {}),
   component: OperationsRoute,
 });
 

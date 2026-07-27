@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import {
   Bell,
   ChevronLeft,
@@ -111,6 +111,10 @@ export function OperationsRoute() {
   const knownSosIdsRef = useRef(null);
   const ringingSosIdsRef = useRef(new Set());
   const pendingSosFocusIdsRef = useRef(new Set());
+  const consumedFocusKeyRef = useRef(null);
+  const navigate = useNavigate();
+  const routeSearch = useSearch({ strict: false });
+  const requestedFocusKey = routeSearch?.focus || null;
   const audioCtxRef = useRef(null);
   const alarmTimerRef = useRef(null);
 
@@ -278,6 +282,26 @@ export function OperationsRoute() {
       if (!activeSet.has(id)) pendingSosFocusIdsRef.current.delete(id);
     });
   }, [activeAlerts]);
+
+  // "Show on operations map" hands an alarm over from the alarms screen.
+  useEffect(() => {
+    if (!requestedFocusKey || consumedFocusKeyRef.current === requestedFocusKey) return;
+    const alert = activeAlerts.find((candidate) => String(candidate.alert_key) === String(requestedFocusKey));
+    if (!alert || !Number.isFinite(Number(alert.map_lat)) || !Number.isFinite(Number(alert.map_lon))) return;
+    consumedFocusKeyRef.current = requestedFocusKey;
+    setFocusTarget({
+      kind: "alarm",
+      id: requestedFocusKey,
+      key: `${requestedFocusKey}-${Date.now()}`,
+      lat: Number(alert.map_lat),
+      lon: Number(alert.map_lon),
+      zoom: 16,
+      label: alert.asset_name || alert.dev_name || alert.device_name || `Device ${alert.device_id}`,
+      popupHtml: sosPopup(alert),
+    });
+    // Drop the parameter once used so a later refresh does not re-focus.
+    navigate({ to: "/", search: {}, replace: true });
+  }, [requestedFocusKey, activeAlerts, navigate]);
 
   useEffect(() => {
     if (alarmTimerRef.current) {

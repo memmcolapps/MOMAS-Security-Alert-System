@@ -45,8 +45,11 @@ async function request(path, options = {}) {
   }
   if (!response.ok) {
     if (response.status === 401) setAuthToken(null);
-    const error = new Error(body?.error || body?.message || response.statusText);
+    // `message` is the operator-facing sentence; `error` is the machine code.
+    // Prefer the sentence so raw codes never reach the screen.
+    const error = new Error(body?.message || body?.error || response.statusText);
     error.status = response.status;
+    error.code = body?.error || null;
     error.body = body;
     throw error;
   }
@@ -377,28 +380,28 @@ export function getAlarm(alertKey) {
   return request(`/api/alerts/${encodeURIComponent(source)}/${encodeURIComponent(id)}`);
 }
 
-export function startAlarmResponse(alertKey) {
+function alarmAction(alertKey, action, note) {
   const { source, id } = alertParts(alertKey);
   const path =
     source === "geofence"
-      ? `/api/alerts/geofence/${encodeURIComponent(id)}/start-response`
-      : `/api/pocstars/alarms/${encodeURIComponent(id)}/start-response`;
+      ? `/api/alerts/geofence/${encodeURIComponent(id)}/${action}`
+      : `/api/pocstars/alarms/${encodeURIComponent(id)}/${action}`;
   return request(path, {
     method: "POST",
-    body: "{}",
+    body: JSON.stringify({ note: note || "" }),
   });
 }
 
-export function resolveAlarm({ alertKey, sosMsgId, resolution_note }) {
-  const { source, id } = alertParts(alertKey || sosMsgId);
-  const path =
-    source === "geofence"
-      ? `/api/alerts/geofence/${encodeURIComponent(id)}/resolve`
-      : `/api/pocstars/alarms/${encodeURIComponent(id)}/resolve`;
-  return request(path, {
-    method: "POST",
-    body: JSON.stringify({ resolution_note }),
-  });
+export function startAlarmResponse({ alertKey, note } = {}) {
+  return alarmAction(alertKey, "start-response", note);
+}
+
+export function resolveAlarm({ alertKey, sosMsgId, note, resolution_note }) {
+  return alarmAction(alertKey || sosMsgId, "resolve", note ?? resolution_note);
+}
+
+export function reopenAlarm({ alertKey, note }) {
+  return alarmAction(alertKey, "reopen", note);
 }
 
 export function alertsEventsUrl() {
@@ -448,12 +451,9 @@ export function deleteDrone(sysid) {
 }
 
 export function acknowledgeSos(sosMsgId) {
-  return request(`/api/pocstars/alarms/${encodeURIComponent(sosMsgId)}/start-response`, {
-    method: "POST",
-    body: "{}",
-  });
+  return startAlarmResponse({ alertKey: sosMsgId });
 }
 
-export function resolveSos(sosMsgId, resolution_note = "") {
-  return resolveAlarm({ sosMsgId, resolution_note });
+export function resolveSos(sosMsgId, note = "") {
+  return resolveAlarm({ sosMsgId, note });
 }
