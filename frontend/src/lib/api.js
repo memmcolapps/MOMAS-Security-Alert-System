@@ -357,6 +357,32 @@ export function getSosLog() {
   return request("/api/pocstars/sos/log");
 }
 
+export function listAlarms(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") query.set(key, value);
+  });
+  return request(`/api/pocstars/alarms?${query}`);
+}
+
+export function getAlarm(sosMsgId) {
+  return request(`/api/pocstars/alarms/${encodeURIComponent(sosMsgId)}`);
+}
+
+export function startAlarmResponse(sosMsgId) {
+  return request(`/api/pocstars/alarms/${encodeURIComponent(sosMsgId)}/start-response`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+export function resolveAlarm({ sosMsgId, resolution_note }) {
+  return request(`/api/pocstars/alarms/${encodeURIComponent(sosMsgId)}/resolve`, {
+    method: "POST",
+    body: JSON.stringify({ resolution_note }),
+  });
+}
+
 export function getDronePositions() {
   return request("/api/drones/positions");
 }
@@ -379,15 +405,9 @@ export function deleteDrone(sysid) {
 }
 
 export function acknowledgeSos(sosMsgId) {
-  return request(`/api/pocstars/sos/${sosMsgId}/acknowledge`, {
-    method: "POST",
-    body: "{}",
-  });
+  return startAlarmResponse(sosMsgId);
 }
 
-export function resolveSos(sosMsgId) {
-  return request(`/api/pocstars/sos/${sosMsgId}/resolve`, {
-    method: "POST",
-    body: "{}",
-  });
+export function resolveSos(sosMsgId, resolution_note = "") {
+  return resolveAlarm({ sosMsgId, resolution_note });
 }

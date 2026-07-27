@@ -225,6 +225,16 @@ async function init() {
       created_at      TIMESTAMPTZ DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS sos_alert_events (
+      id              BIGSERIAL PRIMARY KEY,
+      sos_alert_id    INTEGER NOT NULL REFERENCES sos_alerts(id) ON DELETE CASCADE,
+      actor_user_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      event_type      TEXT NOT NULL,
+      note            TEXT,
+      metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS osint_sources (
       id                SERIAL PRIMARY KEY,
       name              TEXT NOT NULL,
@@ -276,6 +286,7 @@ async function init() {
     CREATE INDEX IF NOT EXISTS idx_memberships_user ON organization_memberships(user_id);
     CREATE INDEX IF NOT EXISTS idx_units_org ON organization_units(organization_id);
     CREATE INDEX IF NOT EXISTS idx_audit_org ON audit_logs(organization_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sos_events_alert ON sos_alert_events(sos_alert_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_osint_sources_type ON osint_sources(source_type, enabled);
     CREATE INDEX IF NOT EXISTS idx_osint_watchlists_enabled ON osint_watchlists(enabled);
     CREATE INDEX IF NOT EXISTS idx_osint_entities_item ON osint_entities(source_item_id);
@@ -321,6 +332,35 @@ async function init() {
   try {
     await pool.query(`
       ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ;
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL;
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS unit_id INTEGER REFERENCES organization_units(id) ON DELETE SET NULL;
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS pocstars_group_id TEXT;
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS pocstars_group_name TEXT;
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS upstream_status INTEGER;
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS sync_status TEXT NOT NULL DEFAULT 'synced';
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS last_sync_error TEXT;
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS sync_attempts INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS acknowledged_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS resolution_note TEXT;
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS upstream_processed_at TIMESTAMPTZ;
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS upstream_closed_at TIMESTAMPTZ;
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS scope_captured_at TIMESTAMPTZ;
+      CREATE INDEX IF NOT EXISTS idx_sos_org ON sos_alerts(organization_id, triggered_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_sos_unit ON sos_alerts(unit_id, triggered_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_sos_sync_status ON sos_alerts(sync_status);
+      UPDATE sos_alerts s
+         SET organization_id = COALESCE(s.organization_id, d.organization_id),
+             unit_id = COALESCE(s.unit_id, d.unit_id),
+             scope_captured_at = NOW()
+        FROM devices d
+       WHERE d.device_id = s.device_id
+         AND s.scope_captured_at IS NULL;
+      UPDATE sos_alerts
+         SET scope_captured_at = NOW()
+       WHERE scope_captured_at IS NULL;
+      ALTER TABLE sos_alerts ALTER COLUMN scope_captured_at SET DEFAULT NOW();
     `);
   } catch (err) {
     console.warn("[DB] SOS migration note:", err.message);
@@ -1391,87 +1431,328 @@ const SOS_WITH_DEVICE_COLS = `
   d.company     AS dev_company,
   d.operator    AS dev_operator,
   d.device_type AS dev_type,
-  d.notes       AS dev_notes
+  d.notes       AS dev_notes,
+  o.name        AS organization_name,
+  ou.name       AS unit_name,
+  acknowledged_user.name  AS acknowledged_by_name,
+  acknowledged_user.email AS acknowledged_by_email,
+  resolved_user.name      AS resolved_by_name,
+  resolved_user.email     AS resolved_by_email
 `;
 
-async function _getSosWithDevice(sos_msg_id) {
+function sosScopeSql(scope: any = {}, alias = "s", startIndex = 1) {
+  const vals: any[] = [];
+  const conds: string[] = [];
+  if (scope.organizationId) {
+    conds.push(`${alias}.organization_id = $${startIndex + vals.length}`);
+    vals.push(scope.organizationId);
+  }
+  if (scope.unitId) {
+    conds.push(`${alias}.unit_id = $${startIndex + vals.length}`);
+    vals.push(scope.unitId);
+  }
+  return { vals, conds };
+}
+
+const SOS_JOINS = `
+  LEFT JOIN devices d ON d.device_id = s.device_id
+  LEFT JOIN organizations o ON o.id = s.organization_id
+  LEFT JOIN organization_units ou ON ou.id = s.unit_id
+  LEFT JOIN users acknowledged_user ON acknowledged_user.id = s.acknowledged_by
+  LEFT JOIN users resolved_user ON resolved_user.id = s.resolved_by
+`;
+
+async function getSosAlert(sos_msg_id, scope: any = {}) {
+  const scoped = sosScopeSql(scope, "s", 2);
   const { rows } = await pool.query(
     `SELECT ${SOS_WITH_DEVICE_COLS}
        FROM sos_alerts s
-       LEFT JOIN devices d ON d.device_id = s.device_id
-      WHERE s.sos_msg_id = $1`,
-    [sos_msg_id],
+       ${SOS_JOINS}
+      WHERE s.sos_msg_id = $1
+        ${scoped.conds.length ? `AND ${scoped.conds.join(" AND ")}` : ""}`,
+    [sos_msg_id, ...scoped.vals],
   );
   return rows[0] ?? null;
 }
 
-async function insertSosAlert({ sos_msg_id, device_id, device_name, triggered_at, location_lat, location_lon, location_raw }) {
+async function insertSosAlert({
+  sos_msg_id,
+  device_id,
+  device_name,
+  triggered_at,
+  location_lat,
+  location_lon,
+  location_raw,
+  pocstars_group_id = null,
+  pocstars_group_name = null,
+  upstream_status = null,
+}) {
   const { rows } = await pool.query(
-    `INSERT INTO sos_alerts (sos_msg_id, device_id, device_name, triggered_at, location_lat, location_lon, location_raw)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)
+    `INSERT INTO sos_alerts (
+       sos_msg_id, device_id, device_name, triggered_at,
+       location_lat, location_lon, location_raw,
+       organization_id, unit_id, pocstars_group_id, pocstars_group_name,
+       upstream_status
+     )
+     VALUES (
+       $1,$2,$3,$4,$5,$6,$7,
+       (SELECT organization_id FROM devices WHERE device_id=$2),
+       (SELECT unit_id FROM devices WHERE device_id=$2),
+       $8,$9,$10
+     )
      ON CONFLICT (sos_msg_id) DO UPDATE
        SET device_name = COALESCE(EXCLUDED.device_name, sos_alerts.device_name),
            location_lat = COALESCE(EXCLUDED.location_lat, sos_alerts.location_lat),
            location_lon = COALESCE(EXCLUDED.location_lon, sos_alerts.location_lon),
-           location_raw = COALESCE(EXCLUDED.location_raw, sos_alerts.location_raw)
+           location_raw = COALESCE(EXCLUDED.location_raw, sos_alerts.location_raw),
+           pocstars_group_id = COALESCE(EXCLUDED.pocstars_group_id, sos_alerts.pocstars_group_id),
+           pocstars_group_name = COALESCE(EXCLUDED.pocstars_group_name, sos_alerts.pocstars_group_name),
+           upstream_status = COALESCE(EXCLUDED.upstream_status, sos_alerts.upstream_status),
+           updated_at = NOW()
        WHERE (sos_alerts.location_lat IS NULL AND EXCLUDED.location_lat IS NOT NULL)
           OR (sos_alerts.location_lon IS NULL AND EXCLUDED.location_lon IS NOT NULL)
           OR (sos_alerts.location_raw IS NULL AND EXCLUDED.location_raw IS NOT NULL)
-     RETURNING sos_msg_id, xmax = 0 AS inserted`,
-    [sos_msg_id, device_id, device_name, triggered_at, location_lat ?? null, location_lon ?? null, location_raw ?? null],
+          OR (sos_alerts.pocstars_group_id IS NULL AND EXCLUDED.pocstars_group_id IS NOT NULL)
+          OR (sos_alerts.pocstars_group_name IS NULL AND EXCLUDED.pocstars_group_name IS NOT NULL)
+          OR (EXCLUDED.upstream_status IS NOT NULL AND EXCLUDED.upstream_status IS DISTINCT FROM sos_alerts.upstream_status)
+     RETURNING id, sos_msg_id, xmax = 0 AS inserted`,
+    [
+      sos_msg_id,
+      device_id,
+      device_name,
+      triggered_at,
+      location_lat ?? null,
+      location_lon ?? null,
+      location_raw ?? null,
+      pocstars_group_id ? String(pocstars_group_id) : null,
+      pocstars_group_name || null,
+      upstream_status ?? null,
+    ],
   );
   if (!rows[0]?.inserted) return null; // duplicate or location backfill
-  return _getSosWithDevice(rows[0].sos_msg_id);
-}
-
-async function acknowledgeSosAlert(sos_msg_id) {
-  const { rowCount } = await pool.query(
-    `UPDATE sos_alerts SET status=1, acknowledged_at=NOW()
-     WHERE sos_msg_id=$1 AND status=0`,
-    [sos_msg_id],
+  await pool.query(
+    `INSERT INTO sos_alert_events (sos_alert_id, event_type, metadata)
+     VALUES ($1, 'received', $2::jsonb)`,
+    [
+      rows[0].id,
+      JSON.stringify({
+        source: "pocstars",
+        upstream_status: upstream_status ?? null,
+        pocstars_group_id: pocstars_group_id ? String(pocstars_group_id) : null,
+      }),
+    ],
   );
-  if (!rowCount) return null;
-  return _getSosWithDevice(sos_msg_id);
+  return getSosAlert(rows[0].sos_msg_id);
 }
 
-async function resolveSosAlert(sos_msg_id) {
-  const { rowCount } = await pool.query(
-    `UPDATE sos_alerts SET status=2, resolved_at=NOW()
-     WHERE sos_msg_id=$1 AND status < 2`,
-    [sos_msg_id],
+async function beginSosAction(sos_msg_id, action, actor_user_id, scope: any = {}) {
+  const alert = await getSosAlert(sos_msg_id, scope);
+  if (!alert) return { state: "not_found", alert: null };
+  if (action === "process" && Number(alert.status) !== 0) {
+    return { state: "invalid_status", alert };
+  }
+  if (action === "close" && Number(alert.status) !== 1) {
+    return { state: "invalid_status", alert };
+  }
+  if (alert.sync_status === "syncing") return { state: "syncing", alert };
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `UPDATE sos_alerts
+          SET sync_status='syncing',
+              last_sync_error=NULL,
+              sync_attempts=sync_attempts+1,
+              updated_at=NOW()
+        WHERE id=$1 AND sync_status <> 'syncing'
+        RETURNING *`,
+      [alert.id],
+    );
+    if (!rows[0]) {
+      await client.query("ROLLBACK");
+      return { state: "syncing", alert };
+    }
+    await client.query(
+      `INSERT INTO sos_alert_events (sos_alert_id, actor_user_id, event_type, metadata)
+       VALUES ($1,$2,$3,$4::jsonb)`,
+      [
+        alert.id,
+        actor_user_id || null,
+        action === "process" ? "response_requested" : "resolution_requested",
+        JSON.stringify({ upstream_operation: action }),
+      ],
+    );
+    await client.query("COMMIT");
+    return { state: "ready", alert: await getSosAlert(sos_msg_id, scope) };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function completeSosAction(
+  sos_msg_id,
+  action,
+  actor_user_id,
+  { note = null, upstreamResponse = null }: any = {},
+) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      action === "process"
+        ? `UPDATE sos_alerts
+              SET status=1,
+                  upstream_status=1,
+                  sync_status='synced',
+                  acknowledged_at=COALESCE(acknowledged_at, NOW()),
+                  acknowledged_by=COALESCE(acknowledged_by, $2),
+                  upstream_processed_at=NOW(),
+                  last_sync_error=NULL,
+                  updated_at=NOW()
+            WHERE sos_msg_id=$1
+            RETURNING id`
+        : `UPDATE sos_alerts
+              SET status=2,
+                  upstream_status=2,
+                  sync_status='synced',
+                  resolved_at=NOW(),
+                  resolved_by=$2,
+                  resolution_note=$3,
+                  upstream_closed_at=NOW(),
+                  last_sync_error=NULL,
+                  updated_at=NOW()
+            WHERE sos_msg_id=$1
+            RETURNING id`,
+      action === "process" ? [sos_msg_id, actor_user_id || null] : [sos_msg_id, actor_user_id || null, note || null],
+    );
+    if (!rows[0]) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    await client.query(
+      `INSERT INTO sos_alert_events (sos_alert_id, actor_user_id, event_type, note, metadata)
+       VALUES ($1,$2,$3,$4,$5::jsonb)`,
+      [
+        rows[0].id,
+        actor_user_id || null,
+        action === "process" ? "response_started" : "resolved",
+        note || null,
+        JSON.stringify({ upstream_operation: action, upstream_response: upstreamResponse }),
+      ],
+    );
+    await client.query("COMMIT");
+    return getSosAlert(sos_msg_id);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function failSosAction(sos_msg_id, action, actor_user_id, errorMessage) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `UPDATE sos_alerts
+          SET sync_status='failed',
+              last_sync_error=$2,
+              updated_at=NOW()
+        WHERE sos_msg_id=$1
+        RETURNING id`,
+      [sos_msg_id, String(errorMessage).slice(0, 1000)],
+    );
+    if (rows[0]) {
+      await client.query(
+        `INSERT INTO sos_alert_events (sos_alert_id, actor_user_id, event_type, metadata)
+         VALUES ($1,$2,'sync_failed',$3::jsonb)`,
+        [
+          rows[0].id,
+          actor_user_id || null,
+          JSON.stringify({ upstream_operation: action, error: String(errorMessage).slice(0, 1000) }),
+        ],
+      );
+    }
+    await client.query("COMMIT");
+    return getSosAlert(sos_msg_id);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function listSosEvents(sos_msg_id, scope: any = {}) {
+  const alert = await getSosAlert(sos_msg_id, scope);
+  if (!alert) return null;
+  const { rows } = await pool.query(
+    `SELECT e.*, u.name AS actor_name, u.email AS actor_email
+       FROM sos_alert_events e
+       LEFT JOIN users u ON u.id=e.actor_user_id
+      WHERE e.sos_alert_id=$1
+      ORDER BY e.created_at ASC`,
+    [alert.id],
   );
-  if (!rowCount) return null;
-  return _getSosWithDevice(sos_msg_id);
+  return { alert, events: rows };
 }
 
-async function listSosAlerts(scope: any = {}) {
-  // Show: unresolved (any date) + resolved today (by our clock, not POCSTARS clock)
-  const vals = [];
-  const conds = [];
-  if (scope.organizationId) {
-    conds.push(`d.organization_id = $${vals.length + 1}`);
-    vals.push(scope.organizationId);
+async function listSosAlerts(scope: any = {}, filters: any = {}) {
+  const scoped = sosScopeSql(scope);
+  const vals = [...scoped.vals];
+  const conds = [...scoped.conds];
+  const status = filters.status || "all";
+  if (status === "open") conds.push("s.status < 2");
+  if (status === "new") conds.push("s.status = 0");
+  if (status === "in_progress") conds.push("s.status = 1");
+  if (status === "resolved") conds.push("s.status = 2");
+  if (status === "sync_failed") conds.push("s.sync_status = 'failed'");
+  if (filters.search) {
+    vals.push(`%${String(filters.search).trim()}%`);
+    conds.push(`(
+      s.device_id ILIKE $${vals.length}
+      OR COALESCE(s.device_name, '') ILIKE $${vals.length}
+      OR COALESCE(d.name, '') ILIKE $${vals.length}
+      OR COALESCE(d.operator, '') ILIKE $${vals.length}
+      OR COALESCE(o.name, '') ILIKE $${vals.length}
+      OR COALESCE(ou.name, '') ILIKE $${vals.length}
+      OR COALESCE(s.pocstars_group_name, '') ILIKE $${vals.length}
+    )`);
   }
-  if (scope.unitId) {
-    conds.push(`d.unit_id = $${vals.length + 1}`);
-    vals.push(scope.unitId);
+  if (filters.from) {
+    vals.push(filters.from);
+    conds.push(`s.triggered_at >= $${vals.length}::timestamptz`);
   }
-  const scopedFilter = conds.length ? `AND ${conds.join(" AND ")}` : "";
+  if (filters.to) {
+    vals.push(filters.to);
+    conds.push(`s.triggered_at < ($${vals.length}::date + INTERVAL '1 day')`);
+  }
+  const limit = Math.min(Math.max(Number(filters.limit) || 200, 1), 500);
+  vals.push(limit);
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const { rows } = await pool.query(`
     SELECT ${SOS_WITH_DEVICE_COLS}
       FROM sos_alerts s
-      LEFT JOIN devices d ON d.device_id = s.device_id
-     WHERE (s.status < 2
-        OR s.resolved_at::date = CURRENT_DATE)
-       ${scopedFilter}
-     ORDER BY s.created_at DESC
+      ${SOS_JOINS}
+      ${where}
+     ORDER BY s.triggered_at DESC
+     LIMIT $${vals.length}
   `, vals);
   return rows;
 }
 
-async function allSosMsgIds() {
-  // All IDs ever seen — used for sound dedup regardless of resolution status/date
-  const { rows } = await pool.query(`SELECT sos_msg_id FROM sos_alerts`);
+async function allSosMsgIds(scope: any = {}) {
+  const scoped = sosScopeSql(scope);
+  const { rows } = await pool.query(
+    `SELECT sos_msg_id FROM sos_alerts s
+     ${scoped.conds.length ? `WHERE ${scoped.conds.join(" AND ")}` : ""}`,
+    scoped.vals,
+  );
   return new Set(rows.map((r) => r.sos_msg_id));
 }
 
@@ -2100,8 +2381,11 @@ export {
   createAuditLog,
   listAuditLogs,
   insertSosAlert,
-  acknowledgeSosAlert,
-  resolveSosAlert,
+  getSosAlert,
+  beginSosAction,
+  completeSosAction,
+  failSosAction,
+  listSosEvents,
   listSosAlerts,
   allSosMsgIds,
 };

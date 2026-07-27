@@ -24,6 +24,8 @@ const envSchema = z.object({
   POCSTARS_LOC_BASE: z.string().url().default("http://143.105.173.49:9275"),
   POCSTARS_SOS_BASE: z.string().url().default("http://143.105.173.49:6891"),
   POCSTARS_TARGET_UID: z.string().default("583"),
+  // POCSTARS dispatcher/recipient account used to claim and close SOS alarms.
+  POCSTARS_DISPATCHER_UID: z.string().default("583"),
   // Drone tracking — raw MAVLink TCP listener (Mission Planner forwards here).
   MAVLINK_ENABLE: boolFromEnv(true),
   MAVLINK_TCP_HOST: z.string().default("0.0.0.0"),

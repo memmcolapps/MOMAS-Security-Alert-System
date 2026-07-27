@@ -12,6 +12,7 @@ import {
 import { createRoot } from "react-dom/client";
 import { AppHeader } from "./components/AppHeader";
 import { getAuthToken, getMe } from "./lib/api";
+import { AlarmsRoute } from "./routes/AlarmsRoute";
 import { AdminOrganizationDetailRoute } from "./routes/AdminOrganizationDetailRoute";
 import { AdminOrganizationsRoute } from "./routes/AdminOrganizationsRoute";
 import { ChangePasswordRoute } from "./routes/ChangePasswordRoute";
@@ -115,6 +116,13 @@ const devicesRoute = createRoute({
   component: DevicesRoute,
 });
 
+const alarmsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/alarms",
+  beforeLoad: requireReadySession,
+  component: AlarmsRoute,
+});
+
 const dronesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/drones",
@@ -165,6 +173,7 @@ const orgAdminRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
+  alarmsRoute,
   devicesRoute,
   dronesRoute,
   osintRoute,

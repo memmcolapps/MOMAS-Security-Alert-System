@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import {
   Bell,
   ChevronLeft,
@@ -19,7 +20,6 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OperationsMap, devicePopup, dronePopup, incidentPopup, sosPopup } from "../components/OperationsMap";
 import {
-  acknowledgeSos,
   getDronePositions,
   getIncidentEvidence,
   getIncidentReport,
@@ -28,7 +28,6 @@ import {
   getMe,
   getSosLog,
   listDevices,
-  resolveSos,
   triggerScrape,
 } from "../lib/api";
 import { config } from "../lib/app-config";
@@ -151,16 +150,6 @@ export function OperationsRoute() {
   const scrapeMutation = useMutation({
     mutationFn: triggerScrape,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["incidents"] }),
-  });
-
-  const ackMutation = useMutation({
-    mutationFn: acknowledgeSos,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["sos-log"] }),
-  });
-
-  const resolveMutation = useMutation({
-    mutationFn: resolveSos,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["sos-log"] }),
   });
 
   const incidents = incidentQuery.data?.incidents || [];
@@ -612,35 +601,22 @@ export function OperationsRoute() {
       </button>
 
       {activeSos.length ? (
-        <section className="glass-panel absolute right-3 top-3 z-[1001] w-[300px] rounded-lg border-red-500/50">
-          <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
-            <div className="flex items-center gap-2 text-[11px] font-bold text-red-400">
-              <Siren size={14} /> SOS Alerts <span className="rounded-full bg-red-500 px-1.5 text-[9px] text-white">{activeSos.length}</span>
+        <section className={`glass-panel absolute left-1/2 z-[1001] flex w-[min(440px,calc(100vw-32px))] -translate-x-1/2 items-center gap-3 rounded-lg border-red-500/50 px-3 py-2.5 ${liveMode ? "top-28" : "top-16"}`}>
+          <span className="relative grid h-8 w-8 shrink-0 place-items-center rounded-full bg-red-500/15 text-red-300">
+            <span className="absolute inset-0 animate-ping rounded-full border border-red-400/30" />
+            <Siren size={15} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 text-[11px] font-bold text-red-300">
+              {activeSos.length} active SOS alarm{activeSos.length === 1 ? "" : "s"}
             </div>
+            <p className="truncate text-[9px] text-neutral-500">
+              Latest: {activeSos[0].dev_name || activeSos[0].device_name || `Device ${activeSos[0].device_id}`} · {relativeDate(activeSos[0].triggered_at)}
+            </p>
           </div>
-          <div className="max-h-80 overflow-y-auto">
-            {activeSos.map((alert) => (
-              <div className="border-b border-white/5 px-3 py-2 text-[10px]" key={alert.sos_msg_id}>
-                <div className="flex justify-between">
-                  <strong className="text-red-300">{alert.dev_name || alert.device_name || `Device ${alert.device_id}`}</strong>
-                  <span className="text-neutral-600">{relativeDate(alert.triggered_at)}</span>
-                </div>
-                <div className="mt-1 text-neutral-500">
-                  {Number.isFinite(Number(alert.map_lat)) && Number.isFinite(Number(alert.map_lon))
-                    ? `${Number(alert.map_lat).toFixed(5)}, ${Number(alert.map_lon).toFixed(5)}${alert.map_location_source === "device" ? " · latest device" : ""}`
-                    : "Location unknown"}
-                </div>
-                <div className="mt-2 flex gap-2">
-                  <button className="rounded border border-red-500/50 px-2 py-1 font-bold text-red-300" onClick={() => ackMutation.mutate(alert.sos_msg_id)}>
-                    Ack
-                  </button>
-                  <button className="rounded border border-white/10 px-2 py-1 text-neutral-400" onClick={() => resolveMutation.mutate(alert.sos_msg_id)}>
-                    Resolve
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
+          <Link to="/alarms" className="shrink-0 rounded border border-red-500/40 px-2.5 py-1.5 text-[9px] font-bold text-red-300 hover:bg-red-500/10">
+            Open alarms
+          </Link>
         </section>
       ) : null}
 
