@@ -362,25 +362,68 @@ export function listAlarms(params = {}) {
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== "") query.set(key, value);
   });
-  return request(`/api/pocstars/alarms?${query}`);
+  return request(`/api/alerts?${query}`);
 }
 
-export function getAlarm(sosMsgId) {
-  return request(`/api/pocstars/alarms/${encodeURIComponent(sosMsgId)}`);
+function alertParts(alertKey) {
+  const value = String(alertKey || "");
+  const separator = value.indexOf(":");
+  if (separator < 0) return { source: "pocstars", id: value };
+  return { source: value.slice(0, separator), id: value.slice(separator + 1) };
 }
 
-export function startAlarmResponse(sosMsgId) {
-  return request(`/api/pocstars/alarms/${encodeURIComponent(sosMsgId)}/start-response`, {
+export function getAlarm(alertKey) {
+  const { source, id } = alertParts(alertKey);
+  return request(`/api/alerts/${encodeURIComponent(source)}/${encodeURIComponent(id)}`);
+}
+
+export function startAlarmResponse(alertKey) {
+  const { source, id } = alertParts(alertKey);
+  const path =
+    source === "geofence"
+      ? `/api/alerts/geofence/${encodeURIComponent(id)}/start-response`
+      : `/api/pocstars/alarms/${encodeURIComponent(id)}/start-response`;
+  return request(path, {
     method: "POST",
     body: "{}",
   });
 }
 
-export function resolveAlarm({ sosMsgId, resolution_note }) {
-  return request(`/api/pocstars/alarms/${encodeURIComponent(sosMsgId)}/resolve`, {
+export function resolveAlarm({ alertKey, sosMsgId, resolution_note }) {
+  const { source, id } = alertParts(alertKey || sosMsgId);
+  const path =
+    source === "geofence"
+      ? `/api/alerts/geofence/${encodeURIComponent(id)}/resolve`
+      : `/api/pocstars/alarms/${encodeURIComponent(id)}/resolve`;
+  return request(path, {
     method: "POST",
     body: JSON.stringify({ resolution_note }),
   });
+}
+
+export function alertsEventsUrl() {
+  const query = new URLSearchParams();
+  const token = getAuthToken();
+  const org = getActiveOrganizationId();
+  if (token) query.set("access_token", token);
+  if (org) query.set("organization_id", org);
+  return `${config.apiBase}/api/alerts/events?${query}`;
+}
+
+export function listGeofences() {
+  return request("/api/geofences");
+}
+
+export function saveGeofence(payload) {
+  const id = payload.id;
+  return request(id ? `/api/geofences/${encodeURIComponent(id)}` : "/api/geofences", {
+    method: id ? "PUT" : "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteGeofence(id) {
+  return request(`/api/geofences/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export function getDronePositions() {
@@ -405,7 +448,10 @@ export function deleteDrone(sysid) {
 }
 
 export function acknowledgeSos(sosMsgId) {
-  return startAlarmResponse(sosMsgId);
+  return request(`/api/pocstars/alarms/${encodeURIComponent(sosMsgId)}/start-response`, {
+    method: "POST",
+    body: "{}",
+  });
 }
 
 export function resolveSos(sosMsgId, resolution_note = "") {

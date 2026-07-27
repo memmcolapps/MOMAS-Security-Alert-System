@@ -9,7 +9,8 @@
     "start": "bun run src/server.ts",
     "dev": "bun --watch src/server.ts",
     "typecheck": "bunx tsc --noEmit",
-    "check": "bun run typecheck"
+    "test:geofencing": "bun test src/geofencing/geometry.test.ts",
+    "check": "bun run typecheck && bun run test:geofencing"
   },
   "dependencies": {
     "@langchain/core": "^1.1.48",

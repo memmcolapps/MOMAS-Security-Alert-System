@@ -228,7 +228,7 @@ export function OsintRoute() {
   // SSE; we surface a count badge + toast and refresh the relevant queries so
   // the analyst sees matches the moment they land instead of on the next poll.
   useEffect(() => {
-    const source = new EventSource(osintEventsUrl());
+    const source = new window.EventSource(osintEventsUrl());
     source.addEventListener("open", () => setStreamLive(true));
     source.addEventListener("error", () => setStreamLive(false));
     source.addEventListener("osint_alert", (event) => {
@@ -1275,7 +1275,7 @@ function GraphPanel({ graph, loading, minEdge, onMinEdge, showSources, onToggleS
       if (width > 0 && height > 0) setSize({ width, height });
     };
     update();
-    const ro = new ResizeObserver(update);
+    const ro = new window.ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
   }, []);

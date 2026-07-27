@@ -11,6 +11,7 @@
  */
 import { env } from "../config";
 import * as db from "../db";
+import { bus } from "../events";
 
 // ── MAVLink message IDs we decode ─────────────────────────────────────────────
 const MSG = {
@@ -68,6 +69,7 @@ export type DroneState = {
 };
 
 const drones = new Map<number, DroneState>();
+const lastPositionEmit = new Map<number, number>();
 
 // ── X.25 CRC (MAVLink checksum) ───────────────────────────────────────────────
 function mavlinkCrc(bytes: Uint8Array, start: number, end: number, crcExtra: number) {
@@ -260,6 +262,18 @@ function handleMessage(msg: DecodedMessage) {
       s.alt_m = f.alt as number;
       s.relative_alt_m = f.relative_alt as number;
       s.heading_deg = f.hdg as number | null;
+      if (now - (lastPositionEmit.get(msg.sysid) || 0) >= 1000) {
+        lastPositionEmit.set(msg.sysid, now);
+        bus.emit("position:update", {
+          asset_type: "drone",
+          asset_id: String(msg.sysid),
+          lat: s.lat,
+          lon: s.lon,
+          altitude_m: s.relative_alt_m,
+          observed_at: now,
+          source: "mavlink",
+        });
+      }
       break;
     case MSG.GPS_RAW_INT:
       s.gps_fix = f.fix_type as number;

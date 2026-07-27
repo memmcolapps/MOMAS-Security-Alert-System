@@ -26,7 +26,9 @@ import {
   getIncidents,
   getLocations,
   getMe,
-  getSosLog,
+  alertsEventsUrl,
+  listAlarms,
+  listGeofences,
   listDevices,
   triggerScrape,
 } from "../lib/api";
@@ -56,6 +58,7 @@ const LAYER_LABELS = {
   heat: "Heatmap",
   devices: "Devices",
   drones: "Drones",
+  fences: "Geofences",
 };
 
 function iconForType(type) {
@@ -101,7 +104,7 @@ export function OperationsRoute() {
   const [panelOpen, setPanelOpen] = useState(true);
   const [statsMinimized, setStatsMinimized] = useState(false);
   const [basemap, setBasemap] = useState("dark");
-  const [activeLayers, setActiveLayers] = useState({ live: true, heat: false, devices: true, drones: true });
+  const [activeLayers, setActiveLayers] = useState({ live: true, heat: false, devices: true, drones: true, fences: true });
   const [sosSoundMuted, setSosSoundMuted] = useState(false);
   const [focusTarget, setFocusTarget] = useState(null);
   const [selectedIncidentId, setSelectedIncidentId] = useState(null);
@@ -129,9 +132,9 @@ export function OperationsRoute() {
     refetchInterval: 30000,
   });
 
-  const sosQuery = useQuery({
-    queryKey: ["sos-log"],
-    queryFn: getSosLog,
+  const alertsQuery = useQuery({
+    queryKey: ["alarms", "operations"],
+    queryFn: () => listAlarms({ status: "open", limit: 500 }),
     refetchInterval: 15000,
   });
 
@@ -139,6 +142,12 @@ export function OperationsRoute() {
     queryKey: ["drone-positions"],
     queryFn: getDronePositions,
     refetchInterval: 3000,
+  });
+
+  const geofencesQuery = useQuery({
+    queryKey: ["geofences"],
+    queryFn: listGeofences,
+    refetchInterval: 60_000,
   });
 
   const evidenceQuery = useQuery({
@@ -155,8 +164,9 @@ export function OperationsRoute() {
   const incidents = incidentQuery.data?.incidents || [];
   const devices = devicesQuery.data?.devices || [];
   const locations = locationsQuery.data?.data || [];
-  const sosAlerts = sosQuery.data?.alerts || [];
+  const allAlerts = useMemo(() => alertsQuery.data?.alerts || [], [alertsQuery.data?.alerts]);
   const drones = dronesQuery.data?.drones || [];
+  const geofences = geofencesQuery.data?.geofences || [];
   const selectedIncident = useMemo(
     () =>
       evidenceQuery.data?.incident ||
@@ -168,10 +178,10 @@ export function OperationsRoute() {
     () => new Map(locations.map((location) => [String(location.Uid), location])),
     [locations],
   );
-  const activeSos = useMemo(
+  const activeAlerts = useMemo(
     () =>
-      sosAlerts
-        .filter((alert) => Number(alert.status) < 2)
+      allAlerts
+        .filter((alert) => Number(alert.status) < 2 && !alert.returned_at)
         .map((alert) => {
           const sosLat = Number(alert.location_lat);
           const sosLon = Number(alert.location_lon);
@@ -188,8 +198,16 @@ export function OperationsRoute() {
 
           return alert;
         }),
-    [sosAlerts, latestDeviceLocations],
+    [allAlerts, latestDeviceLocations],
   );
+
+  useEffect(() => {
+    const source = new window.EventSource(alertsEventsUrl());
+    const refresh = () => queryClient.invalidateQueries({ queryKey: ["alarms"] });
+    source.addEventListener("alert_new", refresh);
+    source.addEventListener("alert_updated", refresh);
+    return () => source.close();
+  }, [queryClient]);
 
   const ensureAudioContext = useCallback(() => {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -221,7 +239,7 @@ export function OperationsRoute() {
   }, [ensureAudioContext, sosSoundMuted]);
 
   useEffect(() => {
-    const activeIds = activeSos.map((alert) => String(alert.sos_msg_id)).filter(Boolean);
+    const activeIds = activeAlerts.map((alert) => String(alert.alert_key || `pocstars:${alert.sos_msg_id}`)).filter(Boolean);
     if (!knownSosIdsRef.current) {
       knownSosIdsRef.current = new Set(activeIds);
       return;
@@ -231,22 +249,23 @@ export function OperationsRoute() {
     activeIds.forEach((id) => knownSosIdsRef.current.add(id));
     newIds.forEach((id) => ringingSosIdsRef.current.add(id));
     newIds.forEach((id) => pendingSosFocusIdsRef.current.add(id));
-    const focusAlert = activeSos.find(
+    const focusAlert = activeAlerts.find(
       (alert) =>
-        pendingSosFocusIdsRef.current.has(String(alert.sos_msg_id)) &&
+        pendingSosFocusIdsRef.current.has(String(alert.alert_key || `pocstars:${alert.sos_msg_id}`)) &&
         Number.isFinite(Number(alert.map_lat)) &&
         Number.isFinite(Number(alert.map_lon)),
     );
     if (focusAlert) {
-      pendingSosFocusIdsRef.current.delete(String(focusAlert.sos_msg_id));
+      const focusId = String(focusAlert.alert_key || `pocstars:${focusAlert.sos_msg_id}`);
+      pendingSosFocusIdsRef.current.delete(focusId);
       setFocusTarget({
-        kind: "sos",
-        id: `sos-${focusAlert.sos_msg_id}`,
-        key: `sos-${focusAlert.sos_msg_id}-${Date.now()}`,
+        kind: "alarm",
+        id: focusId,
+        key: `${focusId}-${Date.now()}`,
         lat: Number(focusAlert.map_lat),
         lon: Number(focusAlert.map_lon),
         zoom: 15,
-        label: focusAlert.dev_name || focusAlert.device_name || `Device ${focusAlert.device_id}`,
+        label: focusAlert.asset_name || focusAlert.dev_name || focusAlert.device_name || `Device ${focusAlert.device_id}`,
         popupHtml: sosPopup(focusAlert),
       });
     }
@@ -258,7 +277,7 @@ export function OperationsRoute() {
     pendingSosFocusIdsRef.current.forEach((id) => {
       if (!activeSet.has(id)) pendingSosFocusIdsRef.current.delete(id);
     });
-  }, [activeSos]);
+  }, [activeAlerts]);
 
   useEffect(() => {
     if (alarmTimerRef.current) {
@@ -275,7 +294,7 @@ export function OperationsRoute() {
         alarmTimerRef.current = null;
       }
     };
-  }, [activeSos, playSosTone, sosSoundMuted]);
+  }, [activeAlerts, playSosTone, sosSoundMuted]);
 
   useEffect(() => {
     const unlockAudio = () => {
@@ -407,8 +426,9 @@ export function OperationsRoute() {
         incidents={visibleIncidents}
         devices={devices}
         locations={locations}
-        sosAlerts={activeSos}
+        sosAlerts={activeAlerts}
         drones={drones}
+        geofences={geofences}
         activeLayers={activeLayers}
         basemap={basemap}
         focusTarget={focusTarget}
@@ -600,7 +620,7 @@ export function OperationsRoute() {
         {panelOpen ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
       </button>
 
-      {activeSos.length ? (
+      {activeAlerts.length ? (
         <section className={`glass-panel absolute left-1/2 z-[1001] flex w-[min(440px,calc(100vw-32px))] -translate-x-1/2 items-center gap-3 rounded-lg border-red-500/50 px-3 py-2.5 ${liveMode ? "top-28" : "top-16"}`}>
           <span className="relative grid h-8 w-8 shrink-0 place-items-center rounded-full bg-red-500/15 text-red-300">
             <span className="absolute inset-0 animate-ping rounded-full border border-red-400/30" />
@@ -608,10 +628,10 @@ export function OperationsRoute() {
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-[11px] font-bold text-red-300">
-              {activeSos.length} active SOS alarm{activeSos.length === 1 ? "" : "s"}
+              {activeAlerts.length} active alarm{activeAlerts.length === 1 ? "" : "s"}
             </div>
             <p className="truncate text-[9px] text-neutral-500">
-              Latest: {activeSos[0].dev_name || activeSos[0].device_name || `Device ${activeSos[0].device_id}`} · {relativeDate(activeSos[0].triggered_at)}
+              Latest: {activeAlerts[0].asset_name || activeAlerts[0].dev_name || activeAlerts[0].device_name || `Device ${activeAlerts[0].device_id}`} · {relativeDate(activeAlerts[0].triggered_at)}
             </p>
           </div>
           <Link to="/alarms" className="shrink-0 rounded border border-red-500/40 px-2.5 py-1.5 text-[9px] font-bold text-red-300 hover:bg-red-500/10">

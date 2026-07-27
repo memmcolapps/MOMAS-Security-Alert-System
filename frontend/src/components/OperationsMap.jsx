@@ -44,18 +44,20 @@ export function devicePopup(device, registry) {
 }
 
 export function sosPopup(alert) {
+  const isGeofence = alert.source === "geofence" || alert.alert_type === "geofence_breach";
   return `
     <div>
-      <div style="font-size:13px;font-weight:700;color:#ff4444;margin-bottom:5px">SOS Alarm</div>
-      <div style="font-size:11px;color:#ccc"><strong>Device:</strong> ${escapeHtml(alert.dev_name || alert.device_name || `Device ${alert.device_id}`)}</div>
+      <div style="font-size:13px;font-weight:700;color:#ff4444;margin-bottom:5px">${isGeofence ? "Geofence Breach" : "SOS Alarm"}</div>
+      <div style="font-size:11px;color:#ccc"><strong>Device:</strong> ${escapeHtml(alert.asset_name || alert.dev_name || alert.device_name || `Device ${alert.device_id}`)}</div>
       <div style="font-size:11px;color:#ccc"><strong>UID:</strong> ${escapeHtml(alert.device_id || "—")}</div>
+      ${isGeofence ? `<div style="font-size:11px;color:#ccc"><strong>Fence:</strong> ${escapeHtml(alert.geofence_name || "—")}</div>` : ""}
       <div style="font-size:11px;color:#ccc"><strong>When:</strong> ${escapeHtml(alert.triggered_at ? new Date(alert.triggered_at).toLocaleString() : "—")}</div>
       <div style="font-size:11px;color:#ccc"><strong>Location:</strong> ${
         Number.isFinite(Number(alert.map_lat)) && Number.isFinite(Number(alert.map_lon))
           ? `${Number(alert.map_lat).toFixed(5)}, ${Number(alert.map_lon).toFixed(5)}`
           : "Unknown"
       }</div>
-      <div style="font-size:10px;color:#888">${alert.map_location_source === "device" ? "Using latest device location" : "Using SOS location"}</div>
+      <div style="font-size:10px;color:#888">${isGeofence ? `${Math.round(Number(alert.distance_outside_m) || 0)} m outside` : alert.map_location_source === "device" ? "Using latest device location" : "Using SOS location"}</div>
     </div>
   `;
 }
@@ -100,6 +102,7 @@ export function OperationsMap({
   locations,
   sosAlerts = [],
   drones = [],
+  geofences = [],
   activeLayers,
   basemap,
   onIncidentFocus,
@@ -146,9 +149,11 @@ export function OperationsMap({
     const deviceLayer = L.layerGroup();
     const sosLayer = L.layerGroup();
     const droneLayer = L.layerGroup();
+    const geofenceLayer = L.layerGroup();
 
     baseLayers.dark.addTo(map);
     incidentLayer.addTo(map);
+    geofenceLayer.addTo(map);
     deviceLayer.addTo(map);
     droneLayer.addTo(map);
     sosLayer.addTo(map);
@@ -172,7 +177,7 @@ export function OperationsMap({
     });
     map.addControl(new recenter());
 
-    layersRef.current = { baseLayers, activeBase: baseLayers.dark, incidentLayer, heatLayer, deviceLayer, sosLayer, droneLayer };
+    layersRef.current = { baseLayers, activeBase: baseLayers.dark, incidentLayer, heatLayer, deviceLayer, sosLayer, droneLayer, geofenceLayer };
     mapRef.current = map;
 
     return () => {
@@ -234,6 +239,29 @@ export function OperationsMap({
   }, [incidents, onIncidentFocus]);
 
   useEffect(() => {
+    const { geofenceLayer } = layersRef.current;
+    if (!geofenceLayer) return;
+    geofenceLayer.clearLayers();
+    for (const fence of geofences) {
+      if (!fence.active) continue;
+      const style = { color: "#fb7185", weight: 2, fillColor: "#ef4444", fillOpacity: 0.06, dashArray: "6 5" };
+      let layer = null;
+      if (fence.shape_type === "circle") {
+        const lat = Number(fence.center_lat);
+        const lon = Number(fence.center_lon);
+        const radius = Number(fence.radius_m);
+        if (Number.isFinite(lat) && Number.isFinite(lon) && Number.isFinite(radius)) {
+          layer = L.circle([lat, lon], { ...style, radius });
+        }
+      } else {
+        const ring = fence.geometry?.coordinates?.[0];
+        if (Array.isArray(ring)) layer = L.polygon(ring.map(([lon, lat]) => [lat, lon]), style);
+      }
+      layer?.bindTooltip(escapeHtml(fence.name || "Geofence")).addTo(geofenceLayer);
+    }
+  }, [geofences]);
+
+  useEffect(() => {
     const map = mapRef.current;
     const { deviceLayer } = layersRef.current;
     if (!map || !deviceLayer) return;
@@ -268,7 +296,7 @@ export function OperationsMap({
       const lat = Number(alert.map_lat ?? alert.location_lat);
       const lon = Number(alert.map_lon ?? alert.location_lon);
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
-      const label = alert.dev_name || alert.device_name || `Device ${alert.device_id}`;
+      const label = alert.asset_name || alert.dev_name || alert.device_name || `Device ${alert.device_id}`;
       const icon = L.divIcon({
         className: "",
         html: `<div class="device-pin sos"><i class="fas fa-triangle-exclamation"></i></div><div class="device-label sos">${escapeHtml(label)}</div>`,
@@ -305,8 +333,8 @@ export function OperationsMap({
 
   useEffect(() => {
     const map = mapRef.current;
-    const { incidentLayer, heatLayer, deviceLayer, sosLayer, droneLayer } = layersRef.current;
-    if (!map || !incidentLayer || !heatLayer || !deviceLayer || !sosLayer || !droneLayer) return;
+    const { incidentLayer, heatLayer, deviceLayer, sosLayer, droneLayer, geofenceLayer } = layersRef.current;
+    if (!map || !incidentLayer || !heatLayer || !deviceLayer || !sosLayer || !droneLayer || !geofenceLayer) return;
     const syncLayer = (layer, enabled) => {
       if (enabled && !map.hasLayer(layer)) map.addLayer(layer);
       if (!enabled && map.hasLayer(layer)) map.removeLayer(layer);
@@ -315,6 +343,7 @@ export function OperationsMap({
     syncLayer(heatLayer, activeLayers.heat);
     syncLayer(deviceLayer, activeLayers.devices);
     syncLayer(droneLayer, activeLayers.drones);
+    syncLayer(geofenceLayer, activeLayers.fences);
     syncLayer(sosLayer, true);
   }, [activeLayers]);
 

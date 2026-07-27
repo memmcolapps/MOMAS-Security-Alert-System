@@ -13,7 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { getAlarm, listAlarms, resolveAlarm, startAlarmResponse } from "../lib/api";
+import { alertsEventsUrl, getAlarm, listAlarms, resolveAlarm, startAlarmResponse } from "../lib/api";
 
 const FILTERS = [
   ["open", "Open"],
@@ -27,10 +27,12 @@ const FILTERS = [
 const EVENT_LABELS = {
   received: "Alarm received from POCSTARS",
   response_requested: "Response requested",
-  response_started: "Response started on POCSTARS",
+  response_started: "Response started",
   resolution_requested: "Resolution requested",
-  resolved: "Alarm resolved on POCSTARS",
+  resolved: "Alarm resolved",
   sync_failed: "POCSTARS synchronization failed",
+  breach: "Asset left the geofence",
+  returned: "Asset returned inside the geofence",
 };
 
 function alarmStatus(alert) {
@@ -74,7 +76,7 @@ function matchesFilter(alert, filter) {
 }
 
 function displayName(alert) {
-  return alert.dev_name || alert.device_name || `Device ${alert.device_id}`;
+  return alert.asset_name || alert.dev_name || alert.device_name || `Device ${alert.device_id || alert.asset_id}`;
 }
 
 export function AlarmsRoute() {
@@ -104,27 +106,38 @@ export function AlarmsRoute() {
     () => Object.fromEntries(FILTERS.map(([key]) => [key, alerts.filter((alert) => matchesFilter(alert, key)).length])),
     [alerts],
   );
-  const selected = detailQuery.data?.alert || alerts.find((alert) => String(alert.sos_msg_id) === String(selectedId)) || null;
-  const actionsConfigured = alarmsQuery.data?.actionsConfigured !== false;
+  const selected = detailQuery.data?.alert || alerts.find((alert) => String(alert.alert_key) === String(selectedId)) || null;
+  const actionsConfigured = selected?.source === "geofence" || alarmsQuery.data?.actionsConfigured !== false;
+
+  useEffect(() => {
+    const source = new window.EventSource(alertsEventsUrl());
+    const refresh = () => {
+      queryClient.invalidateQueries({ queryKey: ["alarms"] });
+      if (selectedId) queryClient.invalidateQueries({ queryKey: ["alarm", selectedId] });
+    };
+    source.addEventListener("alert_new", refresh);
+    source.addEventListener("alert_updated", refresh);
+    return () => source.close();
+  }, [queryClient, selectedId]);
 
   useEffect(() => {
     setResolutionNote(selected?.resolution_note || "");
     setFeedback(null);
   }, [selectedId, selected?.resolution_note]);
 
-  async function refreshAlarm(sosMsgId) {
+  async function refreshAlarm(alertKey) {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["alarms"] }),
-      queryClient.invalidateQueries({ queryKey: ["alarm", sosMsgId] }),
+      queryClient.invalidateQueries({ queryKey: ["alarm", alertKey] }),
       queryClient.invalidateQueries({ queryKey: ["sos-log"] }),
     ]);
   }
 
   const startMutation = useMutation({
     mutationFn: startAlarmResponse,
-    onSuccess: async (_, sosMsgId) => {
-      setFeedback({ type: "success", message: "Response started and synchronized with POCSTARS." });
-      await refreshAlarm(sosMsgId);
+    onSuccess: async (_, alertKey) => {
+      setFeedback({ type: "success", message: "Response started." });
+      await refreshAlarm(alertKey);
     },
     onError: async (error) => {
       setFeedback({ type: "error", message: error.body?.message || error.message });
@@ -135,8 +148,8 @@ export function AlarmsRoute() {
   const resolveMutation = useMutation({
     mutationFn: resolveAlarm,
     onSuccess: async (_, variables) => {
-      setFeedback({ type: "success", message: "Alarm resolved on POCSTARS and MOMAS." });
-      await refreshAlarm(variables.sosMsgId);
+      setFeedback({ type: "success", message: "Alarm resolved." });
+      await refreshAlarm(variables.alertKey || variables.sosMsgId);
     },
     onError: async (error) => {
       setFeedback({ type: "error", message: error.body?.message || error.message });
@@ -151,7 +164,7 @@ export function AlarmsRoute() {
       setFeedback({ type: "error", message: "Add a short resolution outcome before closing the alarm." });
       return;
     }
-    resolveMutation.mutate({ sosMsgId: selected.sos_msg_id, resolution_note: resolutionNote.trim() });
+    resolveMutation.mutate({ alertKey: selected.alert_key, resolution_note: resolutionNote.trim() });
   }
 
   return (
@@ -162,19 +175,19 @@ export function AlarmsRoute() {
             <Siren size={21} /> Alarm Operations
           </h1>
           <p className="mt-1 text-[11px] text-neutral-500">
-            POCSTARS alarms are logged automatically and retained as an operational record.
+            SOS and geofence alarms are retained as an operational record.
           </p>
         </div>
         <div className="flex items-center gap-2 text-[10px] text-neutral-500">
-          <span className={`h-2 w-2 rounded-full ${alarmsQuery.data?.pocstarsLastErr ? "bg-red-400" : "bg-green-400"}`} />
-          {alarmsQuery.isFetching ? "Refreshing…" : alarmsQuery.data?.pocstarsLastErr ? "POCSTARS feed degraded" : "POCSTARS feed connected"}
+          <span className="h-2 w-2 rounded-full bg-green-400" />
+          {alarmsQuery.isFetching ? "Refreshing…" : "Monitoring feed connected"}
           <button className="rounded p-1.5 hover:bg-white/5 hover:text-neutral-200" onClick={() => alarmsQuery.refetch()} title="Refresh alarms">
             <RefreshCw size={13} className={alarmsQuery.isFetching ? "animate-spin" : ""} />
           </button>
         </div>
       </header>
 
-      {!actionsConfigured ? (
+      {selected?.source === "pocstars" && !actionsConfigured ? (
         <section className="mb-5 flex items-start gap-3 rounded-lg border border-amber-400/30 bg-amber-400/[0.07] px-4 py-3 text-[11px] text-amber-200">
           <AlertTriangle size={16} className="mt-0.5 shrink-0" />
           <div>
@@ -234,14 +247,16 @@ export function AlarmsRoute() {
             return (
               <button
                 className={`grid w-full gap-3 border-b border-white/5 px-4 py-3 text-left hover:bg-white/[0.035] md:grid-cols-[minmax(210px,1.4fr)_minmax(130px,0.8fr)_120px_130px_110px_24px] md:items-center ${
-                  String(selectedId) === String(alert.sos_msg_id) ? "bg-white/[0.05]" : ""
+                  String(selectedId) === String(alert.alert_key) ? "bg-white/[0.05]" : ""
                 }`}
-                key={alert.sos_msg_id}
-                onClick={() => setSelectedId(alert.sos_msg_id)}
+                key={alert.alert_key}
+                onClick={() => setSelectedId(alert.alert_key)}
               >
                 <span className="min-w-0">
                   <span className="block truncate text-[12px] font-bold text-neutral-200">{displayName(alert)}</span>
-                  <span className="mt-0.5 block truncate font-mono text-[9px] text-neutral-600">#{alert.sos_msg_id} · {alert.device_id}</span>
+                  <span className="mt-0.5 block truncate font-mono text-[9px] text-neutral-600">
+                    {alert.source === "geofence" ? "GEOFENCE" : `SOS #${alert.sos_msg_id}`} · {alert.device_id}
+                  </span>
                 </span>
                 <span className="min-w-0 text-[10px] text-neutral-500">
                   <span className="block truncate">{alert.unit_name || alert.pocstars_group_name || alert.organization_name || "Unassigned"}</span>
@@ -269,7 +284,9 @@ export function AlarmsRoute() {
               <div>
                 <div className="mb-2 flex items-center gap-2">
                   <span className={`inline-flex rounded-full border px-2 py-1 text-[9px] font-bold ${alarmStatus(selected).className}`}>{alarmStatus(selected).label}</span>
-                  <span className="font-mono text-[9px] text-neutral-700">SOS #{selected.sos_msg_id}</span>
+                  <span className="font-mono text-[9px] text-neutral-700">
+                    {selected.source === "geofence" ? `GEOFENCE #${selected.id}` : `SOS #${selected.sos_msg_id}`}
+                  </span>
                 </div>
                 <h2 className="text-lg font-bold text-neutral-100">{displayName(selected)}</h2>
                 <p className="mt-1 text-[10px] text-neutral-500">{formatDateTime(selected.triggered_at)} · {elapsed(selected.triggered_at, selected.resolved_at)}</p>
@@ -294,7 +311,7 @@ export function AlarmsRoute() {
 
             <section className="mt-5 grid grid-cols-2 gap-2">
               <Detail label="Device" value={selected.device_id} />
-              <Detail label="Operator" value={selected.dev_operator || selected.device_name} />
+              <Detail label={selected.source === "geofence" ? "Fence" : "Operator"} value={selected.geofence_name || selected.dev_operator || selected.device_name} />
               <Detail label="Organization" value={selected.organization_name || "Unassigned"} />
               <Detail label="Unit / group" value={selected.unit_name || selected.pocstars_group_name || "—"} />
               <Detail label="Started by" value={selected.acknowledged_by_name || selected.acknowledged_by_email || "—"} />
@@ -314,7 +331,7 @@ export function AlarmsRoute() {
               <button
                 className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-md bg-amber-400 px-4 py-2.5 text-xs font-bold text-black disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={!actionsConfigured || startMutation.isPending || selected.sync_status === "syncing"}
-                onClick={() => startMutation.mutate(selected.sos_msg_id)}
+                onClick={() => startMutation.mutate(selected.alert_key)}
               >
                 {startMutation.isPending ? <RefreshCw size={14} className="animate-spin" /> : <UserRoundCheck size={14} />}
                 Start response
@@ -337,7 +354,7 @@ export function AlarmsRoute() {
                   type="submit"
                 >
                   {resolveMutation.isPending ? <RefreshCw size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                  Resolve on POCSTARS
+                  {selected.source === "geofence" ? "Resolve alarm" : "Resolve on POCSTARS"}
                 </button>
               </form>
             ) : null}

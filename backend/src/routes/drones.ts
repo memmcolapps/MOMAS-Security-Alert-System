@@ -45,11 +45,11 @@ function isAdmin(c: any) {
  */
 router.get("/positions", async (c) => {
   try {
-    const registry = await db.listDrones({}).catch(() => []);
+    const registry = await db.listDrones(orgScope(c)).catch(() => []);
     const regMap = new Map(registry.map((d: any) => [Number(d.sysid), d]));
     const live = getDronePositions();
 
-    const visible = live;
+    const visible = isAdmin(c) ? live : live.filter((drone) => regMap.has(drone.sysid));
     const drones = visible.map((d) => {
       const reg: any = regMap.get(d.sysid);
       return {

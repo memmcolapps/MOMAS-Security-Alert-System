@@ -214,6 +214,84 @@ async function init() {
       updated_at      TIMESTAMPTZ DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS geofences (
+      id                     SERIAL PRIMARY KEY,
+      organization_id        INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      unit_id                INTEGER REFERENCES organization_units(id) ON DELETE SET NULL,
+      name                   TEXT NOT NULL,
+      shape_type             TEXT NOT NULL CHECK (shape_type IN ('polygon', 'circle')),
+      geometry               JSONB,
+      center_lat             DOUBLE PRECISION,
+      center_lon             DOUBLE PRECISION,
+      radius_m               REAL,
+      buffer_m               REAL NOT NULL DEFAULT 30,
+      confirmations_required INTEGER NOT NULL DEFAULT 3,
+      active                 BOOLEAN NOT NULL DEFAULT true,
+      created_by             INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CHECK (
+        (shape_type = 'polygon' AND geometry IS NOT NULL)
+        OR
+        (shape_type = 'circle' AND center_lat IS NOT NULL AND center_lon IS NOT NULL AND radius_m > 0)
+      )
+    );
+
+    CREATE TABLE IF NOT EXISTS geofence_assignments (
+      id             BIGSERIAL PRIMARY KEY,
+      geofence_id    INTEGER NOT NULL REFERENCES geofences(id) ON DELETE CASCADE,
+      asset_type     TEXT NOT NULL CHECK (asset_type IN ('radio', 'drone')),
+      asset_id       TEXT NOT NULL,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (geofence_id, asset_type, asset_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS geofence_states (
+      assignment_id      BIGINT PRIMARY KEY REFERENCES geofence_assignments(id) ON DELETE CASCADE,
+      is_outside         BOOLEAN NOT NULL DEFAULT false,
+      outside_count      INTEGER NOT NULL DEFAULT 0,
+      last_lat           DOUBLE PRECISION,
+      last_lon           DOUBLE PRECISION,
+      last_observed_at   TIMESTAMPTZ,
+      updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS operational_alerts (
+      id                 BIGSERIAL PRIMARY KEY,
+      organization_id    INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      unit_id            INTEGER REFERENCES organization_units(id) ON DELETE SET NULL,
+      alert_type         TEXT NOT NULL DEFAULT 'geofence_breach',
+      asset_type         TEXT NOT NULL CHECK (asset_type IN ('radio', 'drone')),
+      asset_id           TEXT NOT NULL,
+      asset_name         TEXT,
+      geofence_id        INTEGER REFERENCES geofences(id) ON DELETE SET NULL,
+      geofence_name      TEXT,
+      status             INTEGER NOT NULL DEFAULT 0,
+      triggered_at       TIMESTAMPTZ NOT NULL,
+      returned_at        TIMESTAMPTZ,
+      acknowledged_at    TIMESTAMPTZ,
+      acknowledged_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      resolved_at        TIMESTAMPTZ,
+      resolved_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      resolution_note    TEXT,
+      location_lat       DOUBLE PRECISION,
+      location_lon       DOUBLE PRECISION,
+      distance_outside_m REAL,
+      metadata           JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS operational_alert_events (
+      id              BIGSERIAL PRIMARY KEY,
+      alert_id        BIGINT NOT NULL REFERENCES operational_alerts(id) ON DELETE CASCADE,
+      actor_user_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      event_type      TEXT NOT NULL,
+      note            TEXT,
+      metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS audit_logs (
       id              SERIAL PRIMARY KEY,
       organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
@@ -292,6 +370,13 @@ async function init() {
     CREATE INDEX IF NOT EXISTS idx_osint_entities_item ON osint_entities(source_item_id);
     CREATE INDEX IF NOT EXISTS idx_osint_entities_value ON osint_entities(entity_type, value);
     CREATE INDEX IF NOT EXISTS idx_osint_alerts_status ON osint_alerts(status, matched_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_geofences_scope ON geofences(organization_id, unit_id, active);
+    CREATE INDEX IF NOT EXISTS idx_geofence_assignments_asset ON geofence_assignments(asset_type, asset_id);
+    CREATE INDEX IF NOT EXISTS idx_operational_alerts_scope ON operational_alerts(organization_id, unit_id, triggered_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_operational_alert_events_alert ON operational_alert_events(alert_id, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_active_geofence_alert
+      ON operational_alerts(geofence_id, asset_type, asset_id)
+      WHERE status < 2 AND returned_at IS NULL;
   `);
 
   // Add new columns if they don't exist (idempotent migration)

@@ -18,6 +18,7 @@ import { AdminOrganizationsRoute } from "./routes/AdminOrganizationsRoute";
 import { ChangePasswordRoute } from "./routes/ChangePasswordRoute";
 import { DevicesRoute } from "./routes/DevicesRoute";
 import { DronesRoute } from "./routes/DronesRoute";
+import { GeofencesRoute } from "./routes/GeofencesRoute";
 import { LoginRoute } from "./routes/LoginRoute";
 import { OrgAdminRoute } from "./routes/OrgAdminRoute";
 import { OperationsRoute } from "./routes/OperationsRoute";
@@ -130,6 +131,13 @@ const dronesRoute = createRoute({
   component: DronesRoute,
 });
 
+const geofencesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/geofences",
+  beforeLoad: requireReadySession,
+  component: GeofencesRoute,
+});
+
 const osintRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/osint",
@@ -176,6 +184,7 @@ const routeTree = rootRoute.addChildren([
   alarmsRoute,
   devicesRoute,
   dronesRoute,
+  geofencesRoute,
   osintRoute,
   loginRoute,
   changePasswordRoute,

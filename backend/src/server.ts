@@ -2,14 +2,17 @@ import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { env } from "./config";
 import * as db from "./db";
+import alertsRouter from "./routes/alerts";
 import authRouter from "./routes/auth";
 import dronesRouter from "./routes/drones";
+import geofencesRouter from "./routes/geofences";
 import incidentsRouter from "./routes/incidents";
 import orgRouter from "./routes/org";
 import organizationsRouter from "./routes/organizations";
 import osintRouter from "./routes/osint";
 import pocstarsRouter from "./routes/pocstars";
 import { startMavlinkListener } from "./drones/mavlink-listener";
+import { startGeofenceMonitor } from "./geofencing/engine";
 import { isGDELTEnabled, scrapeGDELT } from "./scrapers/gdelt";
 import { isGuardianEnabled, scrapeGuardian } from "./scrapers/guardian";
 import { fetchHAPI, isHAPIEnabled } from "./scrapers/hapi";
@@ -66,6 +69,8 @@ app.route("/api/auth", authRouter);
 app.route("/api/organizations", organizationsRouter);
 app.route("/api/org", orgRouter);
 app.route("/api/osint", osintRouter);
+app.route("/api/geofences", geofencesRouter);
+app.route("/api/alerts", alertsRouter);
 
 app.get("/api/config", (c) =>
   c.json({
@@ -164,6 +169,7 @@ try {
 ║  Server  : http://localhost:${PORT}             ║
 ╚══════════════════════════════════════════════╝`);
 
+  startGeofenceMonitor();
   startMavlinkListener();
 
   void startTelegramMtproto().catch((error) => {

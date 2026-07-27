@@ -35,6 +35,12 @@ const envSchema = z.object({
   // How often live drone telemetry is flushed to the DB so a last-seen
   // position survives restarts.
   DRONE_PERSIST_SEC: intFromEnv(15),
+  // Monitoring-only geofencing. This never sends commands to a radio,
+  // Mission Planner, or an autopilot.
+  GEOFENCE_ENABLE: boolFromEnv(true),
+  GEOFENCE_RADIO_POLL_SEC: intFromEnv(15),
+  GEOFENCE_DEFAULT_BUFFER_M: intFromEnv(30),
+  GEOFENCE_CONFIRMATIONS: intFromEnv(3),
   AUTH_JWT_SECRET: z.string().min(16).default("momas-dev-secret-change-me"),
   EPAIL_ADMIN_EMAIL: z.string().email().optional(),
   EPAIL_ADMIN_PASSWORD: z.string().min(8).optional(),

@@ -3,6 +3,8 @@ import { Hono } from "hono";
 import { canManageOrganization, primaryOrganization, requireAuth } from "../auth";
 import { env } from "../config";
 import * as db from "../db";
+import { bus } from "../events";
+import { fetchLastLocations } from "../pocstars/locations";
 
 type SseClient = {
   write: (chunk: string) => Promise<void>;
@@ -154,7 +156,10 @@ async function persistAndBroadcast(rows: any[]) {
         ? Number(row.sosStatus ?? row.status)
         : null,
     });
-    if (inserted) broadcastSse("sos_new", inserted);
+    if (inserted) {
+      broadcastSse("sos_new", inserted);
+      bus.emit("pocstars-alert:new", inserted);
+    }
   }
 }
 
@@ -220,10 +225,12 @@ async function handleSosAction(c: any, action: "process" | "close") {
       metadata: { resolution_note: note, upstream: true },
     });
     broadcastSse("sos_updated", alert);
+    bus.emit("pocstars-alert:updated", alert);
     return c.json({ alert });
   } catch (error: any) {
     const alert = await db.failSosAction(sosMsgId, action, user?.id, actionError(error).message);
     broadcastSse("sos_updated", alert);
+    bus.emit("pocstars-alert:updated", alert);
     return c.json({ ...actionError(error), alert }, error?.status || statusFromAxios(error));
   }
 }
@@ -409,12 +416,7 @@ router.get("/locations", async (c) => {
     return c.json({ error: "One or more devices are outside your operational scope." }, 403);
   }
   try {
-    const { data } = await axios.post(
-      `${LOC_BASE}/shanli/gps/api/locations/LastLocation`,
-      formUrlencoded({ Uids: uids, CorrdinateType: "Wgs84" }),
-      { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 8000 },
-    );
-    return c.json(data);
+    return c.json(await fetchLastLocations(requestedIds));
   } catch (error: any) {
     return c.json({ error: "pocstars_locations_failed", message: error.message }, statusFromAxios(error));
   }
