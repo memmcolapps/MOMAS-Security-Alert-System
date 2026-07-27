@@ -429,6 +429,18 @@ export function deleteGeofence(id) {
   return request(`/api/geofences/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
+export function searchPlaces(query) {
+  return request(`/api/geofences/places?${new URLSearchParams({ q: query })}`);
+}
+
+/** Dry run: what this shape covers, how big it is, and where it is. */
+export function previewGeofence(payload) {
+  return request("/api/geofences/preview", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getDronePositions() {
   return request("/api/drones/positions");
 }

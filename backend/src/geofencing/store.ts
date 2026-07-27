@@ -84,11 +84,22 @@ export async function saveGeofence(input: any) {
   return rows[0] || null;
 }
 
+/**
+ * Only assets that actually left the fence are dropped, and only new ones are
+ * inserted. Deleting the whole set and re-adding it cascaded `geofence_states`
+ * away on every save, so renaming a fence wiped its breach state and every
+ * asset still outside re-alarmed a few polls later.
+ */
 export async function replaceAssignments(geofenceId: number, assignments: any[]) {
+  const keep = assignments.map((assignment) => `${assignment.asset_type}:${String(assignment.asset_id)}`);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query("DELETE FROM geofence_assignments WHERE geofence_id=$1", [geofenceId]);
+    await client.query(
+      `DELETE FROM geofence_assignments
+        WHERE geofence_id=$1 AND (asset_type || ':' || asset_id) <> ALL($2::text[])`,
+      [geofenceId, keep],
+    );
     for (const assignment of assignments) {
       await client.query(
         `INSERT INTO geofence_assignments (geofence_id, asset_type, asset_id)
@@ -104,6 +115,39 @@ export async function replaceAssignments(geofenceId: number, assignments: any[])
   } finally {
     client.release();
   }
+}
+
+/**
+ * Marks assets as already-outside without raising an alarm, for the case where
+ * a fence is drawn around assets that are currently elsewhere. Seeding the
+ * state rather than muting the alert keeps the engine honest: nothing fires
+ * now, and the asset alarms normally the next time it leaves.
+ */
+export async function seedOutsideStates(geofenceId: number, positions: any[]) {
+  if (!positions.length) return 0;
+  const { rows } = await pool.query(
+    `SELECT ga.id AS assignment_id, ga.asset_type, ga.asset_id, g.confirmations_required
+       FROM geofence_assignments ga
+       JOIN geofences g ON g.id = ga.geofence_id
+      WHERE ga.geofence_id=$1`,
+    [geofenceId],
+  );
+  const byKey = new Map(rows.map((row: any) => [`${row.asset_type}:${row.asset_id}`, row]));
+  let seeded = 0;
+  for (const position of positions) {
+    const assignment: any = byKey.get(`${position.asset_type}:${position.asset_id}`);
+    if (!assignment) continue;
+    await saveGeofenceState({
+      assignment_id: assignment.assignment_id,
+      is_outside: true,
+      outside_count: Number(assignment.confirmations_required) || 1,
+      last_lat: position.lat,
+      last_lon: position.lon,
+      last_observed_at: position.observed_at ? new Date(position.observed_at) : new Date(),
+    });
+    seeded++;
+  }
+  return seeded;
 }
 
 export async function deleteGeofence(id: number, organizationId?: number | null) {

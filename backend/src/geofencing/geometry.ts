@@ -93,6 +93,68 @@ export function evaluateFence(fence: GeofenceShape, lat: number, lon: number) {
   };
 }
 
+function outerRing(geometry: any): number[][] {
+  const rings = geometry?.type === "Polygon" ? geometry.coordinates : null;
+  const ring = Array.isArray(rings) ? rings[0] : null;
+  return Array.isArray(ring) ? ring.filter((point: any) => Array.isArray(point) && point.length >= 2) : [];
+}
+
+/** Null and "" both coerce to 0, which is a real coordinate — reject them first. */
+function coordinate(value: any) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+/** Centre of a fence: the circle's centre, or the polygon's bounding-box centre. */
+export function fenceCentre(fence: GeofenceShape) {
+  if (fence.shape_type === "circle") {
+    const lat = coordinate(fence.center_lat);
+    const lon = coordinate(fence.center_lon);
+    return lat !== null && lon !== null ? { lat, lon } : null;
+  }
+  const ring = outerRing(fence.geometry);
+  if (!ring.length) return null;
+  const lats = ring.map((point) => Number(point[1]));
+  const lons = ring.map((point) => Number(point[0]));
+  return {
+    lat: (Math.min(...lats) + Math.max(...lats)) / 2,
+    lon: (Math.min(...lons) + Math.max(...lons)) / 2,
+  };
+}
+
+/**
+ * Size of a fence in metres and square metres. Surfaced so someone placing a
+ * fence can sanity-check it in units they think in — "1.2 km across" catches a
+ * fence drawn around a whole city far faster than looking at the shape does.
+ */
+export function fenceMetrics(fence: GeofenceShape) {
+  const centre = fenceCentre(fence);
+  if (!centre) return null;
+
+  if (fence.shape_type === "circle") {
+    const radius = Math.max(0, Number(fence.radius_m) || 0);
+    return { centre, width_m: radius * 2, height_m: radius * 2, area_sq_m: Math.PI * radius * radius };
+  }
+
+  const ring = outerRing(fence.geometry);
+  if (ring.length < 3) return null;
+  const projected = ring.map((point) => localXY(Number(point[1]), Number(point[0]), centre.lat, centre.lon));
+  const xs = projected.map((point) => point.x);
+  const ys = projected.map((point) => point.y);
+  // Shoelace over the locally projected ring; accurate at fence scale.
+  let twiceArea = 0;
+  for (let i = 0, j = projected.length - 1; i < projected.length; j = i++) {
+    twiceArea += projected[j].x * projected[i].y - projected[i].x * projected[j].y;
+  }
+  return {
+    centre,
+    width_m: Math.max(...xs) - Math.min(...xs),
+    height_m: Math.max(...ys) - Math.min(...ys),
+    area_sq_m: Math.abs(twiceArea) / 2,
+  };
+}
+
 export function validatePolygonGeometry(geometry: any) {
   if (geometry?.type !== "Polygon" || !Array.isArray(geometry.coordinates) || !geometry.coordinates.length) {
     return false;

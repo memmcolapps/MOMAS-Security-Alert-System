@@ -366,4 +366,42 @@ function reverseGeocode(lat, lon) {
   };
 }
 
-export { geocode, extractState, reverseGeocode, STATE_NAMES };
+/**
+ * Type-ahead place search over the same gazetteer.
+ *
+ * `geocode` answers "does this sentence mention a place?" and stops at the
+ * first hit — the wrong shape for a search box, which needs several ranked
+ * candidates. Exact name beats prefix beats substring, and place matches beat
+ * state matches, so typing "kad" offers Kaduna town before the rest of the state.
+ */
+function searchPlaces(query, limit = 8) {
+  const needle = String(query || "").trim().toLowerCase();
+  if (needle.length < 2) return [];
+
+  const ranked = [];
+  for (const place of PLACES) {
+    const name = place.name;
+    const state = place.state.toLowerCase();
+    let rank = null;
+    if (name === needle) rank = 0;
+    else if (name.startsWith(needle)) rank = 1;
+    else if (name.includes(needle)) rank = 2;
+    else if (state === needle || state.startsWith(needle)) rank = 3;
+    else if (state.includes(needle)) rank = 4;
+    if (rank === null) continue;
+    ranked.push({ rank, place });
+  }
+
+  return ranked
+    .sort((a, b) => a.rank - b.rank || a.place.name.localeCompare(b.place.name))
+    .slice(0, Math.min(Math.max(Number(limit) || 8, 1), 25))
+    .map(({ place }) => ({
+      name: toTitleCase(place.name),
+      state: place.state,
+      lat: place.lat,
+      lon: place.lon,
+      label: `${toTitleCase(place.name)}, ${place.state}`,
+    }));
+}
+
+export { geocode, searchPlaces, extractState, reverseGeocode, STATE_NAMES };

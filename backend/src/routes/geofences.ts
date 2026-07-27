@@ -7,8 +7,10 @@ import {
 } from "../auth";
 import { env } from "../config";
 import * as db from "../db";
-import { validatePolygonGeometry } from "../geofencing/geometry";
+import { evaluateFence, fenceMetrics, validatePolygonGeometry } from "../geofencing/geometry";
+import { assetKey, currentAssetPositions } from "../geofencing/positions";
 import * as store from "../geofencing/store";
+import { reverseGeocode, searchPlaces } from "../geocoder";
 
 const router = new Hono();
 router.use("*", requireAuth);
@@ -36,8 +38,9 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Returns each asset's display name alongside it, so callers need not re-fetch. */
 async function validateAssignments(assignments: any[], organizationId: number, unitId?: number | null) {
-  const clean: Array<{ asset_type: "radio" | "drone"; asset_id: string }> = [];
+  const clean: Array<{ asset_type: "radio" | "drone"; asset_id: string; name: string }> = [];
   const seen = new Set<string>();
   for (const assignment of assignments || []) {
     const assetType = assignment?.asset_type;
@@ -54,7 +57,7 @@ async function validateAssignments(assignments: any[], organizationId: number, u
       throw new Error(`${assetType} ${assetId} is outside the selected unit.`);
     }
     const key = `${assetType}:${assetId}`;
-    if (!seen.has(key)) clean.push({ asset_type: assetType, asset_id: assetId });
+    if (!seen.has(key)) clean.push({ asset_type: assetType, asset_id: assetId, name: asset.name || `${assetType} ${assetId}` });
     seen.add(key);
   }
   return clean;
@@ -89,11 +92,99 @@ function validateFence(body: any) {
   };
 }
 
+/**
+ * Resolves each assigned asset against a candidate shape, using live positions.
+ *
+ * This is the single source of truth for "who is inside this fence?" — the
+ * editor's preview and the save-time arming gate both call it, so the sentence
+ * shown to the operator is produced by the same `evaluateFence` the monitor
+ * runs. A preview computed separately in the browser would eventually disagree
+ * with the engine, which is the one thing it must never do.
+ */
+async function describeFence(fenceInput: any, assignments: any[]) {
+  const positions = await currentAssetPositions(assignments);
+
+  const assets = assignments.map((assignment) => {
+    const key = assetKey(assignment.asset_type, assignment.asset_id);
+    const position = positions.get(key);
+    const base = {
+      asset_type: assignment.asset_type,
+      asset_id: assignment.asset_id,
+      name: assignment.name || `${assignment.asset_type} ${assignment.asset_id}`,
+    };
+    if (!position) return { ...base, state: "unknown" as const };
+    const result = evaluateFence(fenceInput, position.lat, position.lon);
+    return {
+      ...base,
+      state: result.outside ? ("outside" as const) : ("inside" as const),
+      lat: position.lat,
+      lon: position.lon,
+      observed_at: position.observed_at,
+      distance_outside_m: Math.round(result.distanceOutsideM),
+    };
+  });
+
+  const metrics = fenceMetrics(fenceInput);
+  const place = metrics?.centre ? reverseGeocode(metrics.centre.lat, metrics.centre.lon) : null;
+  return {
+    assets,
+    place,
+    metrics,
+    summary: {
+      total: assets.length,
+      inside: assets.filter((asset) => asset.state === "inside").length,
+      outside: assets.filter((asset) => asset.state === "outside").length,
+      unknown: assets.filter((asset) => asset.state === "unknown").length,
+    },
+  };
+}
+
+/**
+ * Records assets that are already outside as outside, without alarming.
+ *
+ * Drawing a fence around assets that happen to be elsewhere would otherwise
+ * raise one alarm per asset within a couple of polls. The operator opts into
+ * this from the save summary, having been told exactly how many it covers.
+ */
+async function armFence(geofenceId: number, fenceInput: any, assignments: any[], suppress: boolean) {
+  if (!suppress || !assignments.length) return 0;
+  const positions = await currentAssetPositions(assignments);
+  const alreadyOutside = assignments
+    .map((assignment) => positions.get(assetKey(assignment.asset_type, assignment.asset_id)))
+    .filter((position): position is NonNullable<typeof position> =>
+      Boolean(position) && evaluateFence(fenceInput, position!.lat, position!.lon).outside,
+    );
+  return store.seedOutsideStates(geofenceId, alreadyOutside);
+}
+
 router.get("/", async (c) => {
   try {
     return c.json({ geofences: await store.listGeofences(scope(c)) });
   } catch (error) {
     return c.json({ error: errorMessage(error) }, 500);
+  }
+});
+
+/** Type-ahead place search, so a fence can be located by name instead of by eye. */
+router.get("/places", (c) => {
+  return c.json({ places: searchPlaces(c.req.query("q"), Number(c.req.query("limit")) || 8) });
+});
+
+/** Dry run of a candidate fence: what it covers, how big it is, and where it is. */
+router.post("/preview", async (c) => {
+  const user: any = (c as any).get("user");
+  const body = await c.req.json().catch(() => ({}));
+  try {
+    const membership = primaryOrganization(user);
+    const organizationId =
+      user?.platform_role === "admin" ? Number(body.organization_id) : Number(membership?.organization_id);
+    if (!organizationId) return c.json({ error: "organization_id is required." }, 400);
+    const unitId = body.unit_id ? Number(body.unit_id) : membership?.scope_level === "unit" ? membership.unit_id : null;
+    const fenceInput = validateFence(body);
+    const assignments = await validateAssignments(body.assignments || [], organizationId, unitId);
+    return c.json(await describeFence(fenceInput, assignments));
+  } catch (error) {
+    return c.json({ error: errorMessage(error) }, 400);
   }
 });
 
@@ -119,15 +210,16 @@ router.post("/", async (c) => {
       created_by: user.id,
     });
     await store.replaceAssignments(fence.id, assignments);
+    const suppressed = await armFence(fence.id, fenceInput, assignments, body.suppress_existing_breaches === true);
     await db.createAuditLog({
       organization_id: organizationId,
       actor_user_id: user.id,
       action: "geofence.create",
       target_type: "geofence",
       target_id: String(fence.id),
-      metadata: { assignment_count: assignments.length },
+      metadata: { assignment_count: assignments.length, suppressed_existing_breaches: suppressed },
     });
-    return c.json({ geofence: await store.getGeofence(fence.id, { organizationId }) });
+    return c.json({ geofence: await store.getGeofence(fence.id, { organizationId }), suppressed });
   } catch (error) {
     return c.json({ error: errorMessage(error) }, 400);
   }
@@ -160,15 +252,16 @@ router.put("/:id", async (c) => {
       created_by: existing.created_by,
     });
     await store.replaceAssignments(id, assignments);
+    const suppressed = await armFence(id, fenceInput, assignments, body.suppress_existing_breaches === true);
     await db.createAuditLog({
       organization_id: existing.organization_id,
       actor_user_id: user.id,
       action: "geofence.update",
       target_type: "geofence",
       target_id: String(id),
-      metadata: { assignment_count: assignments.length },
+      metadata: { assignment_count: assignments.length, suppressed_existing_breaches: suppressed },
     });
-    return c.json({ geofence: await store.getGeofence(id, scope(c)) });
+    return c.json({ geofence: await store.getGeofence(id, scope(c)), suppressed });
   } catch (error) {
     return c.json({ error: errorMessage(error) }, 400);
   }
