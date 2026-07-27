@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlarmMiniMap } from "../components/AlarmMiniMap";
-import { alertsEventsUrl, getAlarm, listAlarms, reopenAlarm, resolveAlarm, startAlarmResponse } from "../lib/api";
+import { alertsEventsUrl, getAlarm, getMe, listAlarms, reopenAlarm, resolveAlarm, startAlarmResponse } from "../lib/api";
 
 const FILTERS = [
   ["open", "Open"],
@@ -212,6 +212,10 @@ export function AlarmsRoute() {
     queryFn: () => getAlarm(selectedId),
     enabled: Boolean(selectedId),
   });
+  // Operators get the consequence; administrators also get the raw upstream
+  // code, because someone has to be able to diagnose the integration.
+  const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
+  const isPlatformAdmin = meQuery.data?.user?.platform_role === "admin";
 
   const alerts = useMemo(() => alarmsQuery.data?.alerts || [], [alarmsQuery.data?.alerts]);
   const hasOpenAlarms = useMemo(() => alerts.some((alert) => Number(alert.status) < 2), [alerts]);
@@ -760,6 +764,9 @@ export function AlarmsRoute() {
                         {event.note ? <p className="mt-1 text-[10px] text-neutral-500">{event.note}</p> : null}
                         {event.event_type === "sync_failed" && event.metadata?.error ? (
                           <p className="mt-1 text-[10px] text-amber-300/70">{event.metadata.error}</p>
+                        ) : null}
+                        {isPlatformAdmin && event.metadata?.detail ? (
+                          <p className="mt-1 break-all font-mono text-[9px] text-neutral-600">{event.metadata.detail}</p>
                         ) : null}
                         {event.event_type === "reopened" && event.metadata?.discarded_resolution_note ? (
                           <p className="mt-1 text-[10px] text-neutral-600">
