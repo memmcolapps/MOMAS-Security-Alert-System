@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessageSquare, Plus, Radio, RefreshCw, Save, Send, Trash2, Volume2, X } from "lucide-react";
+import { MessageSquare, Mic, Phone, PhoneOff, Plus, Radio, RefreshCw, Save, Send, Trash2, Volume2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   deleteDevice,
@@ -13,6 +13,7 @@ import {
   sendRadioMessage,
 } from "../lib/api";
 import { deviceTypeLabel } from "../lib/domain";
+import { useLiveRadio } from "../lib/live-radio";
 
 const emptyForm = {
   device_id: "",
@@ -59,6 +60,7 @@ export function DevicesRoute() {
   const [selectedRadio, setSelectedRadio] = useState(null);
   const [radioMessage, setRadioMessage] = useState("");
   const [sentMessages, setSentMessages] = useState({});
+  const liveRadio = useLiveRadio(selectedRadio?.device_id);
 
   const devicesQuery = useQuery({
     queryKey: ["devices"],
@@ -411,6 +413,84 @@ export function DevicesRoute() {
             </header>
 
             <div className="flex-1 space-y-5 overflow-y-auto p-5">
+              <section className="rounded-lg border border-green-500/25 bg-green-500/[0.04] p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="flex items-center gap-2 text-xs font-bold text-neutral-100">
+                      <Radio size={14} className="text-ops-green" /> Live private call
+                    </h3>
+                    <p className="mt-1 text-[10px] text-neutral-500">
+                      Listen live, then hold the button to speak directly through POCSTARS.
+                    </p>
+                  </div>
+                  <span className={`rounded-full border px-2 py-1 text-[9px] font-bold uppercase ${
+                    liveRadio.callState === "connected"
+                      ? "border-green-500/30 bg-green-500/10 text-ops-green"
+                      : "border-white/10 text-neutral-500"
+                  }`}>
+                    {liveRadio.callState}
+                  </span>
+                </div>
+
+                {liveRadio.error ? (
+                  <p className="mt-3 rounded bg-red-500/10 px-3 py-2 text-[11px] text-red-300">{liveRadio.error}</p>
+                ) : null}
+                {liveRadio.speakerUid ? (
+                  <p className="mt-3 flex items-center gap-2 text-[11px] text-ops-green">
+                    <Volume2 size={13} className="animate-pulse" /> Radio {liveRadio.speakerUid} is speaking
+                  </p>
+                ) : null}
+
+                <div className="mt-4">
+                  {liveRadio.callState === "idle" ? (
+                    <button
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-ops-green px-4 py-3 text-xs font-bold text-black hover:opacity-85"
+                      onClick={liveRadio.connect}
+                    >
+                      <Phone size={15} /> Connect live radio
+                    </button>
+                  ) : liveRadio.callState === "connected" ? (
+                    <div className="space-y-3">
+                      <button
+                        className={`flex min-h-24 w-full touch-none select-none flex-col items-center justify-center gap-2 rounded-lg border text-sm font-black uppercase tracking-wider transition ${
+                          liveRadio.pttState === "granted"
+                            ? "border-red-400 bg-red-500/25 text-red-200 shadow-[0_0_28px_rgba(239,68,68,0.18)]"
+                            : "border-green-500/40 bg-green-500/10 text-ops-green hover:bg-green-500/15"
+                        }`}
+                        onPointerDown={(event) => {
+                          event.currentTarget.setPointerCapture(event.pointerId);
+                          liveRadio.startPtt();
+                        }}
+                        onPointerUp={liveRadio.stopPtt}
+                        onPointerCancel={liveRadio.stopPtt}
+                        onKeyDown={(event) => {
+                          if ((event.key === " " || event.key === "Enter") && !event.repeat) {
+                            event.preventDefault();
+                            liveRadio.startPtt();
+                          }
+                        }}
+                        onKeyUp={(event) => {
+                          if (event.key === " " || event.key === "Enter") liveRadio.stopPtt();
+                        }}
+                      >
+                        <Mic size={24} />
+                        {liveRadio.pttState === "granted" ? "Speaking · release to stop" : liveRadio.pttState === "requesting" ? "Requesting microphone…" : "Hold to talk"}
+                      </button>
+                      <button
+                        className="inline-flex w-full items-center justify-center gap-2 rounded border border-red-500/25 px-3 py-2 text-[11px] text-red-300 hover:bg-red-500/10"
+                        onClick={liveRadio.disconnect}
+                      >
+                        <PhoneOff size={13} /> End call
+                      </button>
+                    </div>
+                  ) : (
+                    <button className="w-full rounded-md border border-white/10 px-4 py-3 text-xs text-neutral-500" disabled>
+                      Connecting through POCSTARS…
+                    </button>
+                  )}
+                </div>
+              </section>
+
               <section className="rounded-lg border border-white/10 bg-white/[0.025] p-4">
                 <div className="mb-3 flex items-center justify-between">
                   <div>

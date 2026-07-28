@@ -204,9 +204,9 @@ login(account, password, 3)
 ```
 
 The configured profile is `TSS`, the protocol code is `101`, and the dispatch
-bootstrap is UDP port `10600`. The bootstrap service returns the actual voice
-server; MOMAS should not implement that proprietary exchange when the native
-SDK is available.
+bootstrap is UDP port `10600`. On this installation the resolved EChat control
+service is `192.168.1.65:22055`, with the audio address and port supplied by
+the current-group event.
 
 ### Identity, groups and members
 
@@ -301,60 +301,91 @@ The installed services have distinct responsibilities:
 | SOS service (`6891`) | Alarm feed, acknowledge/start-response and resolve |
 | RTC services | Video/full-duplex RTC features; not the installed group-PTT interface |
 
-## What MOMAS still needs
+## MOMAS live bridge
 
-Obtain one of the following from POCSTARS:
-
-1. The native Qt dispatcher SDK/library and headers matching dispatcher
-   `v2.12`, preferably with PCM audio input/output callbacks; or
-2. A supported web/headless dispatcher SDK that exposes the same `context`
-   operations.
-
-The official site lists an Africa Qt 15.2 dispatcher build dated 13 June 2025,
-but the download is account-gated. The native dispatcher installer was not
-found on the server itself.
-
-Also obtain:
-
-- a dedicated dispatcher login for the MOMAS gateway;
-- a licence that permits the required groups and concurrent monitoring;
-- a controlled test group with two test radios;
-- codec/audio callback documentation if it is not included with the SDK;
-- confirmation of whether one dispatcher account may maintain simultaneous
-  group monitors and a private/temporary call.
-
-## Recommended MOMAS design
-
-Run the vendor SDK in a small server-side radio gateway. Browsers should never
-connect directly to the proprietary voice ports.
+MOMAS now implements the narrow dispatcher client it needs directly in the
+backend. It uses the protobuf control messages and RTP/AMR-NB voice transport
+already running in EChat; the browser never connects to a POCSTARS voice port.
 
 ```text
-POCSTARS native SDK
+POCSTARS EChat (control + RTP/AMR-NB)
         |
 MOMAS radio gateway
   - group/member permission checks
   - floor/PTT state
-  - PCM/Opus conversion
+  - browser PCM to AMR-NB conversion
   - recording proxy
         |
-Authenticated WebSocket/WebRTC
+Authenticated MOMAS WebSocket
         |
 MOMAS operator UI
 ```
 
-The gateway should expose a narrow MOMAS-owned interface for:
+The first gateway release exposes:
 
-- permitted groups and online members;
-- start/stop monitoring;
-- current speaker/floor state;
-- press/release PTT;
-- private and temporary calls;
-- carefully gated all-radio broadcast;
-- recording search and playback.
+- one private call to a selected, permitted radio;
+- live incoming AMR-NB audio;
+- press/release floor control and outgoing microphone audio;
+- current speaker and PTT state;
+- stored recording search/playback through the existing HTTP endpoints.
 
 All group filtering must happen on the gateway using the authenticated MOMAS
 operator's organization/group scope. Hiding an unauthorized group in the
 browser is not sufficient.
+
+Only one operator may hold the live console in this first release. PTT is
+automatically released after the configured safety limit and whenever the
+browser disconnects.
+
+### Configuration
+
+Use a dedicated active POCSTARS dispatcher account. Reusing a human operator's
+account may terminate their dispatcher session.
+
+```dotenv
+POCSTARS_PTT_CONTROL_HOST=192.168.1.65
+POCSTARS_PTT_CONTROL_PORT=22055
+POCSTARS_PTT_AUDIO_HOST=192.168.1.65
+POCSTARS_PTT_ACCOUNT=dedicated-momas-dispatcher
+POCSTARS_PTT_PASSWORD=vendor-supplied-password-or-hash
+POCSTARS_PTT_MAX_SECONDS=60
+```
+
+Leave `POCSTARS_PTT_CONTROL_HOST` empty to disable live calls safely.
+The backend must run on the POCSTARS private network (or a routed VPN) because
+live audio is UDP. A normal SSH `-L` tunnel can validate the TCP login and
+group query, but it does not carry RTP audio.
+
+For a non-transmitting control smoke test from a development machine:
+
+```bash
+ssh -p 2966 -N \
+  -L 19220:192.168.1.65:22055 \
+  administrator@POCSTARS_PUBLIC_IP
+```
+
+Then point only `POCSTARS_PTT_CONTROL_HOST/PORT` at `127.0.0.1:19220`.
+Do not start a private call until a controlled test radio is nominated.
+
+### Browser protocol
+
+The authenticated endpoint is:
+
+```text
+GET /api/pocstars/radio/live  (WebSocket upgrade)
+```
+
+JSON controls are `call.start`, `call.end`, `ptt.start`, and `ptt.stop`.
+Binary WebSocket messages carry headerless AMR-NB frames in both directions.
+The backend rechecks the selected device against the signed-in operator's
+organization and unit before sending `SingleCall` to POCSTARS.
+
+## Still required before field acceptance
+
+- a dedicated production dispatcher login with access to the field groups;
+- one nominated test handset, so private call, incoming audio and PTT can be
+  verified without disturbing operational radios;
+- confirmation of the permitted concurrent-login policy for that account.
 
 SOS acknowledgement and resolution are documented separately in
 `POCSTARS_SOS_API.md`; those actions already use the server's HTTP API and do

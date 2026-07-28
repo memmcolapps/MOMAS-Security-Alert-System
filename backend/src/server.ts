@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { serveStatic } from "hono/bun";
+import { serveStatic, upgradeWebSocket, websocket } from "hono/bun";
 import { env } from "./config";
 import * as db from "./db";
 import alertsRouter from "./routes/alerts";
@@ -25,6 +25,8 @@ import {
   startTelegramMtproto,
 } from "./scrapers/telegram-mtproto";
 import { cors } from "hono/cors";
+import { requireAuth } from "./auth";
+import { liveRadioWebSocket } from "./pocstars/live-gateway";
 
 const app = new Hono();
 const PORT = env.PORT;
@@ -71,6 +73,8 @@ app.route("/api/org", orgRouter);
 app.route("/api/osint", osintRouter);
 app.route("/api/geofences", geofencesRouter);
 app.route("/api/alerts", alertsRouter);
+app.use("/api/pocstars/radio/live", requireAuth);
+app.get("/api/pocstars/radio/live", upgradeWebSocket((c) => liveRadioWebSocket(c)));
 
 app.get("/api/config", (c) =>
   c.json({
@@ -159,6 +163,7 @@ try {
   Bun.serve({
     port: PORT,
     fetch: app.fetch,
+    websocket,
   });
 
   console.log(`

@@ -36,6 +36,15 @@ const envSchema = z.object({
   POCSTARS_TARGET_UID: z.string().default("583"),
   // POCSTARS dispatcher/recipient account used to claim and close SOS alarms.
   POCSTARS_DISPATCHER_UID: z.string().default("583"),
+  // Dedicated POCSTARS dispatcher identity for live private calls. Keep host
+  // empty to leave the feature disabled.
+  POCSTARS_PTT_CONTROL_HOST: z.string().optional().default(""),
+  POCSTARS_PTT_CONTROL_PORT: intFromEnv(22055),
+  POCSTARS_PTT_AUDIO_HOST: z.string().optional().default(""),
+  POCSTARS_PTT_ACCOUNT: z.string().default("dp1@demo.TSY"),
+  POCSTARS_PTT_PASSWORD: z.string().default("C4CA4238A0B923820DCC509A6F75849B"),
+  POCSTARS_PTT_TIMEOUT_MS: intFromEnv(10_000),
+  POCSTARS_PTT_MAX_SECONDS: intFromEnv(60),
   // Drone tracking — raw MAVLink TCP listener (Mission Planner forwards here).
   MAVLINK_ENABLE: boolFromEnv(true),
   MAVLINK_TCP_HOST: z.string().default("0.0.0.0"),
