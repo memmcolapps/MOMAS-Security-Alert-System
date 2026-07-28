@@ -15,11 +15,22 @@ import {
   Siren,
   Undo2,
   UserRoundCheck,
+  Volume2,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlarmMiniMap } from "../components/AlarmMiniMap";
-import { alertsEventsUrl, getAlarm, getMe, listAlarms, reopenAlarm, resolveAlarm, startAlarmResponse } from "../lib/api";
+import {
+  alertsEventsUrl,
+  getAlarm,
+  getMe,
+  listAlarms,
+  listRadioRecordings,
+  radioRecordingAudioUrl,
+  reopenAlarm,
+  resolveAlarm,
+  startAlarmResponse,
+} from "../lib/api";
 
 const FILTERS = [
   ["open", "Open"],
@@ -120,6 +131,20 @@ function formatDateTime(value) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function dateOnly(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const two = (part) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}`;
+}
+
+function recordingDuration(milliseconds) {
+  const seconds = Math.max(0, Math.round(Number(milliseconds || 0) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
 function elapsed(value, until = null, now = Date.now()) {
@@ -230,6 +255,24 @@ export function AlarmsRoute() {
   // the capped page would undercount once the archive grows past the limit.
   const counts = alarmsQuery.data?.counts || {};
   const selected = detailQuery.data?.alert || alerts.find((alert) => String(alert.alert_key) === String(selectedId)) || null;
+  const radioTrafficQuery = useQuery({
+    queryKey: [
+      "radio-recordings",
+      selected?.device_id,
+      selected?.pocstars_group_name,
+      selected?.triggered_at,
+      selected?.resolved_at,
+    ],
+    queryFn: () => listRadioRecordings({
+      speakerUserId: selected.device_id,
+      groupName: selected.pocstars_group_name || "",
+      from: dateOnly(selected.triggered_at),
+      to: dateOnly(selected.resolved_at || Date.now()),
+      pageSize: 12,
+    }),
+    enabled: Boolean(selected && selected.source !== "geofence" && selected.device_id),
+    refetchInterval: selected && Number(selected.status) < 2 ? 3_000 : false,
+  });
   const sync = radioSync(selected);
   const radioDispatchReady = selected?.source === "geofence" || alarmsQuery.data?.actionsConfigured !== false;
   const isFiltered = Boolean(search || from || to);
@@ -663,6 +706,64 @@ export function AlarmsRoute() {
                 </p>
               )}
             </section>
+
+            {selected.source !== "geofence" ? (
+              <section className="mt-3 rounded-lg border border-emerald-400/20 bg-emerald-400/[0.025] p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="flex items-center gap-2 text-[10px] font-bold text-emerald-200">
+                      <Volume2 size={13} /> Radio traffic
+                    </h3>
+                    <p className="mt-1 text-[9px] text-neutral-600">
+                      New clips appear after the handset releases push-to-talk.
+                    </p>
+                  </div>
+                  <button
+                    aria-label="Refresh radio traffic"
+                    className="rounded p-1.5 text-neutral-600 hover:bg-white/5 hover:text-neutral-200"
+                    onClick={() => radioTrafficQuery.refetch()}
+                    type="button"
+                  >
+                    <RefreshCw size={12} className={radioTrafficQuery.isFetching ? "animate-spin" : ""} />
+                  </button>
+                </div>
+
+                {radioTrafficQuery.isLoading ? (
+                  <p className="mt-3 text-[10px] text-neutral-600">Checking for radio traffic…</p>
+                ) : radioTrafficQuery.isError ? (
+                  <p className="mt-3 text-[10px] text-amber-300/80">{radioTrafficQuery.error.message}</p>
+                ) : radioTrafficQuery.data?.recordings?.length ? (
+                  <div className="mt-3 space-y-2">
+                    {radioTrafficQuery.data.recordings.map((recording) => (
+                      <div className="rounded-md border border-white/10 bg-black/20 p-2.5" key={recording.id}>
+                        <div className="mb-2 flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-[10px] font-bold text-neutral-300">
+                              {recording.speakerName || `Radio ${recording.speakerUserId}`}
+                            </p>
+                            <p className="mt-0.5 truncate text-[9px] text-neutral-600">
+                              {recording.groupName || selected.pocstars_group_name || "Radio call"} · {formatDateTime(recording.startedAt)}
+                            </p>
+                          </div>
+                          <span className="shrink-0 font-mono text-[9px] text-neutral-600">
+                            {recordingDuration(recording.durationMs)}
+                          </span>
+                        </div>
+                        <audio
+                          aria-label={`Radio transmission from ${recording.speakerName || recording.speakerUserId}`}
+                          className="h-8 w-full"
+                          controls
+                          preload="none"
+                          src={radioRecordingAudioUrl(recording.playbackToken)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-[10px] text-neutral-600">No recorded transmission was found for this alarm.</p>
+                )}
+              </section>
+            ) : null}
 
             {Number(selected.status) === 0 ? (
               <section className="mt-5 rounded-lg border border-amber-400/20 bg-amber-400/[0.035] p-4">

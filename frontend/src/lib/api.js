@@ -360,6 +360,30 @@ export function getSosLog() {
   return request("/api/pocstars/sos/log");
 }
 
+export function listRadioRecordings(params = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") query.set(key, value);
+  });
+  return request(`/api/pocstars/radio/recordings?${query}`);
+}
+
+export function radioRecordingAudioUrl(playbackToken) {
+  const query = new URLSearchParams();
+  const token = getAuthToken();
+  const org = getActiveOrganizationId();
+  if (token) query.set("access_token", token);
+  if (org) query.set("organization_id", org);
+  return `${config.apiBase}/api/pocstars/radio/recordings/${encodeURIComponent(playbackToken)}/audio?${query}`;
+}
+
+export function sendRadioMessage(payload) {
+  return request("/api/pocstars/radio/messages", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function listAlarms(params = {}) {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {

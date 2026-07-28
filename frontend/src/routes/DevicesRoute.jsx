@@ -1,7 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Radio, Save, Trash2, X } from "lucide-react";
+import { MessageSquare, Plus, Radio, RefreshCw, Save, Send, Trash2, Volume2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { deleteDevice, getMe, getOrgAdmin, listDevices, listOrganizations, saveDevice } from "../lib/api";
+import {
+  deleteDevice,
+  getMe,
+  getOrgAdmin,
+  listDevices,
+  listOrganizations,
+  listRadioRecordings,
+  radioRecordingAudioUrl,
+  saveDevice,
+  sendRadioMessage,
+} from "../lib/api";
 import { deviceTypeLabel } from "../lib/domain";
 
 const emptyForm = {
@@ -24,12 +34,31 @@ function formatDate(value) {
   });
 }
 
+function formatRadioTime(value) {
+  if (!value) return "Unknown time";
+  return new Date(value).toLocaleString("en-GB", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function formatDuration(milliseconds) {
+  const seconds = Math.max(0, Math.round(Number(milliseconds || 0) / 1000));
+  return `${seconds}s`;
+}
+
 export function DevicesRoute() {
   const queryClient = useQueryClient();
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [toast, setToast] = useState(null);
+  const [selectedRadio, setSelectedRadio] = useState(null);
+  const [radioMessage, setRadioMessage] = useState("");
+  const [sentMessages, setSentMessages] = useState({});
 
   const devicesQuery = useQuery({
     queryKey: ["devices"],
@@ -63,6 +92,20 @@ export function DevicesRoute() {
     return allDevices.filter((device) => String(device.organization_id) === String(orgFilter));
   }, [allDevices, orgFilter]);
   const activeCount = useMemo(() => devices.filter((device) => device.active).length, [devices]);
+  const radioMessageBytes = useMemo(
+    () => new window.TextEncoder().encode(radioMessage.trim()).length,
+    [radioMessage],
+  );
+
+  const radioTrafficQuery = useQuery({
+    queryKey: ["radio-recordings", selectedRadio?.device_id],
+    queryFn: () => listRadioRecordings({
+      speakerUserId: selectedRadio.device_id,
+      pageSize: 50,
+    }),
+    enabled: Boolean(selectedRadio?.device_id),
+    refetchInterval: selectedRadio ? 3_000 : false,
+  });
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -85,6 +128,26 @@ export function DevicesRoute() {
     onSuccess: async () => {
       setToast("Device removed");
       await queryClient.invalidateQueries({ queryKey: ["devices"] });
+    },
+    onError: (error) => setToast(error.message),
+  });
+
+  const messageMutation = useMutation({
+    mutationFn: sendRadioMessage,
+    onSuccess: (result, variables) => {
+      setSentMessages((current) => ({
+        ...current,
+        [variables.device_id]: [
+          ...(current[variables.device_id] || []),
+          {
+            id: result.deliveryId || `${Date.now()}`,
+            message: variables.message,
+            sentAt: result.acceptedAt || new Date().toISOString(),
+          },
+        ],
+      }));
+      setRadioMessage("");
+      setToast(`Message sent to ${selectedRadio?.name || selectedRadio?.device_id || "radio"}`);
     },
     onError: (error) => setToast(error.message),
   });
@@ -136,6 +199,16 @@ export function DevicesRoute() {
       device_type: form.device_type || null,
       notes: form.notes.trim() || null,
       active: form.active === "true",
+    });
+  }
+
+  function sendMessage(event) {
+    event.preventDefault();
+    const message = radioMessage.trim();
+    if (!selectedRadio || !message || radioMessageBytes > 200) return;
+    messageMutation.mutate({
+      device_id: selectedRadio.device_id,
+      message,
     });
   }
 
@@ -258,7 +331,7 @@ export function DevicesRoute() {
                 <th className="px-4 py-3">Type</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Added</th>
-                <th className="px-4 py-3" />
+                <th className="px-4 py-3">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -283,7 +356,10 @@ export function DevicesRoute() {
                     </td>
                     <td className="px-4 py-3 text-[11px] text-neutral-600">{formatDate(device.created_at)}</td>
                     <td className="px-4 py-3">
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2">
+                        <button className="inline-flex items-center gap-1 rounded border border-green-500/25 px-2 py-1 text-[10px] text-ops-green hover:bg-green-500/10" onClick={() => setSelectedRadio(device)}>
+                          <MessageSquare size={11} /> Open radio
+                        </button>
                         <button className="rounded border border-white/10 px-2 py-1 text-[10px] text-neutral-500 hover:border-ops-green hover:text-ops-green" onClick={() => openEdit(device)}>
                           Edit
                         </button>
@@ -309,6 +385,115 @@ export function DevicesRoute() {
           </table>
         </div>
       </section>
+
+      {selectedRadio ? (
+        <>
+          <button
+            aria-label="Close radio console"
+            className="fixed inset-0 z-[998] cursor-default bg-black/60"
+            onClick={() => setSelectedRadio(null)}
+          />
+          <aside className="fixed inset-y-0 right-0 z-[999] flex w-full max-w-xl flex-col border-l border-green-500/25 bg-[#090d0b] shadow-2xl">
+            <header className="flex items-start justify-between border-b border-white/10 px-5 py-4">
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-ops-green">Radio console</p>
+                <h2 className="mt-1 text-base font-bold text-neutral-100">
+                  {selectedRadio.name || `Radio ${selectedRadio.device_id}`}
+                </h2>
+                <p className="mt-1 font-mono text-[10px] text-neutral-500">
+                  UID {selectedRadio.device_id}
+                  {selectedRadio.operator ? ` · ${selectedRadio.operator}` : ""}
+                </p>
+              </div>
+              <button className="rounded p-2 text-neutral-500 hover:bg-white/5 hover:text-neutral-100" onClick={() => setSelectedRadio(null)}>
+                <X size={18} />
+              </button>
+            </header>
+
+            <div className="flex-1 space-y-5 overflow-y-auto p-5">
+              <section className="rounded-lg border border-white/10 bg-white/[0.025] p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <div>
+                    <h3 className="flex items-center gap-2 text-xs font-bold text-neutral-200">
+                      <Volume2 size={14} className="text-ops-green" /> Incoming voice
+                    </h3>
+                    <p className="mt-1 text-[10px] text-neutral-600">New clips appear after the handset releases push-to-talk.</p>
+                  </div>
+                  <button
+                    className="rounded border border-white/10 p-2 text-neutral-500 hover:border-ops-green hover:text-ops-green disabled:opacity-50"
+                    disabled={radioTrafficQuery.isFetching}
+                    onClick={() => radioTrafficQuery.refetch()}
+                    title="Refresh radio traffic"
+                  >
+                    <RefreshCw size={13} className={radioTrafficQuery.isFetching ? "animate-spin" : ""} />
+                  </button>
+                </div>
+
+                {radioTrafficQuery.error ? (
+                  <p className="rounded bg-red-500/10 px-3 py-2 text-[11px] text-red-300">{radioTrafficQuery.error.message}</p>
+                ) : null}
+                {radioTrafficQuery.isLoading ? (
+                  <p className="py-5 text-center text-[11px] text-neutral-600">Loading radio traffic...</p>
+                ) : null}
+                <div className="space-y-3">
+                  {(radioTrafficQuery.data?.recordings || []).map((recording) => (
+                    <article className="rounded-md border border-white/10 bg-black/25 p-3" key={recording.id}>
+                      <div className="mb-2 flex items-center justify-between gap-3 text-[10px]">
+                        <span className="font-semibold text-neutral-300">{recording.speakerName || selectedRadio.name || `Radio ${recording.speakerUserId}`}</span>
+                        <span className="text-neutral-600">{formatRadioTime(recording.startedAt)} · {formatDuration(recording.durationMs)}</span>
+                      </div>
+                      <audio className="h-8 w-full" controls preload="none" src={radioRecordingAudioUrl(recording.playbackToken)}>
+                        Your browser does not support audio playback.
+                      </audio>
+                    </article>
+                  ))}
+                </div>
+                {!radioTrafficQuery.isLoading && !(radioTrafficQuery.data?.recordings || []).length ? (
+                  <p className="py-5 text-center text-[11px] text-neutral-600">No recent voice traffic from this radio.</p>
+                ) : null}
+              </section>
+
+              {(sentMessages[selectedRadio.device_id] || []).length ? (
+                <section>
+                  <h3 className="mb-2 text-[10px] font-bold uppercase tracking-wide text-neutral-500">Sent this session</h3>
+                  <div className="space-y-2">
+                    {(sentMessages[selectedRadio.device_id] || []).map((item) => (
+                      <article className="ml-10 rounded-lg border border-green-500/20 bg-green-500/[0.07] px-3 py-2" key={item.id}>
+                        <p className="text-xs text-neutral-200">{item.message}</p>
+                        <p className="mt-1 text-right text-[9px] text-neutral-600">{formatRadioTime(item.sentAt)} · MOMAS Command</p>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+            </div>
+
+            <form className="border-t border-white/10 bg-black/25 p-4" onSubmit={sendMessage}>
+              <label className="mb-2 block text-[10px] font-bold uppercase tracking-wide text-neutral-500">
+                Send text command
+              </label>
+              <textarea
+                className="field-input min-h-[82px] resize-none"
+                value={radioMessage}
+                onChange={(event) => setRadioMessage(event.target.value)}
+                placeholder={`Message ${selectedRadio.name || selectedRadio.device_id}`}
+              />
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <span className={`text-[9px] ${radioMessageBytes > 200 ? "text-red-400" : "text-neutral-600"}`}>
+                  {radioMessageBytes}/200 bytes · delivered by POCSTARS
+                </span>
+                <button
+                  type="submit"
+                  disabled={!radioMessage.trim() || radioMessageBytes > 200 || messageMutation.isPending}
+                  className="inline-flex items-center gap-2 rounded bg-ops-green px-4 py-2 text-xs font-bold text-black disabled:opacity-40"
+                >
+                  <Send size={13} /> {messageMutation.isPending ? "Sending..." : "Send"}
+                </button>
+              </div>
+            </form>
+          </aside>
+        </>
+      ) : null}
 
       {toast ? (
         <div className="fixed bottom-6 left-1/2 z-[999] -translate-x-1/2 rounded-md border border-green-500/40 bg-black px-4 py-2 text-xs text-neutral-100">

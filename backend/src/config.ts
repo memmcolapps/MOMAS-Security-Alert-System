@@ -23,6 +23,16 @@ const envSchema = z.object({
   FRONTEND_MAX_MARKERS: intFromEnv(500),
   POCSTARS_LOC_BASE: z.string().url().default("http://143.105.173.49:9275"),
   POCSTARS_SOS_BASE: z.string().url().default("http://143.105.173.49:6891"),
+  POCSTARS_MEDIA_BASE: z
+    .string()
+    .url()
+    .default("http://143.105.173.49:6871/slmedia"),
+  POCSTARS_RECORDINGS_BASE: z
+    .string()
+    .url()
+    .default("http://recordfile.epailnigeria.com"),
+  POCSTARS_RECORDINGS_USERNAME: z.string().default("aud"),
+  POCSTARS_RECORDINGS_PASSWORD: z.string().default("l231sItal"),
   POCSTARS_TARGET_UID: z.string().default("583"),
   // POCSTARS dispatcher/recipient account used to claim and close SOS alarms.
   POCSTARS_DISPATCHER_UID: z.string().default("583"),
