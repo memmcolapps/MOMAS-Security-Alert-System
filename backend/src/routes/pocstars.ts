@@ -45,6 +45,7 @@ async function ensureDeviceAccess(c: any, deviceIds: string[]) {
 
 let lastPocstarsOk: number | null = null;
 let lastPocstarsErr: string | null = null;
+let lastPocstarsReconcileAt: number | null = null;
 let sosSyncRunning = false;
 
 const formUrlencoded = (obj: Record<string, unknown>) =>
@@ -164,6 +165,30 @@ async function persistAndBroadcast(rows: any[]) {
   }
 }
 
+function upstreamDate(value: unknown) {
+  const stamp = Number(value);
+  return Number.isFinite(stamp) && stamp > 0 ? new Date(stamp) : null;
+}
+
+async function reconcileAndBroadcast(rows: any[]) {
+  for (const row of rows) {
+    const upstreamStatus = Number(row.sosStatus ?? row.status);
+    if (![1, 2].includes(upstreamStatus)) continue;
+    const alert = await db.reconcileSosAlert({
+      sos_msg_id: row.sosMsgId,
+      upstream_status: upstreamStatus,
+      processed_at: upstreamDate(row.sosPtamp),
+      closed_at: upstreamDate(row.sosEtamp),
+      processor_id: row.sosProcessorId ?? null,
+      processor_name: row.sosProcessorName ?? null,
+    });
+    if (alert) {
+      broadcastSse("sos_updated", alert);
+      bus.emit("pocstars-alert:updated", alert);
+    }
+  }
+}
+
 type SosAction = "process" | "close" | "reopen";
 
 // Reopening a closed alarm puts it back into the dispatcher's hands upstream,
@@ -277,9 +302,23 @@ async function syncPocstarsSos({ notifyHealth = true } = {}) {
   if (sosSyncRunning) return;
   sosSyncRunning = true;
   try {
-    const data = await fetchPocstarsSos(DEFAULT_TARGET_UID);
-    const rows = data?.data?.rows || [];
-    await persistAndBroadcast(rows);
+    // New alarms are imported. Processing/resolved rows only reconcile records
+    // MOMAS already knows about, so polling cannot backfill the vendor archive.
+    const newData = await fetchPocstarsSos(DEFAULT_TARGET_UID, { status: 0, pageSize: 50 });
+    await persistAndBroadcast(newData?.data?.rows || []);
+
+    // Alarm-list requests can also trigger a sync, so keep the heavier archive
+    // reads on their own cadence instead of tripling vendor traffic per request.
+    const reconcileDue = !lastPocstarsReconcileAt || Date.now() - lastPocstarsReconcileAt >= 30_000;
+    if (reconcileDue) {
+      const [processingData, resolvedData] = await Promise.all([
+        fetchPocstarsSos(DEFAULT_TARGET_UID, { status: 1, pageSize: 200 }),
+        fetchPocstarsSos(DEFAULT_TARGET_UID, { status: 2, pageSize: 200 }),
+      ]);
+      await reconcileAndBroadcast(processingData?.data?.rows || []);
+      await reconcileAndBroadcast(resolvedData?.data?.rows || []);
+      lastPocstarsReconcileAt = Date.now();
+    }
     if (notifyHealth) broadcastSse("pocstars_health", { ok: true, ts: lastPocstarsOk });
   } catch (error: any) {
     if (notifyHealth) broadcastSse("pocstars_health", { ok: false, err: error.message, ts: Date.now() });

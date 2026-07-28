@@ -1630,6 +1630,99 @@ async function insertSosAlert({
   return getSosAlert(rows[0].sos_msg_id);
 }
 
+/**
+ * Advance an existing MOMAS alarm when POCSTARS reports that it was processed
+ * or closed outside this application. Upstream state is authoritative only in
+ * the forward direction: a stale vendor row must never reopen a locally
+ * resolved alarm.
+ *
+ * Processing/resolved rows that MOMAS never imported are intentionally ignored
+ * so enabling reconciliation does not backfill the entire POCSTARS archive.
+ */
+async function reconcileSosAlert({
+  sos_msg_id,
+  upstream_status,
+  processed_at = null,
+  closed_at = null,
+  processor_id = null,
+  processor_name = null,
+}) {
+  const nextStatus = Number(upstream_status);
+  if (![1, 2].includes(nextStatus)) return null;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: existingRows } = await client.query(
+      `SELECT id, status
+         FROM sos_alerts
+        WHERE sos_msg_id=$1
+        FOR UPDATE`,
+      [sos_msg_id],
+    );
+    const existing = existingRows[0];
+    if (!existing || Number(existing.status) >= nextStatus) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+
+    const eventType = nextStatus === 2 ? "resolved_upstream" : "response_started_upstream";
+    const resolutionNote = nextStatus === 2 ? "Resolved on the radio network outside MOMAS." : null;
+    await client.query(
+      `UPDATE sos_alerts
+          SET status=$2,
+              upstream_status=$2,
+              sync_status='synced',
+              acknowledged_at=CASE
+                WHEN $2 >= 1 THEN COALESCE(acknowledged_at, $3::timestamptz, NOW())
+                ELSE acknowledged_at
+              END,
+              upstream_processed_at=CASE
+                WHEN $2 >= 1 THEN COALESCE(upstream_processed_at, $3::timestamptz, NOW())
+                ELSE upstream_processed_at
+              END,
+              resolved_at=CASE
+                WHEN $2 = 2 THEN COALESCE(resolved_at, $4::timestamptz, NOW())
+                ELSE resolved_at
+              END,
+              upstream_closed_at=CASE
+                WHEN $2 = 2 THEN COALESCE(upstream_closed_at, $4::timestamptz, NOW())
+                ELSE upstream_closed_at
+              END,
+              resolution_note=CASE
+                WHEN $2 = 2 THEN COALESCE(resolution_note, $5)
+                ELSE resolution_note
+              END,
+              last_sync_error=NULL,
+              updated_at=NOW()
+        WHERE id=$1`,
+      [existing.id, nextStatus, processed_at, closed_at, resolutionNote],
+    );
+    await client.query(
+      `INSERT INTO sos_alert_events (sos_alert_id, event_type, note, metadata)
+       VALUES ($1,$2,$3,$4::jsonb)`,
+      [
+        existing.id,
+        eventType,
+        resolutionNote,
+        JSON.stringify({
+          source: "pocstars_reconciliation",
+          upstream_status: nextStatus,
+          processor_id: processor_id == null ? null : String(processor_id),
+          processor_name: processor_name || null,
+        }),
+      ],
+    );
+    await client.query("COMMIT");
+    return getSosAlert(sos_msg_id);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 const SOS_REQUEST_EVENTS = {
   process: "response_requested",
   close: "resolution_requested",
@@ -2534,6 +2627,7 @@ export {
   listAuditLogs,
   insertSosAlert,
   getSosAlert,
+  reconcileSosAlert,
   beginSosAction,
   completeSosAction,
   failSosAction,

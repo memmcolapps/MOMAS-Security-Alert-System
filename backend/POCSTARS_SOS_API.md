@@ -60,6 +60,13 @@ local alarm state after POCSTARS returns `code: 200` and `success: true`. On a
 timeout or rejection, the alarm is marked `sync_failed`, and the error is added
 to its activity history so an operator can retry.
 
+The background synchronizer also reads POCSTARS statuses `1` (processing) and
+`2` (closed). It advances matching alarms that MOMAS already imported and adds
+an activity entry when the action happened outside MOMAS. It never moves an
+alarm backward and never imports processing/resolved archive rows that MOMAS
+did not previously know about. This reconciliation is what removes an alarm
+from the operations map after it is manually resolved in POCSTARS.
+
 The SOS service's current Spring Security configuration permits all HTTP
 requests and disables CSRF, so no action token is required. Network access to
 port `6891` should still be restricted to MOMAS and trusted administration
