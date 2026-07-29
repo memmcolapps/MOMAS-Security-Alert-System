@@ -11,6 +11,7 @@ import orgRouter from "./routes/org";
 import organizationsRouter from "./routes/organizations";
 import osintRouter from "./routes/osint";
 import pocstarsRouter from "./routes/pocstars";
+import pocstarsAdminRouter from "./routes/pocstars-admin";
 import { startMavlinkListener } from "./drones/mavlink-listener";
 import { startGeofenceMonitor } from "./geofencing/engine";
 import { isGDELTEnabled, scrapeGDELT } from "./scrapers/gdelt";
@@ -65,6 +66,7 @@ app.onError((error, c) => {
 });
 
 app.route("/api/incidents", incidentsRouter);
+app.route("/api/pocstars/admin", pocstarsAdminRouter);
 app.route("/api/pocstars", pocstarsRouter);
 app.route("/api/drones", dronesRouter);
 app.route("/api/auth", authRouter);

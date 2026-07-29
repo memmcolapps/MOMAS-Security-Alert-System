@@ -234,6 +234,24 @@ async function init() {
       PRIMARY KEY (device_id, group_id)
     );
 
+    CREATE TABLE IF NOT EXISTS pocstars_dispatchers (
+      dispatcher_uid    TEXT PRIMARY KEY,
+      name              TEXT,
+      last_sync_at      TIMESTAMPTZ,
+      last_sync_summary JSONB,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS pocstars_groups (
+      group_id              TEXT PRIMARY KEY,
+      name                  TEXT,
+      type                  INTEGER,
+      source_dispatcher_uid TEXT,
+      active                BOOLEAN NOT NULL DEFAULT true,
+      first_seen_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_seen_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS geofences (
       id                     SERIAL PRIMARY KEY,
       organization_id        INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -2077,15 +2095,17 @@ async function listDevices(scope: any = {}) {
   return rows;
 }
 
-async function getOrganizationByPocstarsDispatcherUid(dispatcherUid) {
-  const { rows } = await pool.query(
-    "SELECT * FROM organizations WHERE pocstars_dispatcher_uid = $1",
-    [String(dispatcherUid)],
-  );
-  return rows[0] ?? null;
+async function hasPocstarsDispatchers() {
+  const { rows } = await pool.query("SELECT 1 FROM pocstars_dispatchers LIMIT 1");
+  return Boolean(rows[0]);
 }
 
-async function syncPocstarsInventory(organizationId, inventory: any) {
+// Platform-pool inventory sync. POCSTARS has no tenant concept, so the whole
+// visible network lands in a platform-level registry: groups go to
+// pocstars_groups, radios become pool devices (organization_id NULL) until a
+// platform admin assigns their group — or the radio itself — to an
+// organization. Radios whose group is already assigned follow it automatically.
+async function syncPocstarsPlatformInventory(inventory: any) {
   const dispatcherUid = String(inventory?.dispatcher?.id || "");
   if (!dispatcherUid || !Array.isArray(inventory?.groups) || !Array.isArray(inventory?.radios)) {
     throw new Error("POCSTARS returned an invalid inventory snapshot.");
@@ -2094,32 +2114,11 @@ async function syncPocstarsInventory(organizationId, inventory: any) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const { rows: organizations } = await client.query(
-      "SELECT * FROM organizations WHERE id = $1 FOR UPDATE",
-      [organizationId],
-    );
-    const organization = organizations[0];
-    if (!organization) throw new Error("The selected MOMAS organization could not be found.");
-
-    const { rows: linkedOrganizations } = await client.query(
-      "SELECT id, name FROM organizations WHERE pocstars_dispatcher_uid = $1 AND id <> $2",
-      [dispatcherUid, organizationId],
-    );
-    if (linkedOrganizations[0]) {
-      throw new Error(`This POCSTARS dispatcher is already linked to ${linkedOrganizations[0].name}.`);
-    }
-    if (
-      organization.pocstars_dispatcher_uid
-      && String(organization.pocstars_dispatcher_uid) !== dispatcherUid
-    ) {
-      throw new Error("This organization is linked to a different POCSTARS dispatcher.");
-    }
     await client.query(
-      `UPDATE organizations
-          SET pocstars_dispatcher_uid = $2,
-              updated_at = NOW()
-        WHERE id = $1`,
-      [organizationId, dispatcherUid],
+      `INSERT INTO pocstars_dispatchers (dispatcher_uid, name)
+       VALUES ($1,$2)
+       ON CONFLICT (dispatcher_uid) DO UPDATE SET name = EXCLUDED.name`,
+      [dispatcherUid, String(inventory.dispatcher?.name || dispatcherUid)],
     );
 
     const groups = inventory.groups
@@ -2129,87 +2128,121 @@ async function syncPocstarsInventory(organizationId, inventory: any) {
         type: Number(group.type || 0),
       }))
       .filter((group: any) => /^\d+$/.test(group.id));
-    const groupUnits = new Map<string, number>();
     let groupsCreated = 0;
     let groupsUpdated = 0;
     for (const group of groups) {
-      const { rows: existingUnits } = await client.query(
-        "SELECT id, organization_id FROM organization_units WHERE pocstars_group_id = $1",
-        [group.id],
+      const { rows } = await client.query(
+        `INSERT INTO pocstars_groups (group_id, name, type, source_dispatcher_uid, active, last_seen_at)
+         VALUES ($1,$2,$3,$4,true,NOW())
+         ON CONFLICT (group_id) DO UPDATE SET
+           name = EXCLUDED.name,
+           type = EXCLUDED.type,
+           source_dispatcher_uid = EXCLUDED.source_dispatcher_uid,
+           active = true,
+           last_seen_at = NOW()
+         RETURNING (xmax = 0) AS inserted`,
+        [group.id, group.name, group.type, dispatcherUid],
       );
-      const existing = existingUnits[0];
-      if (existing && Number(existing.organization_id) !== Number(organizationId)) {
-        throw new Error(`POCSTARS group ${group.name} is already assigned to another organization.`);
-      }
-      if (existing) {
-        await client.query(
-          `UPDATE organization_units
-              SET name = $2,
-                  pocstars_group_name = $2,
-                  updated_at = NOW()
-            WHERE id = $1`,
-          [existing.id, group.name],
-        );
-        groupUnits.set(group.id, Number(existing.id));
-        groupsUpdated += 1;
-      } else {
-        const { rows } = await client.query(
-          `INSERT INTO organization_units (
-             organization_id, name, type, pocstars_group_id, pocstars_group_name
-           )
-           VALUES ($1,$2,'POCSTARS group',$3,$2)
-           RETURNING id`,
-          [organizationId, group.name, group.id],
-        );
-        groupUnits.set(group.id, Number(rows[0].id));
-        groupsCreated += 1;
-      }
+      if (rows[0]?.inserted) groupsCreated += 1;
+      else groupsUpdated += 1;
+      // Keep already-assigned units' display names in step with the vendor.
+      await client.query(
+        `UPDATE organization_units
+            SET name = $2, pocstars_group_name = $2, updated_at = NOW()
+          WHERE pocstars_group_id = $1 AND name IS DISTINCT FROM $2`,
+        [group.id, group.name],
+      );
+    }
+    const seenGroupIds = groups.map((group: any) => group.id);
+    if (seenGroupIds.length) {
+      await client.query(
+        `UPDATE pocstars_groups SET active = false
+          WHERE source_dispatcher_uid = $1 AND NOT (group_id = ANY($2::text[]))`,
+        [dispatcherUid, seenGroupIds],
+      );
+    }
+
+    // Existing organization units mapped to POCSTARS groups (the admin's
+    // assignments) — radios follow these automatically.
+    const { rows: mappedUnits } = await client.query(
+      `SELECT id, organization_id, pocstars_group_id FROM organization_units
+        WHERE pocstars_group_id IS NOT NULL`,
+    );
+    const unitByGroup = new Map<string, { unitId: number; organizationId: number }>();
+    for (const unit of mappedUnits) {
+      unitByGroup.set(String(unit.pocstars_group_id), {
+        unitId: Number(unit.id),
+        organizationId: Number(unit.organization_id),
+      });
     }
 
     const membershipsByRadio = new Map<string, string[]>();
+    const groupById = new Map<string, any>(groups.map((group: any) => [group.id, group]));
     for (const membership of inventory.memberships || []) {
       const radioId = String(membership.radioId || "");
       const groupId = String(membership.groupId || "");
-      if (!/^\d+$/.test(radioId) || !groupUnits.has(groupId)) continue;
+      if (!/^\d+$/.test(radioId) || !groupById.has(groupId)) continue;
       const current = membershipsByRadio.get(radioId) || [];
       if (!current.includes(groupId)) current.push(groupId);
       membershipsByRadio.set(radioId, current);
     }
-    const groupById = new Map<string, any>(groups.map((group: any) => [group.id, group]));
+
     let radiosCreated = 0;
     let radiosUpdated = 0;
-    let conflicts = 0;
-    let needsAssignment = 0;
+    let pooled = 0;
+    let dispatchersSkipped = 0;
     const seenRadioIds: string[] = [];
 
     for (const radio of inventory.radios) {
       const radioId = String(radio.id || "");
       if (!/^\d+$/.test(radioId)) continue;
+      // Other dispatcher consoles show up in group membership; they are not
+      // field radios and must not be imported as devices.
+      if (Number(radio.role) === 3) {
+        dispatchersSkipped += 1;
+        continue;
+      }
       const { rows: existingDevices } = await client.query(
         "SELECT * FROM devices WHERE device_id = $1 FOR UPDATE",
         [radioId],
       );
       const existing = existingDevices[0];
-      if (
-        existing?.organization_id
-        && Number(existing.organization_id) !== Number(organizationId)
-      ) {
-        conflicts += 1;
-        continue;
-      }
-
       const membershipIds = membershipsByRadio.get(radioId) || [];
-      const existingGroupId = existing?.unit_id
-        ? membershipIds.find((groupId) => groupUnits.get(groupId) === Number(existing.unit_id))
+
+      let organizationId: number | null = existing?.organization_id
+        ? Number(existing.organization_id)
         : null;
-      const preferredGroupId = existingGroupId || membershipIds
-        .slice()
-        .sort((left, right) => {
-          const typeDifference = Number(groupById.get(left)?.type || 0) - Number(groupById.get(right)?.type || 0);
-          return typeDifference || Number(left) - Number(right);
-        })[0];
-      const unitId = preferredGroupId ? groupUnits.get(preferredGroupId) : null;
-      if (!unitId) needsAssignment += 1;
+      let unitId: number | null = existing?.unit_id ? Number(existing.unit_id) : null;
+
+      if (organizationId) {
+        // Assigned radio: keep its organization. Re-derive the unit only from
+        // groups mapped inside that same organization, preserving a still-valid
+        // assignment first.
+        const validUnitIds = membershipIds
+          .map((groupId) => unitByGroup.get(groupId))
+          .filter((entry) => entry && entry.organizationId === organizationId)
+          .map((entry) => entry!.unitId);
+        if (!unitId || !validUnitIds.includes(unitId)) {
+          unitId = validUnitIds[0] ?? unitId ?? null;
+        }
+      } else {
+        // Pool radio: follow an assigned group if one exists, otherwise stay
+        // platform-level until an admin decides.
+        const assignedGroupId = membershipIds
+          .slice()
+          .sort((left, right) => {
+            const typeDifference = Number(groupById.get(left)?.type || 0) - Number(groupById.get(right)?.type || 0);
+            return typeDifference || Number(left) - Number(right);
+          })
+          .find((groupId) => unitByGroup.has(groupId));
+        if (assignedGroupId) {
+          const target = unitByGroup.get(assignedGroupId)!;
+          organizationId = target.organizationId;
+          unitId = target.unitId;
+        } else {
+          pooled += 1;
+        }
+      }
 
       await client.query(
         `INSERT INTO devices (
@@ -2217,12 +2250,11 @@ async function syncPocstarsInventory(organizationId, inventory: any) {
            device_type, active, pocstars_managed, pocstars_online,
            pocstars_last_seen_at, pocstars_source_dispatcher_uid
          )
-         VALUES ($1,$2,$3,$4,$5,$4,'handheld',true,true,$6,NOW(),$7)
+         VALUES ($1,$2,$3,$4,NULL,$4,'handheld',true,true,$5,NOW(),$6)
          ON CONFLICT (device_id) DO UPDATE SET
            organization_id = EXCLUDED.organization_id,
            unit_id = EXCLUDED.unit_id,
            name = EXCLUDED.name,
-           company = EXCLUDED.company,
            operator = COALESCE(devices.operator, EXCLUDED.operator),
            device_type = COALESCE(devices.device_type, EXCLUDED.device_type),
            active = true,
@@ -2233,9 +2265,8 @@ async function syncPocstarsInventory(organizationId, inventory: any) {
         [
           radioId,
           organizationId,
-          unitId || null,
+          unitId,
           String(radio.name || `Radio ${radioId}`),
-          organization.pocstars_company_name || organization.name,
           Boolean(radio.online),
           dispatcherUid,
         ],
@@ -2260,17 +2291,16 @@ async function syncPocstarsInventory(organizationId, inventory: any) {
       }
     }
 
-    const staleParams: any[] = [organizationId, dispatcherUid];
+    const staleParams: any[] = [dispatcherUid];
     let staleSql = `
       UPDATE devices
          SET active = false,
              pocstars_online = false
-       WHERE organization_id = $1
-         AND pocstars_managed = true
-         AND pocstars_source_dispatcher_uid = $2`;
+       WHERE pocstars_managed = true
+         AND pocstars_source_dispatcher_uid = $1`;
     if (seenRadioIds.length) {
       staleParams.push(seenRadioIds);
-      staleSql += " AND NOT (device_id = ANY($3::text[]))";
+      staleSql += " AND NOT (device_id = ANY($2::text[]))";
     }
     const staleResult = await client.query(staleSql, staleParams);
 
@@ -2283,17 +2313,15 @@ async function syncPocstarsInventory(organizationId, inventory: any) {
       radiosCreated,
       radiosUpdated,
       radiosMarkedInactive: staleResult.rowCount,
-      needsAssignment,
-      conflicts,
+      dispatchersSkipped,
+      pooled,
       observedAt: inventory.observedAt || new Date().toISOString(),
     };
     await client.query(
-      `UPDATE organizations
-          SET pocstars_last_sync_at = NOW(),
-              pocstars_last_sync_summary = $2::jsonb,
-              updated_at = NOW()
-        WHERE id = $1`,
-      [organizationId, JSON.stringify(summary)],
+      `UPDATE pocstars_dispatchers
+          SET last_sync_at = NOW(), last_sync_summary = $2::jsonb
+        WHERE dispatcher_uid = $1`,
+      [dispatcherUid, JSON.stringify(summary)],
     );
     await client.query("COMMIT");
     return summary;
@@ -2303,6 +2331,114 @@ async function syncPocstarsInventory(organizationId, inventory: any) {
   } finally {
     client.release();
   }
+}
+
+// Platform-admin choice: attach a POCSTARS group to an organization as a unit
+// and pull that group's pool radios into it.
+async function assignPocstarsGroupToOrganization({ group_id, organization_id, unit_name }: {
+  group_id: string;
+  organization_id: number;
+  unit_name?: string;
+}) {
+  const groupId = String(group_id);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: groups } = await client.query(
+      "SELECT * FROM pocstars_groups WHERE group_id = $1 FOR UPDATE",
+      [groupId],
+    );
+    const group = groups[0];
+    if (!group) throw new Error("That POCSTARS group is not in the registry. Run a sync first.");
+    const { rows: organizations } = await client.query(
+      "SELECT id, name FROM organizations WHERE id = $1",
+      [organization_id],
+    );
+    if (!organizations[0]) throw new Error("The selected MOMAS organization could not be found.");
+
+    const { rows: existingUnits } = await client.query(
+      `SELECT ou.id, ou.organization_id, o.name AS organization_name
+         FROM organization_units ou JOIN organizations o ON o.id = ou.organization_id
+        WHERE ou.pocstars_group_id = $1`,
+      [groupId],
+    );
+    const existingUnit = existingUnits[0];
+    if (existingUnit && Number(existingUnit.organization_id) !== Number(organization_id)) {
+      throw new Error(`POCSTARS group ${group.name} is already assigned to ${existingUnit.organization_name}.`);
+    }
+
+    let unitId: number;
+    if (existingUnit) {
+      unitId = Number(existingUnit.id);
+    } else {
+      const { rows } = await client.query(
+        `INSERT INTO organization_units (
+           organization_id, name, type, pocstars_group_id, pocstars_group_name
+         )
+         VALUES ($1,$2,'POCSTARS group',$3,$4)
+         RETURNING id`,
+        [organization_id, unit_name || group.name || `Group ${groupId}`, groupId, group.name],
+      );
+      unitId = Number(rows[0].id);
+    }
+
+    // Move this group's pool radios into the organization. Radios already owned
+    // by an organization are left where they are.
+    const { rows: moved } = await client.query(
+      `UPDATE devices d
+          SET organization_id = $2, unit_id = $3
+         FROM pocstars_radio_group_memberships m
+        WHERE m.device_id = d.device_id
+          AND m.group_id = $1
+          AND d.organization_id IS NULL
+        RETURNING d.device_id`,
+      [groupId, organization_id, unitId],
+    );
+
+    await client.query("COMMIT");
+    return {
+      group_id: groupId,
+      group_name: group.name,
+      organization_id: Number(organization_id),
+      unit_id: unitId,
+      radiosMoved: moved.length,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function listPocstarsRegistry() {
+  const [{ rows: dispatchers }, { rows: groups }, { rows: pool_radios }] = await Promise.all([
+    pool.query("SELECT * FROM pocstars_dispatchers ORDER BY dispatcher_uid"),
+    pool.query(
+      `SELECT g.*,
+              ou.id AS unit_id,
+              ou.name AS unit_name,
+              ou.organization_id,
+              o.name AS organization_name,
+              (SELECT COUNT(*)::int FROM pocstars_radio_group_memberships m WHERE m.group_id = g.group_id) AS radio_count
+         FROM pocstars_groups g
+         LEFT JOIN organization_units ou ON ou.pocstars_group_id = g.group_id
+         LEFT JOIN organizations o ON o.id = ou.organization_id
+        ORDER BY g.active DESC, g.name`,
+    ),
+    pool.query(
+      `SELECT d.device_id, d.name, d.active, d.pocstars_online, d.pocstars_last_seen_at,
+              COALESCE(
+                (SELECT json_agg(json_build_object('group_id', m.group_id, 'group_name', m.group_name))
+                   FROM pocstars_radio_group_memberships m WHERE m.device_id = d.device_id),
+                '[]'::json
+              ) AS memberships
+         FROM devices d
+        WHERE d.pocstars_managed = true AND d.organization_id IS NULL
+        ORDER BY d.pocstars_online DESC NULLS LAST, d.name`,
+    ),
+  ]);
+  return { dispatchers, groups, pool_radios };
 }
 
 async function upsertDevice({ device_id, name, company, operator, device_type, notes, active, organization_id, unit_id }) {
@@ -2970,14 +3106,16 @@ export {
   createOrganization,
   listOrganizations,
   getOrganization,
-  getOrganizationByPocstarsDispatcherUid,
   updateOrganizationAccess,
   createUser,
   addOrganizationUser,
   upsertOrganizationUser,
   assignDeviceToOrganization,
   assignDeviceToUnit,
-  syncPocstarsInventory,
+  hasPocstarsDispatchers,
+  syncPocstarsPlatformInventory,
+  assignPocstarsGroupToOrganization,
+  listPocstarsRegistry,
   listOrganizationUsers,
   removeOrganizationUser,
   getOrganizationScope,

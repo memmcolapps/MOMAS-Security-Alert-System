@@ -160,8 +160,15 @@ export class PocstarsLiveClient extends EventEmitter {
         type: Number(group.type || 0),
       }))
       .filter((group: any) => Number.isSafeInteger(group.id) && group.id > 0);
+    // Some POCSTARS installations reject QueryContacts for dispatcher accounts
+    // (the 143.105.173.49 install answers result 1 for every field combination).
+    // Group membership still enumerates every visible radio, so fall back to it
+    // rather than failing the whole inventory.
     const [contacts, memberLists] = await Promise.all([
-      this.queryContacts(),
+      this.queryContacts().catch((error: Error) => {
+        this.emit("warning", { command: "QueryContacts", message: error.message });
+        return [] as any[];
+      }),
       this.queryMembers(groups.map((group: any) => group.id)),
     ]);
     const radios = new Map<number, any>();

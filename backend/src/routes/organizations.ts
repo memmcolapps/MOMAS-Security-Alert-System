@@ -85,25 +85,9 @@ router.put("/:id/access", async (c) => {
   }
 });
 
-router.post("/:id/pocstars/sync", async (c) => {
-  const id = Number(c.req.param("id"));
-  const user = (c as any).get("user");
-  try {
-    const inventory = await queryPocstarsInventory();
-    const summary = await db.syncPocstarsInventory(id, inventory);
-    await db.createAuditLog({
-      organization_id: id,
-      actor_user_id: user?.id || null,
-      action: "pocstars.inventory.sync",
-      target_type: "organization",
-      target_id: id,
-      metadata: summary,
-    });
-    return c.json({ summary });
-  } catch (error) {
-    return c.json(jsonError(error), 409);
-  }
-});
+router.post("/:id/pocstars/sync", (c) => c.json({
+  error: "POCSTARS sync is now platform-wide. Use POST /api/pocstars/admin/sync and assign groups to organizations from the registry.",
+}, 410));
 
 router.post("/:id/users", async (c) => {
   const organization_id = Number(c.req.param("id"));
@@ -163,19 +147,17 @@ setInterval(() => {
   automaticInventorySyncRunning = true;
   void (async () => {
     try {
-      const linkedOrganizations = (await db.listOrganizations())
-        .filter((organization: any) => organization.pocstars_dispatcher_uid);
-      if (!linkedOrganizations.length) return;
+      // The first sync is an explicit platform-admin action; only refresh
+      // automatically once a dispatcher has been registered by it.
+      if (!(await db.hasPocstarsDispatchers())) return;
       const inventory = await queryPocstarsInventory();
-      const organization = await db.getOrganizationByPocstarsDispatcherUid(inventory?.dispatcher?.id);
-      if (!organization) return;
-      const summary = await db.syncPocstarsInventory(organization.id, inventory);
+      const summary = await db.syncPocstarsPlatformInventory(inventory);
       await db.createAuditLog({
-        organization_id: organization.id,
+        organization_id: null,
         actor_user_id: null,
         action: "pocstars.inventory.sync.automatic",
-        target_type: "organization",
-        target_id: organization.id,
+        target_type: "pocstars_dispatcher",
+        target_id: inventory?.dispatcher?.id ?? null,
         metadata: summary,
       });
     } catch {

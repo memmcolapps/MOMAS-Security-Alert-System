@@ -92,10 +92,21 @@ export function updateOrganizationAccess(id, payload) {
   });
 }
 
-export function syncOrganizationPocstars(id) {
-  return request(`/api/organizations/${id}/pocstars/sync`, {
+export function getPocstarsRegistry() {
+  return request("/api/pocstars/admin/registry");
+}
+
+export function runPocstarsPlatformSync() {
+  return request("/api/pocstars/admin/sync", {
     method: "POST",
     body: "{}",
+  });
+}
+
+export function assignPocstarsGroup(groupId, payload) {
+  return request(`/api/pocstars/admin/groups/${groupId}/assign`, {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }
 

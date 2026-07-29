@@ -10,7 +10,6 @@ import {
   listDevices,
   removeOrganizationUser,
   updateOrganizationAccess,
-  syncOrganizationPocstars,
 } from "../lib/api";
 import { NIGERIAN_STATES, deviceTypeLabel } from "../lib/domain";
 
@@ -347,12 +346,6 @@ function SettingsSection({ organization, onSaved }) {
     mutationFn: (payload) => updateOrganizationAccess(organization.id, payload),
     onSuccess: onSaved,
   });
-  const syncMutation = useMutation({
-    mutationFn: () => syncOrganizationPocstars(organization.id),
-    onSuccess: onSaved,
-  });
-  const syncSummary = syncMutation.data?.summary;
-
   return (
     <section className="glass-panel rounded-lg p-5">
       <h2 className="mb-4 text-[13px] font-bold text-ops-red">Company settings</h2>
@@ -385,53 +378,13 @@ function SettingsSection({ organization, onSaved }) {
       </div>
 
       <div className="mt-6 border-t border-white/10 pt-5">
-        <h3 className="text-[12px] font-bold text-ops-green">POCSTARS inventory sync</h3>
+        <h3 className="text-[12px] font-bold text-ops-green">POCSTARS radios</h3>
         <p className="mt-1 max-w-2xl text-[11px] text-neutral-500">
-          Import the groups and radios visible to the bridge dispatcher into this MOMAS organization.
-          The first sync links that dispatcher to this organization; MOMAS will then refresh it automatically every five minutes.
+          Radios import into the platform-level POCSTARS registry on the Companies page.
+          Assign a POCSTARS group to this company there and its radios move in automatically.
         </p>
-        <p className="mt-2 text-[10px] text-neutral-600">
-          Linked dispatcher: {organization.pocstars_dispatcher_uid || "not linked"}
-          {organization.pocstars_last_sync_at
-            ? ` · Last sync ${new Date(organization.pocstars_last_sync_at).toLocaleString("en-GB")}`
-            : ""}
-        </p>
-        <button
-          className="mt-3 inline-flex items-center gap-2 rounded bg-ops-green px-4 py-2 text-xs font-bold text-black disabled:opacity-50"
-          disabled={syncMutation.isPending}
-          onClick={() => {
-            if (
-              window.confirm(
-                `Sync all groups and radios visible to the POCSTARS bridge into ${organization.name}?`,
-              )
-            ) {
-              syncMutation.mutate();
-            }
-          }}
-        >
-          <Radio size={13} /> {syncMutation.isPending ? "Syncing from POCSTARS…" : "Sync from POCSTARS"}
-        </button>
-        {syncMutation.error ? (
-          <p className="mt-2 text-xs text-ops-red">{syncMutation.error.message}</p>
-        ) : null}
-        {syncSummary ? (
-          <div className="mt-3 grid gap-2 text-[10px] sm:grid-cols-3">
-            <SyncResult label="Groups" value={`${syncSummary.groupsCreated} added · ${syncSummary.groupsUpdated} refreshed`} />
-            <SyncResult label="Radios" value={`${syncSummary.radiosCreated} added · ${syncSummary.radiosUpdated} refreshed`} />
-            <SyncResult label="Review" value={`${syncSummary.needsAssignment} need assignment · ${syncSummary.conflicts} conflicts`} />
-          </div>
-        ) : null}
       </div>
     </section>
-  );
-}
-
-function SyncResult({ label, value }) {
-  return (
-    <div className="rounded border border-white/10 bg-white/[0.025] px-3 py-2">
-      <span className="block font-bold uppercase tracking-wide text-neutral-600">{label}</span>
-      <span className="mt-1 block text-neutral-300">{value}</span>
-    </div>
   );
 }
 
