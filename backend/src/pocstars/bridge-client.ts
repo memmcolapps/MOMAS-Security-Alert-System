@@ -19,6 +19,7 @@ export class PocstarsBridgeClient extends EventEmitter {
   private waiters = new Set<Waiter>();
   private closing = false;
   private speakerUid = 0;
+  private mode: "private" | "monitor" | null = null;
 
   group: { gid: number; name: string } | null = null;
   speaking = false;
@@ -55,7 +56,28 @@ export class PocstarsBridgeClient extends EventEmitter {
       gid: Number(response.group?.id || 0),
       name: String(response.group?.name || `Call ${targetUid}`),
     };
+    this.mode = "private";
     return this.group;
+  }
+
+  async startWatchGroup(groupId: number) {
+    const response = await this.request(
+      { type: "monitor.start", groupId },
+      (message) => message.type === "monitor.state" && message.state === "connected",
+    );
+    this.group = {
+      gid: Number(response.group?.id || groupId),
+      name: String(response.group?.name || `Group ${groupId}`),
+    };
+    this.mode = "monitor";
+    return this.group;
+  }
+
+  async queryInventory() {
+    return this.request(
+      { type: "inventory.query" },
+      (message) => message.type === "inventory.result",
+    ).then((message) => message.inventory);
   }
 
   async requestMic() {
@@ -86,8 +108,9 @@ export class PocstarsBridgeClient extends EventEmitter {
     this.speaking = false;
     this.group = null;
     if (this.socket?.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify({ type: "call.end" }));
+      this.socket.send(JSON.stringify({ type: this.mode === "monitor" ? "monitor.end" : "call.end" }));
     }
+    this.mode = null;
     this.socket?.close();
     this.socket = null;
     this.rejectWaiters(new Error("POCSTARS bridge client closed."));

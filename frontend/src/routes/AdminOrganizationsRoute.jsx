@@ -5,7 +5,14 @@ import { useMemo, useState } from "react";
 import { createOrganization, listOrganizations } from "../lib/api";
 import { NIGERIAN_STATES } from "../lib/domain";
 
-const emptyOrg = { name: "", slug: "", all_states: false, states: [] };
+const emptyOrg = {
+  name: "",
+  slug: "",
+  all_states: false,
+  states: [],
+  pocstars_company_id: "",
+  pocstars_company_name: "",
+};
 
 export function AdminOrganizationsRoute() {
   const queryClient = useQueryClient();
@@ -27,7 +34,7 @@ export function AdminOrganizationsRoute() {
     },
   });
 
-  const organizations = orgsQuery.data?.organizations || [];
+  const organizations = useMemo(() => orgsQuery.data?.organizations || [], [orgsQuery.data?.organizations]);
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
     if (!term) return organizations;
@@ -69,6 +76,12 @@ export function AdminOrganizationsRoute() {
             </Field>
             <Field label="Slug">
               <input className="field-input" value={orgForm.slug} onChange={(event) => setOrgForm({ ...orgForm, slug: event.target.value })} placeholder="auto-created if blank" />
+            </Field>
+            <Field label="POCSTARS company ID">
+              <input className="field-input font-mono" value={orgForm.pocstars_company_id} onChange={(event) => setOrgForm({ ...orgForm, pocstars_company_id: event.target.value })} placeholder="Optional vendor company ID" />
+            </Field>
+            <Field label="POCSTARS company name">
+              <input className="field-input" value={orgForm.pocstars_company_name} onChange={(event) => setOrgForm({ ...orgForm, pocstars_company_name: event.target.value })} placeholder="Optional vendor display name" />
             </Field>
           </div>
           <StatePicker value={orgForm} onChange={setOrgForm} />

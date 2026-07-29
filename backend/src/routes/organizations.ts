@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { requirePlatformAdmin } from "../auth";
 import * as db from "../db";
+import { liveRadioConfigured, queryPocstarsInventory } from "../pocstars/live-gateway";
 
 const router = new Hono();
 
@@ -39,10 +40,13 @@ router.post("/", async (c) => {
       all_states: body.all_states,
       states: body.states || [],
       status: body.status || "active",
+      pocstars_company_id: body.pocstars_company_id || null,
+      pocstars_company_name: body.pocstars_company_name || null,
     });
     return c.json({ organization }, 201);
   } catch (error) {
-    return c.json(jsonError(error), 500);
+    const next = clientError(error);
+    return c.json(next.body, next.status);
   }
 });
 
@@ -64,14 +68,41 @@ router.get("/:id", async (c) => {
 router.put("/:id/access", async (c) => {
   const id = Number(c.req.param("id"));
   const body = await c.req.json().catch(() => ({}));
-  const organization = await db.updateOrganizationAccess(id, {
-    name: body.name,
-    status: body.status,
-    all_states: body.all_states,
-    states: body.states || [],
-  });
-  if (!organization) return c.json({ error: "That organization could not be found." }, 404);
-  return c.json({ organization });
+  try {
+    const organization = await db.updateOrganizationAccess(id, {
+      name: body.name,
+      status: body.status,
+      all_states: body.all_states,
+      states: Array.isArray(body.states) ? body.states : undefined,
+      pocstars_company_id: body.pocstars_company_id,
+      pocstars_company_name: body.pocstars_company_name,
+    });
+    if (!organization) return c.json({ error: "That organization could not be found." }, 404);
+    return c.json({ organization });
+  } catch (error) {
+    const next = clientError(error);
+    return c.json(next.body, next.status);
+  }
+});
+
+router.post("/:id/pocstars/sync", async (c) => {
+  const id = Number(c.req.param("id"));
+  const user = (c as any).get("user");
+  try {
+    const inventory = await queryPocstarsInventory();
+    const summary = await db.syncPocstarsInventory(id, inventory);
+    await db.createAuditLog({
+      organization_id: id,
+      actor_user_id: user?.id || null,
+      action: "pocstars.inventory.sync",
+      target_type: "organization",
+      target_id: id,
+      metadata: summary,
+    });
+    return c.json({ summary });
+  } catch (error) {
+    return c.json(jsonError(error), 409);
+  }
 });
 
 router.post("/:id/users", async (c) => {
@@ -125,3 +156,32 @@ router.delete("/:id/devices/:device_id", async (c) => {
 });
 
 export default router;
+
+let automaticInventorySyncRunning = false;
+setInterval(() => {
+  if (!liveRadioConfigured() || automaticInventorySyncRunning) return;
+  automaticInventorySyncRunning = true;
+  void (async () => {
+    try {
+      const linkedOrganizations = (await db.listOrganizations())
+        .filter((organization: any) => organization.pocstars_dispatcher_uid);
+      if (!linkedOrganizations.length) return;
+      const inventory = await queryPocstarsInventory();
+      const organization = await db.getOrganizationByPocstarsDispatcherUid(inventory?.dispatcher?.id);
+      if (!organization) return;
+      const summary = await db.syncPocstarsInventory(organization.id, inventory);
+      await db.createAuditLog({
+        organization_id: organization.id,
+        actor_user_id: null,
+        action: "pocstars.inventory.sync.automatic",
+        target_type: "organization",
+        target_id: organization.id,
+        metadata: summary,
+      });
+    } catch {
+      // Live calls take priority. The next five-minute cycle retries safely.
+    } finally {
+      automaticInventorySyncRunning = false;
+    }
+  })();
+}, 5 * 60 * 1000);

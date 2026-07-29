@@ -323,15 +323,23 @@ MOMAS operator UI
 
 The first gateway release exposes:
 
+- live listening to the selected radio's mapped division/group;
 - one private call to a selected, permitted radio;
 - live incoming AMR-NB audio;
 - press/release floor control and outgoing microphone audio;
 - current speaker and PTT state;
 - stored recording search/playback through the existing HTTP endpoints.
 
-All group filtering must happen on the gateway using the authenticated MOMAS
-operator's organization/group scope. Hiding an unauthorized group in the
-browser is not sufficient.
+POCSTARS remains the radio source of truth. MOMAS stores only the relationship:
+
+- MOMAS organization -> POCSTARS company;
+- MOMAS division/unit -> POCSTARS group;
+- MOMAS device ID -> POCSTARS user/handset UID.
+
+All group selection happens on the gateway using the authenticated MOMAS
+operator's scope and the selected device's stored division mapping. The browser
+never supplies a POCSTARS group ID. Hiding an unauthorized group in the browser
+is not sufficient.
 
 Only one operator may hold the live console in this first release. PTT is
 automatically released after the configured safety limit and whenever the
@@ -376,10 +384,45 @@ The authenticated endpoint is:
 GET /api/pocstars/radio/live  (WebSocket upgrade)
 ```
 
-JSON controls are `call.start`, `call.end`, `ptt.start`, and `ptt.stop`.
+JSON controls are:
+
+- `monitor.start` / `monitor.end` to listen to the selected device's mapped
+  division group;
+- `call.start` / `call.end` to create a private call to the selected device;
+- `ptt.start` / `ptt.stop` during a private call.
+
 Binary WebSocket messages carry headerless AMR-NB frames in both directions.
 The backend rechecks the selected device against the signed-in operator's
-organization and unit before sending `SingleCall` to POCSTARS.
+organization and unit before sending `WatchGroup` or `SingleCall` to POCSTARS.
+Monitoring prepares playback only; the browser requests microphone permission
+only for a private call.
+
+### Inventory synchronization
+
+The same bridge session can query the persistent groups, contacts/radios and
+group membership visible to its dispatcher account. A platform admin links
+that dispatcher to one MOMAS organization by running:
+
+```http
+POST /api/organizations/{organizationId}/pocstars/sync
+```
+
+The first successful sync records the dispatcher UID on the organization.
+That UID cannot be linked to another MOMAS organization. MOMAS then:
+
+- creates or refreshes one organization unit per persistent POCSTARS group;
+- creates or refreshes the radios returned by POCSTARS;
+- retains the complete radio/group membership snapshot;
+- assigns a primary division, preferring an existing valid assignment and then
+  a built-in POCSTARS group;
+- leaves radios with no group under admin-only `Unassigned`;
+- skips radios already owned by another MOMAS organization;
+- marks missing POCSTARS-managed radios inactive instead of deleting them.
+
+After the first manual link, MOMAS refreshes the inventory every five minutes.
+Live calls take priority; a busy bridge simply causes that cycle to retry five
+minutes later. Local notes are preserved, while POCSTARS names, memberships and
+online state remain vendor-managed.
 
 ### Public Java gateway
 

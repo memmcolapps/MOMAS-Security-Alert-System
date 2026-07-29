@@ -35,7 +35,79 @@ describe("POCSTARS live protocol", () => {
     expect(unpackControlFrame(packet)).toEqual({
       name: "ptt.push.UsersChanged",
       value: {
-        users: [{ uid: 348, timestamp: 0, name: "POLICE", online: true }],
+        users: [{
+          uid: 348,
+          timestamp: 0,
+          name: "POLICE",
+          online: true,
+          audioEnabled: false,
+          sleep: false,
+          dnd: false,
+          role: 0,
+          department: 0,
+        }],
+      },
+    });
+  });
+
+  test("round-trips POCSTARS group membership inventory", () => {
+    const packet = packControlFrame("ptt.rr.QueryMembersAck", {
+      result: 0,
+      members: [{
+        gid: 44,
+        members: [{ uid: 348, name: "POLICE", online: true, audioEnabled: true }],
+      }],
+    });
+    const decoded = unpackControlFrame(packet);
+    expect(decoded.name).toBe("ptt.rr.QueryMembersAck");
+    expect((decoded.value as any).members[0].gid).toBe(44);
+    expect((decoded.value as any).members[0].members[0].uid).toBe(348);
+  });
+
+  test("round-trips the vendor group-monitoring request", () => {
+    const packet = packControlFrame("ptt.rr.WatchGroup", {
+      gid: 44,
+      uid: 336,
+      expectPt: 101,
+      acceptPt: [101],
+      store: true,
+    });
+    expect(unpackControlFrame(packet)).toEqual({
+      name: "ptt.rr.WatchGroup",
+      value: {
+        gid: 44,
+        uid: 336,
+        expectPt: 101,
+        acceptPt: [101],
+        store: true,
+      },
+    });
+  });
+
+  test("decodes the group audio channel returned by POCSTARS monitoring", () => {
+    const packet = packControlFrame("ptt.rr.WatchGroupAck", {
+      result: 0,
+      gid: 44,
+      group: {
+        gid: 44,
+        name: "Division A",
+        ip: 3232235841,
+        port: 30000,
+      },
+    });
+    expect(unpackControlFrame(packet)).toEqual({
+      name: "ptt.rr.WatchGroupAck",
+      value: {
+        result: 0,
+        gid: 44,
+        group: {
+          gid: 44,
+          timestamp: 0,
+          name: "Division A",
+          type: 0,
+          ip: 3232235841,
+          port: 30000,
+        },
       },
     });
   });

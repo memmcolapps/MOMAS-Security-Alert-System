@@ -12,6 +12,11 @@ const root = Root.fromJSON({
             timestamp: { type: "uint32", id: 2 },
             name: { type: "string", id: 3 },
             online: { type: "bool", id: 4 },
+            audioEnabled: { type: "bool", id: 5 },
+            sleep: { type: "bool", id: 6 },
+            dnd: { type: "bool", id: 7 },
+            role: { type: "int32", id: 8 },
+            department: { type: "uint32", id: 9 },
           },
         },
         Group: {
@@ -28,6 +33,14 @@ const root = Root.fromJSON({
           fields: {
             defaultGroup: { type: "uint32", id: 1 },
             defaultGroupInfo: { type: "ptt.Group", id: 9 },
+          },
+        },
+        GroupMembers: {
+          fields: {
+            gid: { type: "uint32", id: 1 },
+            ingroups: { rule: "repeated", type: "uint32", id: 2 },
+            outgroups: { rule: "repeated", type: "uint32", id: 3 },
+            members: { rule: "repeated", type: "ptt.User", id: 4 },
           },
         },
         rr: {
@@ -67,6 +80,55 @@ const root = Root.fromJSON({
               fields: {
                 result: { type: "int32", id: 1 },
                 groups: { rule: "repeated", type: "ptt.Group", id: 2 },
+              },
+            },
+            QueryContacts: {
+              fields: {
+                detail: { type: "int32", id: 1 },
+                timestamp: { type: "uint32", id: 2 },
+                onlyOnline: { type: "bool", id: 3 },
+              },
+            },
+            QueryContactsAck: {
+              fields: {
+                result: { type: "int32", id: 1 },
+                users: { rule: "repeated", type: "ptt.User", id: 2 },
+              },
+            },
+            QueryMembers: {
+              fields: {
+                gids: { rule: "repeated", type: "uint32", id: 1 },
+                detail: { type: "int32", id: 2 },
+                version2: { type: "bool", id: 3 },
+                allowPage: { type: "bool", id: 4 },
+              },
+            },
+            QueryMembersAck: {
+              fields: {
+                result: { type: "int32", id: 1 },
+                members: { rule: "repeated", type: "ptt.GroupMembers", id: 2 },
+              },
+            },
+            WatchGroup: {
+              fields: {
+                gid: { type: "uint32", id: 1 },
+                uid: { type: "uint32", id: 2 },
+                expectPt: { type: "uint32", id: 3 },
+                acceptPt: { rule: "repeated", type: "uint32", id: 4 },
+                store: { type: "bool", id: 5 },
+              },
+            },
+            WatchGroupAck: {
+              fields: {
+                result: { type: "int32", id: 1 },
+                gid: { type: "uint32", id: 2 },
+                group: { type: "ptt.Group", id: 3 },
+              },
+            },
+            ByeGroup: {
+              fields: {
+                gid: { type: "uint32", id: 1 },
+                uid: { type: "uint32", id: 2 },
               },
             },
             RequestMic: {

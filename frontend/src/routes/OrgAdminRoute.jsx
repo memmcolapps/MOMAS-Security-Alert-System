@@ -9,6 +9,7 @@ import {
   getMe,
   getOrgAdmin,
   removeOrgAdminUser,
+  updateOrgUnit,
 } from "../lib/api";
 import { NIGERIAN_STATES, deviceTypeLabel } from "../lib/domain";
 
@@ -83,11 +84,21 @@ function Shell({ children }) {
 }
 
 function UnitsSection({ units, canCreateUnits, onChanged }) {
-  const [form, setForm] = useState({ name: "", type: "", parent_unit_id: "", state: "", lga: "", location: "" });
+  const emptyUnit = {
+    name: "",
+    type: "",
+    parent_unit_id: "",
+    state: "",
+    lga: "",
+    location: "",
+    pocstars_group_id: "",
+    pocstars_group_name: "",
+  };
+  const [form, setForm] = useState(emptyUnit);
   const createMutation = useMutation({
     mutationFn: createOrgUnit,
     onSuccess: () => {
-      setForm({ name: "", type: "", parent_unit_id: "", state: "", lga: "", location: "" });
+      setForm(emptyUnit);
       onChanged();
     },
   });
@@ -127,6 +138,12 @@ function UnitsSection({ units, canCreateUnits, onChanged }) {
           <Field label="Location">
             <input className="field-input" value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} />
           </Field>
+          <Field label="POCSTARS group ID">
+            <input className="field-input font-mono" value={form.pocstars_group_id} onChange={(event) => setForm({ ...form, pocstars_group_id: event.target.value })} placeholder="Required for live listening" />
+          </Field>
+          <Field label="POCSTARS group name">
+            <input className="field-input" value={form.pocstars_group_name} onChange={(event) => setForm({ ...form, pocstars_group_name: event.target.value })} placeholder="Optional display name" />
+          </Field>
         </div>
         {createMutation.error ? <p className="mt-2 text-xs text-ops-red">{createMutation.error.message}</p> : null}
         <button className="mt-4 inline-flex items-center gap-2 rounded bg-ops-red px-4 py-2 text-xs font-bold text-black disabled:opacity-50" disabled={createMutation.isPending}>
@@ -144,20 +161,64 @@ function UnitsSection({ units, canCreateUnits, onChanged }) {
 }
 
 function UnitRow({ unit, onChanged }) {
+  const [editing, setEditing] = useState(false);
+  const [mapping, setMapping] = useState({
+    pocstars_group_id: unit.pocstars_group_id || "",
+    pocstars_group_name: unit.pocstars_group_name || "",
+  });
   const deleteMutation = useMutation({ mutationFn: () => deleteOrgUnit(unit.id), onSuccess: onChanged });
+  const updateMutation = useMutation({
+    mutationFn: () => updateOrgUnit(unit.id, {
+      parent_unit_id: unit.parent_unit_id || null,
+      name: unit.name,
+      type: unit.type || null,
+      state: unit.state || null,
+      lga: unit.lga || null,
+      location: unit.location || null,
+      pocstars_group_id: mapping.pocstars_group_id.trim() || null,
+      pocstars_group_name: mapping.pocstars_group_name.trim() || null,
+    }),
+    onSuccess: () => {
+      setEditing(false);
+      onChanged();
+    },
+  });
   return (
-    <article className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-      <div className="min-w-0">
+    <article className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
+      <div className="min-w-0 flex-1">
         <h3 className="text-sm text-neutral-100">{unit.name}</h3>
         <p className="text-[11px] text-neutral-500">
           {unit.type || "Unit"} · {unit.parent_name || "top level"} · {unit.state || "all states"} · {unit.user_count || 0} users · {unit.device_count || 0} devices
         </p>
+        <p className="mt-1 text-[10px] text-neutral-600">
+          POCSTARS group: {unit.pocstars_group_id
+            ? `${unit.pocstars_group_name || "Group"} (${unit.pocstars_group_id})`
+            : "not mapped"}
+        </p>
+        {editing ? (
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            <input className="field-input font-mono" value={mapping.pocstars_group_id} onChange={(event) => setMapping({ ...mapping, pocstars_group_id: event.target.value })} placeholder="POCSTARS group ID" />
+            <input className="field-input" value={mapping.pocstars_group_name} onChange={(event) => setMapping({ ...mapping, pocstars_group_name: event.target.value })} placeholder="POCSTARS group name" />
+            <div className="flex gap-2 sm:col-span-2">
+              <button className="rounded bg-ops-green px-3 py-1.5 text-[10px] font-bold text-black disabled:opacity-50" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate()}>
+                {updateMutation.isPending ? "Saving…" : "Save mapping"}
+              </button>
+              <button className="rounded border border-white/10 px-3 py-1.5 text-[10px] text-neutral-400" onClick={() => setEditing(false)}>Cancel</button>
+            </div>
+            {updateMutation.error ? <p className="text-[10px] text-ops-red sm:col-span-2">{updateMutation.error.message}</p> : null}
+          </div>
+        ) : null}
       </div>
-      <button className="inline-flex items-center gap-1 rounded border border-red-500/20 px-2 py-1 text-[10px] text-red-400/70 hover:border-ops-red hover:text-ops-red" onClick={() => {
-        if (window.confirm(`Remove ${unit.name}?`)) deleteMutation.mutate();
-      }}>
-        <Trash2 size={11} /> Remove
-      </button>
+      <div className="flex gap-2">
+        <button className="rounded border border-green-500/25 px-2 py-1 text-[10px] text-ops-green" onClick={() => setEditing((value) => !value)}>
+          Map group
+        </button>
+        <button className="inline-flex items-center gap-1 rounded border border-red-500/20 px-2 py-1 text-[10px] text-red-400/70 hover:border-ops-red hover:text-ops-red" onClick={() => {
+          if (window.confirm(`Remove ${unit.name}?`)) deleteMutation.mutate();
+        }}>
+          <Trash2 size={11} /> Remove
+        </button>
+      </div>
     </article>
   );
 }

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessageSquare, Mic, Phone, PhoneOff, Plus, Radio, RefreshCw, Save, Send, Trash2, Volume2, X } from "lucide-react";
+import { Headphones, MessageSquare, Mic, Phone, PhoneOff, Plus, Radio, RefreshCw, Save, Send, Trash2, Volume2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   deleteDevice,
@@ -84,15 +84,36 @@ export function DevicesRoute() {
   });
 
   const [orgFilter, setOrgFilter] = useState("all");
+  const [divisionFilter, setDivisionFilter] = useState("all");
 
-  const allDevices = devicesQuery.data?.devices || [];
-  const organizations = orgsQuery.data?.organizations || [];
+  const allDevices = useMemo(() => devicesQuery.data?.devices || [], [devicesQuery.data?.devices]);
+  const organizations = useMemo(() => orgsQuery.data?.organizations || [], [orgsQuery.data?.organizations]);
   const units = orgAdminQuery.data?.units || [];
-  const devices = useMemo(() => {
+  const organizationDevices = useMemo(() => {
     if (orgFilter === "all") return allDevices;
     if (orgFilter === "unassigned") return allDevices.filter((device) => !device.organization_id);
     return allDevices.filter((device) => String(device.organization_id) === String(orgFilter));
   }, [allDevices, orgFilter]);
+  const divisions = useMemo(() => {
+    const seen = new Set();
+    return organizationDevices
+      .filter((device) => device.unit_id)
+      .map((device) => ({
+        id: String(device.unit_id),
+        name: device.unit_name || `Division ${device.unit_id}`,
+        organizationName: device.organization_name,
+      }))
+      .filter((division) => {
+        if (seen.has(division.id)) return false;
+        seen.add(division.id);
+        return true;
+      });
+  }, [organizationDevices]);
+  const devices = useMemo(() => {
+    if (divisionFilter === "all") return organizationDevices;
+    if (divisionFilter === "unassigned") return organizationDevices.filter((device) => !device.unit_id);
+    return organizationDevices.filter((device) => String(device.unit_id) === divisionFilter);
+  }, [divisionFilter, organizationDevices]);
   const activeCount = useMemo(() => devices.filter((device) => device.active).length, [devices]);
   const radioMessageBytes = useMemo(
     () => new window.TextEncoder().encode(radioMessage.trim()).length,
@@ -114,6 +135,10 @@ export function DevicesRoute() {
     const timer = window.setTimeout(() => setToast(null), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    setDivisionFilter("all");
+  }, [orgFilter]);
 
   const saveMutation = useMutation({
     mutationFn: saveDevice,
@@ -318,6 +343,23 @@ export function DevicesRoute() {
         </div>
       ) : null}
 
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="mr-1 text-[9px] font-bold uppercase tracking-wider text-neutral-600">Division</span>
+        <FilterChip active={divisionFilter === "all"} onClick={() => setDivisionFilter("all")}>
+          All ({organizationDevices.length})
+        </FilterChip>
+        <FilterChip active={divisionFilter === "unassigned"} onClick={() => setDivisionFilter("unassigned")}>
+          Unassigned ({organizationDevices.filter((device) => !device.unit_id).length})
+        </FilterChip>
+        {divisions.map((division) => (
+          <FilterChip key={division.id} active={divisionFilter === division.id} onClick={() => setDivisionFilter(division.id)}>
+            {isPlatformAdmin && orgFilter === "all" && division.organizationName
+              ? `${division.organizationName} / ${division.name}`
+              : division.name}
+          </FilterChip>
+        ))}
+      </div>
+
       <section className="glass-panel overflow-hidden rounded-lg border-green-500/25">
         <div className="border-b border-white/10 px-4 py-3 text-[11px] text-neutral-500">
           {devicesQuery.isLoading ? "Loading..." : `${devices.length} device${devices.length === 1 ? "" : "s"} · ${activeCount} active`}
@@ -329,6 +371,7 @@ export function DevicesRoute() {
                 <th className="px-4 py-3">Device ID</th>
                 <th className="px-4 py-3">Name</th>
                 {isPlatformAdmin ? <th className="px-4 py-3">Company</th> : null}
+                <th className="px-4 py-3">Division</th>
                 <th className="px-4 py-3">Operator</th>
                 <th className="px-4 py-3">Type</th>
                 <th className="px-4 py-3">Status</th>
@@ -339,7 +382,7 @@ export function DevicesRoute() {
             <tbody>
               {devicesQuery.isLoading ? (
                 <tr>
-                  <td className="px-4 py-10 text-center text-neutral-500" colSpan={isPlatformAdmin ? 8 : 7}>Loading devices...</td>
+                  <td className="px-4 py-10 text-center text-neutral-500" colSpan={isPlatformAdmin ? 9 : 8}>Loading devices...</td>
                 </tr>
               ) : devices.length ? (
                 devices.map((device) => (
@@ -349,11 +392,20 @@ export function DevicesRoute() {
                     {isPlatformAdmin ? (
                       <td className="px-4 py-3">{device.organization_name || <span className="text-neutral-700">Unassigned</span>}</td>
                     ) : null}
+                    <td className="px-4 py-3">{device.unit_name || <span className="text-neutral-700">Unassigned</span>}</td>
                     <td className="px-4 py-3">{device.operator || <Muted />}</td>
                     <td className="px-4 py-3">{device.device_type ? deviceTypeLabel(device.device_type) : <Muted />}</td>
                     <td className="px-4 py-3">
-                      <span className={`rounded-full border px-2 py-0.5 text-[9px] font-bold ${device.active ? "border-green-500/30 bg-green-500/10 text-ops-green" : "border-white/10 bg-white/5 text-neutral-500"}`}>
-                        {device.active ? "Active" : "Inactive"}
+                      <span className={`rounded-full border px-2 py-0.5 text-[9px] font-bold ${
+                        device.active && (!device.pocstars_managed || device.pocstars_online)
+                          ? "border-green-500/30 bg-green-500/10 text-ops-green"
+                          : "border-white/10 bg-white/5 text-neutral-500"
+                      }`}>
+                        {!device.active
+                          ? "Inactive"
+                          : device.pocstars_managed
+                            ? (device.pocstars_online ? "Online" : "Offline")
+                            : "Active"}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-[11px] text-neutral-600">{formatDate(device.created_at)}</td>
@@ -378,7 +430,7 @@ export function DevicesRoute() {
                 ))
               ) : (
                 <tr>
-                  <td className="px-4 py-12 text-center text-neutral-500" colSpan={isPlatformAdmin ? 8 : 7}>
+                  <td className="px-4 py-12 text-center text-neutral-500" colSpan={isPlatformAdmin ? 9 : 8}>
                     <Radio className="mx-auto mb-2" size={28} /> No devices yet
                   </td>
                 </tr>
@@ -406,6 +458,9 @@ export function DevicesRoute() {
                   UID {selectedRadio.device_id}
                   {selectedRadio.operator ? ` · ${selectedRadio.operator}` : ""}
                 </p>
+                <p className="mt-1 text-[10px] text-neutral-500">
+                  {selectedRadio.organization_name || "Unassigned organization"} / {selectedRadio.unit_name || "Unassigned division"}
+                </p>
               </div>
               <button className="rounded p-2 text-neutral-500 hover:bg-white/5 hover:text-neutral-100" onClick={() => setSelectedRadio(null)}>
                 <X size={18} />
@@ -417,10 +472,10 @@ export function DevicesRoute() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h3 className="flex items-center gap-2 text-xs font-bold text-neutral-100">
-                      <Radio size={14} className="text-ops-green" /> Live private call
+                      <Radio size={14} className="text-ops-green" /> Live radio
                     </h3>
                     <p className="mt-1 text-[10px] text-neutral-500">
-                      Listen live, then hold the button to speak directly through POCSTARS.
+                      Listen to this radio's division, or open a private call to this handset.
                     </p>
                   </div>
                   <span className={`rounded-full border px-2 py-1 text-[9px] font-bold uppercase ${
@@ -428,7 +483,9 @@ export function DevicesRoute() {
                       ? "border-green-500/30 bg-green-500/10 text-ops-green"
                       : "border-white/10 text-neutral-500"
                   }`}>
-                    {liveRadio.callState}
+                    {liveRadio.callState === "connected" && liveRadio.mode === "monitor"
+                      ? "listening"
+                      : liveRadio.callState}
                   </span>
                 </div>
 
@@ -450,13 +507,42 @@ export function DevicesRoute() {
                       Live radio unavailable
                     </button>
                   ) : liveRadio.callState === "idle" ? (
-                    <button
-                      className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-ops-green px-4 py-3 text-xs font-bold text-black hover:opacity-85"
-                      onClick={liveRadio.connect}
-                    >
-                      <Phone size={15} /> Connect live radio
-                    </button>
-                  ) : liveRadio.callState === "connected" ? (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <button
+                        className="inline-flex min-h-20 items-center justify-center gap-2 rounded-md border border-green-500/35 bg-green-500/10 px-4 py-3 text-xs font-bold text-ops-green hover:bg-green-500/15 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.02] disabled:text-neutral-600"
+                        disabled={!selectedRadio.pocstars_group_id}
+                        onClick={liveRadio.listenToDivision}
+                        title={selectedRadio.pocstars_group_id ? `Listen to ${selectedRadio.unit_name}` : "Map this division to a POCSTARS group first"}
+                      >
+                        <Headphones size={17} /> Listen to division
+                      </button>
+                      <button
+                        className="inline-flex min-h-20 items-center justify-center gap-2 rounded-md bg-ops-green px-4 py-3 text-xs font-bold text-black hover:opacity-85"
+                        onClick={liveRadio.callRadio}
+                      >
+                        <Phone size={16} /> Call this radio
+                      </button>
+                      {!selectedRadio.pocstars_group_id ? (
+                        <p className="sm:col-span-2 text-[10px] text-amber-300/80">
+                          Division listening is unavailable until {selectedRadio.unit_name || "this division"} is mapped to its POCSTARS group in Organization admin.
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : liveRadio.callState === "connected" && liveRadio.mode === "monitor" ? (
+                    <div className="space-y-3">
+                      <div className="flex min-h-24 flex-col items-center justify-center gap-2 rounded-lg border border-green-500/35 bg-green-500/10 text-center text-ops-green">
+                        <Headphones size={24} />
+                        <strong className="text-xs">Listening to {selectedRadio.unit_name || selectedRadio.pocstars_group_name || "division"}</strong>
+                        <span className="text-[10px] text-neutral-500">Incoming POCSTARS group audio will play automatically.</span>
+                      </div>
+                      <button
+                        className="inline-flex w-full items-center justify-center gap-2 rounded border border-red-500/25 px-3 py-2 text-[11px] text-red-300 hover:bg-red-500/10"
+                        onClick={liveRadio.disconnect}
+                      >
+                        <PhoneOff size={13} /> Stop listening
+                      </button>
+                    </div>
+                  ) : liveRadio.callState === "connected" && liveRadio.mode === "private" ? (
                     <div className="space-y-3">
                       <button
                         className={`flex min-h-24 w-full touch-none select-none flex-col items-center justify-center gap-2 rounded-lg border text-sm font-black uppercase tracking-wider transition ${
@@ -492,7 +578,7 @@ export function DevicesRoute() {
                     </div>
                   ) : (
                     <button className="w-full rounded-md border border-white/10 px-4 py-3 text-xs text-neutral-500" disabled>
-                      Connecting through POCSTARS…
+                      {liveRadio.mode === "monitor" ? "Connecting to division audio…" : "Calling through POCSTARS…"}
                     </button>
                   )}
                 </div>

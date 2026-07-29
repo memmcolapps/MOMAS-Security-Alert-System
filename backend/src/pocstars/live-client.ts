@@ -60,6 +60,7 @@ export class PocstarsLiveClient extends EventEmitter {
   private rtpTimestamp = Math.floor(Math.random() * 0xffffffff);
   private heartbeatSequence = 0;
   private speechId = "0";
+  private watching = false;
 
   uid = 0;
   name = "";
@@ -128,7 +129,78 @@ export class PocstarsLiveClient extends EventEmitter {
     return ack.groups || [];
   }
 
+  async queryContacts() {
+    const ack = await this.request("ptt.rr.QueryContacts", {
+      detail: 1,
+      timestamp: 0,
+      onlyOnline: false,
+    }, "ptt.rr.QueryContactsAck");
+    if (Number(ack.result) !== 0) throw new Error(`POCSTARS contact query failed (${ack.result}).`);
+    return ack.users || [];
+  }
+
+  async queryMembers(groupIds: number[]) {
+    if (!groupIds.length) return [];
+    const ack = await this.request("ptt.rr.QueryMembers", {
+      gids: groupIds,
+      detail: 1,
+      version2: false,
+      allowPage: false,
+    }, "ptt.rr.QueryMembersAck");
+    if (Number(ack.result) !== 0) throw new Error(`POCSTARS group-member query failed (${ack.result}).`);
+    return ack.members || [];
+  }
+
+  async queryInventory() {
+    const groups = (await this.queryGroups())
+      .filter((group: any) => Number(group.type) !== 2)
+      .map((group: any) => ({
+        id: Number(group.gid),
+        name: String(group.name || `Group ${group.gid}`),
+        type: Number(group.type || 0),
+      }))
+      .filter((group: any) => Number.isSafeInteger(group.id) && group.id > 0);
+    const [contacts, memberLists] = await Promise.all([
+      this.queryContacts(),
+      this.queryMembers(groups.map((group: any) => group.id)),
+    ]);
+    const radios = new Map<number, any>();
+    const remember = (user: any) => {
+      const uid = Number(user?.uid || 0);
+      if (!Number.isSafeInteger(uid) || uid <= 0 || uid === this.uid) return;
+      const current = radios.get(uid) || {};
+      radios.set(uid, {
+        id: uid,
+        name: String(user?.name || current.name || `Radio ${uid}`),
+        online: Boolean(user?.online),
+        audioEnabled: user?.audioEnabled !== false,
+        role: Number(user?.role || 0),
+        departmentId: Number(user?.department || 0) || null,
+      });
+    };
+    for (const contact of contacts) remember(contact);
+    const memberships: Array<{ groupId: number; radioId: number }> = [];
+    for (const memberList of memberLists) {
+      const groupId = Number(memberList.gid || 0);
+      for (const member of memberList.members || []) {
+        remember(member);
+        const radioId = Number(member.uid || 0);
+        if (groupId > 0 && radioId > 0 && radioId !== this.uid) {
+          memberships.push({ groupId, radioId });
+        }
+      }
+    }
+    return {
+      dispatcher: { id: this.uid, name: this.name },
+      groups,
+      radios: [...radios.values()],
+      memberships,
+      observedAt: new Date().toISOString(),
+    };
+  }
+
   async startSingleCall(targetUid: number) {
+    this.watching = false;
     const generation = this.groupGeneration;
     const ack = await this.request("ptt.rr.SingleCall", { uid: targetUid }, "ptt.rr.SingleCallAck");
     if (Number(ack.result) !== 0) throw new Error(`POCSTARS rejected the private call (${ack.result}).`);
@@ -136,6 +208,40 @@ export class PocstarsLiveClient extends EventEmitter {
       await this.waitFor("group", 10_000);
     }
     if (!this.group) throw new Error("POCSTARS did not assign an audio channel.");
+    return this.group;
+  }
+
+  async startWatchGroup(groupId: number) {
+    if (!Number.isSafeInteger(groupId) || groupId <= 0) {
+      throw new Error("Invalid POCSTARS group ID.");
+    }
+    const generation = this.groupGeneration;
+    const ack = await this.request("ptt.rr.WatchGroup", {
+      gid: groupId,
+      uid: this.uid,
+      expectPt: 101,
+      acceptPt: [101],
+      store: true,
+    }, "ptt.rr.WatchGroupAck");
+    if (Number(ack.result) !== 0) {
+      throw new Error(`POCSTARS rejected group monitoring (${ack.result}).`);
+    }
+
+    const group = ack.group || {};
+    const gid = Number(ack.gid || group.gid || groupId);
+    const port = Number(group.port || 0);
+    if (gid && port) {
+      this.setGroup({
+        gid,
+        name: String(group.name || `Group ${gid}`),
+        host: this.options.audioHost || usableIp(Number(group.ip || 0), this.options.host),
+        port,
+      });
+    } else if (this.groupGeneration === generation) {
+      await this.waitFor("group", 10_000);
+    }
+    if (!this.group) throw new Error("POCSTARS did not provide the group audio channel.");
+    this.watching = true;
     return this.group;
   }
 
@@ -185,8 +291,13 @@ export class PocstarsLiveClient extends EventEmitter {
     const group = this.group;
     this.stopAudio();
     if (group && this.control && !this.control.destroyed) {
-      await this.request("ptt.rr.LeaveGroup", { gid: group.gid }, "ptt.rr.LeaveGroupAck").catch(() => {});
+      if (this.watching) {
+        this.control.write(packControlFrame("ptt.rr.ByeGroup", { gid: group.gid, uid: this.uid }));
+      } else {
+        await this.request("ptt.rr.LeaveGroup", { gid: group.gid }, "ptt.rr.LeaveGroupAck").catch(() => {});
+      }
     }
+    this.watching = false;
     this.group = null;
   }
 
@@ -245,15 +356,12 @@ export class PocstarsLiveClient extends EventEmitter {
       const port = Number(value.port || value.group?.port || 0);
       const ip = Number(value.ip || value.group?.ip || 0);
       if (gid && port) {
-        this.group = {
+        this.setGroup({
           gid,
           name: String(value.gname || value.group?.name || `Call ${gid}`),
-          host: usableIp(ip, this.options.audioHost || this.options.host),
+          host: this.options.audioHost || usableIp(ip, this.options.host),
           port,
-        };
-        this.groupGeneration += 1;
-        this.startAudio();
-        this.emit("group", this.group);
+        });
       }
       return;
     }
@@ -283,6 +391,13 @@ export class PocstarsLiveClient extends EventEmitter {
       this.sendHeartbeat();
       this.heartbeatTimer = setInterval(() => this.sendHeartbeat(), 5_000);
     });
+  }
+
+  private setGroup(group: VoiceGroup) {
+    this.group = group;
+    this.groupGeneration += 1;
+    this.startAudio();
+    this.emit("group", group);
   }
 
   private sendHeartbeat() {

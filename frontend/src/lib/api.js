@@ -92,6 +92,13 @@ export function updateOrganizationAccess(id, payload) {
   });
 }
 
+export function syncOrganizationPocstars(id) {
+  return request(`/api/organizations/${id}/pocstars/sync`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
 export function getOrganization(id) {
   return request(`/api/organizations/${id}`);
 }

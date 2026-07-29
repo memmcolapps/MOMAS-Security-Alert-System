@@ -139,6 +139,8 @@ router.post("/units", async (c) => {
       state: body.state,
       lga: body.lga,
       location: body.location,
+      pocstars_group_id: body.pocstars_group_id || null,
+      pocstars_group_name: body.pocstars_group_name || null,
     });
     await db.createAuditLog({
       organization_id: organizationId,
@@ -150,7 +152,8 @@ router.post("/units", async (c) => {
     });
     return c.json({ unit }, 201);
   } catch (error) {
-    return c.json(jsonError(error), 500);
+    const next = clientError(error);
+    return c.json(next.body, next.status);
   }
 });
 
@@ -159,17 +162,22 @@ router.put("/units/:unit_id", async (c) => {
   const unitId = Number(c.req.param("unit_id"));
   if (!canManageUnit(membership(c), unitId) && !isPlatformAdmin(c)) return c.json({ error: "You can only update units you are allowed to manage." }, 403);
   const body = await c.req.json().catch(() => ({}));
-  const unit = await db.updateOrganizationUnit(organizationId, unitId, body);
-  if (!unit) return c.json({ error: "That unit could not be found in this organization." }, 404);
-  await db.createAuditLog({
-    organization_id: organizationId,
-    actor_user_id: actor(c),
-    action: "unit.update",
-    target_type: "unit",
-    target_id: unitId,
-    metadata: body,
-  });
-  return c.json({ unit });
+  try {
+    const unit = await db.updateOrganizationUnit(organizationId, unitId, body);
+    if (!unit) return c.json({ error: "That unit could not be found in this organization." }, 404);
+    await db.createAuditLog({
+      organization_id: organizationId,
+      actor_user_id: actor(c),
+      action: "unit.update",
+      target_type: "unit",
+      target_id: unitId,
+      metadata: body,
+    });
+    return c.json({ unit });
+  } catch (error) {
+    const next = clientError(error);
+    return c.json(next.body, next.status);
+  }
 });
 
 router.delete("/units/:unit_id", async (c) => {

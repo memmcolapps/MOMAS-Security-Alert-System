@@ -4,6 +4,7 @@ import { PocstarsLiveClient } from "../src/pocstars/live-client";
 
 type BridgeSession = {
   client: PocstarsLiveClient | null;
+  mode: "private" | "monitor" | null;
   closing: boolean;
   pttTimer: ReturnType<typeof setTimeout> | null;
 };
@@ -98,7 +99,7 @@ const server = Bun.serve<BridgeSession>({
       return new Response("Radio bridge busy", { status: 409 });
     }
     const upgraded = server.upgrade(request, {
-      data: { client: null, closing: false, pttTimer: null },
+      data: { client: null, mode: null, closing: false, pttTimer: null },
     });
     return upgraded ? undefined : new Response("WebSocket upgrade required", { status: 426 });
   },
@@ -126,7 +127,32 @@ const server = Bun.serve<BridgeSession>({
         return;
       }
 
-      if (message.type === "call.start") {
+      if (message.type === "inventory.query") {
+        if (ws.data.client) return;
+        const client = new PocstarsLiveClient({
+          host: controlHost,
+          port: controlPort,
+          audioHost,
+          account,
+          password,
+          timeoutMs,
+        });
+        ws.data.client = client;
+        attachClientEvents(ws, client);
+        try {
+          await client.connect();
+          const inventory = await client.queryInventory();
+          send(ws, { type: "inventory.result", inventory });
+        } catch (error) {
+          send(ws, {
+            type: "error",
+            code: "pocstars_inventory_failed",
+            message: error instanceof Error ? error.message : "POCSTARS inventory query failed.",
+          });
+        } finally {
+          await closeSession(ws);
+        }
+      } else if (message.type === "call.start") {
         if (ws.data.client) return;
         const deviceId = Number(message.deviceId);
         if (!Number.isSafeInteger(deviceId) || deviceId <= 0) {
@@ -142,6 +168,7 @@ const server = Bun.serve<BridgeSession>({
           timeoutMs,
         });
         ws.data.client = client;
+        ws.data.mode = "private";
         attachClientEvents(ws, client);
         try {
           send(ws, { type: "call.state", state: "connecting", deviceId });
@@ -161,7 +188,42 @@ const server = Bun.serve<BridgeSession>({
           });
           await closeSession(ws);
         }
-      } else if (message.type === "ptt.start" && ws.data.client) {
+      } else if (message.type === "monitor.start") {
+        if (ws.data.client) return;
+        const groupId = Number(message.groupId);
+        if (!Number.isSafeInteger(groupId) || groupId <= 0) {
+          send(ws, { type: "error", code: "invalid_group_id", message: "Invalid POCSTARS group ID." });
+          return;
+        }
+        const client = new PocstarsLiveClient({
+          host: controlHost,
+          port: controlPort,
+          audioHost,
+          account,
+          password,
+          timeoutMs,
+        });
+        ws.data.client = client;
+        ws.data.mode = "monitor";
+        attachClientEvents(ws, client);
+        try {
+          send(ws, { type: "monitor.state", state: "connecting", groupId });
+          await client.connect();
+          const group = await client.startWatchGroup(groupId);
+          send(ws, {
+            type: "monitor.state",
+            state: "connected",
+            group: { id: group.gid, name: group.name },
+          });
+        } catch (error) {
+          send(ws, {
+            type: "error",
+            code: "pocstars_monitor_failed",
+            message: error instanceof Error ? error.message : "POCSTARS group monitoring failed.",
+          });
+          await closeSession(ws);
+        }
+      } else if (message.type === "ptt.start" && ws.data.client && ws.data.mode === "private") {
         try {
           send(ws, { type: "ptt.state", state: "requesting" });
           await ws.data.client.requestMic();
@@ -182,7 +244,7 @@ const server = Bun.serve<BridgeSession>({
           });
           send(ws, { type: "ptt.state", state: "idle" });
         }
-      } else if (message.type === "ptt.stop" && ws.data.client) {
+      } else if (message.type === "ptt.stop" && ws.data.client && ws.data.mode === "private") {
         if (ws.data.pttTimer) clearTimeout(ws.data.pttTimer);
         ws.data.pttTimer = null;
         await ws.data.client.releaseMic().catch(() => {});
@@ -190,6 +252,9 @@ const server = Bun.serve<BridgeSession>({
       } else if (message.type === "call.end") {
         await closeSession(ws);
         send(ws, { type: "call.state", state: "idle" });
+      } else if (message.type === "monitor.end") {
+        await closeSession(ws);
+        send(ws, { type: "monitor.state", state: "idle" });
       }
     },
     close(ws) {

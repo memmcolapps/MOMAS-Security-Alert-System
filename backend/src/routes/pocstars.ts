@@ -48,7 +48,11 @@ function orgScope(c: any) {
   const user = c.get("user");
   if (!user || user.platform_role === "admin") return {};
   const org = primaryOrganization(user);
-  return org ? { organizationId: org.organization_id, unitId: org.scope_level === "unit" ? org.unit_id : null } : { organizationId: -1 };
+  return org ? {
+    organizationId: org.organization_id,
+    unitId: org.scope_level === "unit" ? org.unit_id : null,
+    assignedOnly: !canManageOrganization(org),
+  } : { organizationId: -1 };
 }
 
 function isPlatformAdmin(c: any) {

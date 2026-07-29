@@ -45,17 +45,17 @@ class BrowserRadioAudio {
     this.closed = false;
   }
 
-  async prepare() {
-    if (this.stream) {
-      await this.context?.resume();
-      return;
-    }
+  async prepare({ microphone = false } = {}) {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext || !window.navigator.mediaDevices?.getUserMedia) {
+    if (!AudioContext) {
       throw new Error("This browser cannot use live radio audio.");
     }
-    this.context = new AudioContext();
+    if (!this.context) this.context = new AudioContext();
     await this.context.resume();
+    if (!microphone || this.stream) return;
+    if (!window.navigator.mediaDevices?.getUserMedia) {
+      throw new Error("This browser cannot use a microphone for live radio.");
+    }
     this.stream = await window.navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
@@ -160,7 +160,9 @@ export function useLiveRadio(deviceId) {
   const socketRef = useRef(null);
   const audioRef = useRef(null);
   const heldRef = useRef(false);
+  const modeRef = useRef(null);
   const [callState, setCallState] = useState("idle");
+  const [mode, setMode] = useState(null);
   const [pttState, setPttState] = useState("idle");
   const [speakerUid, setSpeakerUid] = useState(null);
   const [configured, setConfigured] = useState(null);
@@ -170,13 +172,19 @@ export function useLiveRadio(deviceId) {
     heldRef.current = false;
     audioRef.current?.setTransmitting(false);
     if (socketRef.current?.readyState === window.WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({ type: "ptt.stop" }));
-      socketRef.current.send(JSON.stringify({ type: "call.end" }));
+      if (modeRef.current === "private") {
+        socketRef.current.send(JSON.stringify({ type: "ptt.stop" }));
+        socketRef.current.send(JSON.stringify({ type: "call.end" }));
+      } else if (modeRef.current === "monitor") {
+        socketRef.current.send(JSON.stringify({ type: "monitor.end" }));
+      }
     }
     socketRef.current?.close();
     socketRef.current = null;
     audioRef.current?.close();
     audioRef.current = null;
+    modeRef.current = null;
+    setMode(null);
     setCallState("idle");
     setPttState("idle");
     setSpeakerUid(null);
@@ -184,17 +192,21 @@ export function useLiveRadio(deviceId) {
 
   useEffect(() => disconnect, [deviceId, disconnect]);
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (requestedMode = "private") => {
     if (!deviceId || callState !== "idle") return;
+    modeRef.current = requestedMode;
+    setMode(requestedMode);
     setError("");
     setCallState("connecting");
     try {
-      const socket = new window.WebSocket(liveRadioUrl());
-      socket.binaryType = "arraybuffer";
+      let socket = null;
       const audio = new BrowserRadioAudio((data) => {
-        if (socket.readyState === window.WebSocket.OPEN) socket.send(data);
+        if (socket?.readyState === window.WebSocket.OPEN) socket.send(data);
       });
       audioRef.current = audio;
+      await audio.prepare({ microphone: requestedMode === "private" });
+      socket = new window.WebSocket(liveRadioUrl());
+      socket.binaryType = "arraybuffer";
       socketRef.current = socket;
       socket.onmessage = async (event) => {
         if (typeof event.data !== "string") {
@@ -210,14 +222,17 @@ export function useLiveRadio(deviceId) {
             return;
           }
           try {
-            await audio.prepare();
-            socket.send(JSON.stringify({ type: "call.start", deviceId }));
+            socket.send(JSON.stringify({
+              type: requestedMode === "monitor" ? "monitor.start" : "call.start",
+              deviceId,
+            }));
           } catch (reason) {
-            setError(reason instanceof Error ? reason.message : "Microphone access was not granted.");
+            setError(reason instanceof Error ? reason.message : "Live radio audio could not be prepared.");
             socket.close();
           }
         }
         if (message.type === "call.state") setCallState(message.state);
+        if (message.type === "monitor.state") setCallState(message.state);
         if (message.type === "ptt.state") {
           setPttState(message.state);
           audio.setTransmitting(message.state === "granted" && heldRef.current);
@@ -227,8 +242,19 @@ export function useLiveRadio(deviceId) {
         }
         if (message.type === "error") {
           setError(message.message || "Live radio failed.");
-          if (message.code === "pocstars_call_failed" || message.code === "live_radio_not_configured") {
+          const startFailed = (
+            message.code === "pocstars_call_failed"
+            || message.code === "pocstars_monitor_failed"
+            || message.code === "live_radio_not_configured"
+            || message.code === "division_not_mapped"
+            || message.code === "radio_console_busy"
+            || message.code === "forbidden"
+            || message.code === "invalid_radio_uid"
+            || message.code === "invalid_group_id"
+          );
+          if (startFailed) {
             setCallState("idle");
+            socket.close();
           }
         }
       };
@@ -239,17 +265,25 @@ export function useLiveRadio(deviceId) {
       socket.onclose = () => {
         setCallState("idle");
         setPttState("idle");
+        setMode(null);
+        modeRef.current = null;
         audio.setTransmitting(false);
+        audio.close();
+        if (audioRef.current === audio) audioRef.current = null;
+        if (socketRef.current === socket) socketRef.current = null;
       };
     } catch (reason) {
       setCallState("idle");
-      setError(reason instanceof Error ? reason.message : "Microphone access was not granted.");
+      setError(reason instanceof Error ? reason.message : "Live radio could not be started.");
       disconnect();
     }
   }, [callState, deviceId, disconnect]);
 
+  const callRadio = useCallback(() => connect("private"), [connect]);
+  const listenToDivision = useCallback(() => connect("monitor"), [connect]);
+
   const startPtt = useCallback(() => {
-    if (callState !== "connected" || socketRef.current?.readyState !== window.WebSocket.OPEN) return;
+    if (modeRef.current !== "private" || callState !== "connected" || socketRef.current?.readyState !== window.WebSocket.OPEN) return;
     heldRef.current = true;
     socketRef.current.send(JSON.stringify({ type: "ptt.start" }));
   }, [callState]);
@@ -267,8 +301,11 @@ export function useLiveRadio(deviceId) {
     pttState,
     speakerUid,
     configured,
+    mode,
     error,
-    connect,
+    connect: callRadio,
+    callRadio,
+    listenToDivision,
     disconnect,
     startPtt,
     stopPtt,

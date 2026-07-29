@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { WSContext, WSEvents } from "hono/ws";
-import { primaryOrganization } from "../auth";
+import { canManageOrganization, primaryOrganization } from "../auth";
 import { env } from "../config";
 import * as db from "../db";
 import { PocstarsBridgeClient } from "./bridge-client";
@@ -10,6 +10,7 @@ type ActiveSession = {
   client: PocstarsBridgeClient;
   device: any;
   user: any;
+  mode: "private" | "monitor";
   pttHeld: boolean;
   microphoneGranted: boolean;
   pttTimer: ReturnType<typeof setTimeout> | null;
@@ -22,6 +23,22 @@ export function liveRadioConfigured() {
   return Boolean(
     env.POCSTARS_BRIDGE_URL && env.POCSTARS_BRIDGE_TOKEN,
   );
+}
+
+export async function queryPocstarsInventory() {
+  if (!liveRadioConfigured()) {
+    throw new Error("The POCSTARS bridge is not configured on this MOMAS server.");
+  }
+  if (activeSession && !activeSession.closed) {
+    throw new Error("The live radio console is currently in use. Try the inventory sync again shortly.");
+  }
+  const client = createLiveClient();
+  try {
+    await client.connect();
+    return await client.queryInventory();
+  } finally {
+    await client.close().catch(() => {});
+  }
 }
 
 function createLiveClient() {
@@ -43,6 +60,7 @@ function operatorScope(user: any) {
   return {
     organizationId: membership.organization_id,
     unitId: membership.scope_level === "unit" ? membership.unit_id : null,
+    assignedOnly: !canManageOrganization(membership),
   };
 }
 
@@ -69,7 +87,7 @@ async function cleanup(session: ActiveSession, reason = "operator") {
   if (session.pttTimer) clearTimeout(session.pttTimer);
   session.pttTimer = null;
   await session.client.close().catch(() => {});
-  await audit(session, "radio.live.end", { reason });
+  await audit(session, session.mode === "monitor" ? "radio.monitor.end" : "radio.live.end", { reason });
   if (activeSession === session) activeSession = null;
 }
 
@@ -115,6 +133,7 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
     client,
     device,
     user,
+    mode: "private",
     pttHeld: false,
     microphoneGranted: false,
     pttTimer: null,
@@ -150,6 +169,94 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
       type: "error",
       code: "pocstars_call_failed",
       message: error instanceof Error ? error.message : "The POCSTARS call could not be started.",
+    });
+    await cleanup(session, "connect_failed");
+  }
+}
+
+async function startMonitor(ws: WSContext, user: any, deviceId: string) {
+  if (!liveRadioConfigured()) {
+    send(ws, {
+      type: "error",
+      code: "live_radio_not_configured",
+      message: "Live radio is not configured on this MOMAS server.",
+    });
+    return;
+  }
+  if (activeSession && !activeSession.closed) {
+    send(ws, {
+      type: "error",
+      code: "radio_console_busy",
+      message: "Another operator is using the live radio console.",
+    });
+    return;
+  }
+  const device = await visibleDevice(user, deviceId);
+  if (!device) {
+    send(ws, {
+      type: "error",
+      code: "forbidden",
+      message: "That radio is inactive or outside your operational scope.",
+    });
+    return;
+  }
+  const groupId = Number(device.pocstars_group_id);
+  if (!Number.isSafeInteger(groupId) || groupId <= 0) {
+    send(ws, {
+      type: "error",
+      code: "division_not_mapped",
+      message: "This radio's division is not mapped to a POCSTARS group yet.",
+    });
+    return;
+  }
+
+  const client = createLiveClient();
+  const session: ActiveSession = {
+    ws,
+    client,
+    device,
+    user,
+    mode: "monitor",
+    pttHeld: false,
+    microphoneGranted: false,
+    pttTimer: null,
+    closed: false,
+  };
+  activeSession = session;
+  client.on("audio", (audio: Buffer, info: any) => {
+    send(ws, { type: "speaker", uid: info.uid, speaking: true });
+    if (ws.readyState === 1) ws.send(Uint8Array.from(audio));
+  });
+  client.on("speaker", (state) => send(ws, { type: "speaker", ...state }));
+  client.on("error", (error: Error) => {
+    if (!session.closed) send(ws, { type: "error", code: "pocstars_voice_error", message: error.message });
+  });
+
+  try {
+    send(ws, {
+      type: "monitor.state",
+      state: "connecting",
+      deviceId,
+      division: { id: device.unit_id, name: device.unit_name },
+    });
+    await client.connect();
+    const group = await client.startWatchGroup(groupId);
+    await audit(session, "radio.monitor.start", {
+      unit_id: device.unit_id,
+      pocstars_group_id: group.gid,
+    });
+    send(ws, {
+      type: "monitor.state",
+      state: "connected",
+      deviceId,
+      division: { id: device.unit_id, name: device.unit_name },
+      group: { id: group.gid, name: group.name },
+    });
+  } catch (error) {
+    send(ws, {
+      type: "error",
+      code: "pocstars_monitor_failed",
+      message: error instanceof Error ? error.message : "The POCSTARS group could not be monitored.",
     });
     await cleanup(session, "connect_failed");
   }
@@ -209,7 +316,7 @@ export function liveRadioWebSocket(c: Context): WSEvents {
     },
     onMessage: async (event, ws) => {
       if (typeof event.data !== "string") {
-        if (session?.microphoneGranted) {
+        if (session?.mode === "private" && session.microphoneGranted) {
           const bytes = event.data instanceof ArrayBuffer
             ? new Uint8Array(event.data)
             : new Uint8Array((event.data as any).buffer);
@@ -234,14 +341,22 @@ export function liveRadioWebSocket(c: Context): WSEvents {
         if (session) return;
         await startCall(ws, user, String(message.deviceId || ""));
         if (activeSession?.ws === ws) session = activeSession;
-      } else if (message.type === "ptt.start" && session && !session.closed) {
+      } else if (message.type === "monitor.start") {
+        if (session) return;
+        await startMonitor(ws, user, String(message.deviceId || ""));
+        if (activeSession?.ws === ws) session = activeSession;
+      } else if (message.type === "ptt.start" && session?.mode === "private" && !session.closed) {
         await beginPtt(session);
-      } else if (message.type === "ptt.stop" && session && !session.closed) {
+      } else if (message.type === "ptt.stop" && session?.mode === "private" && !session.closed) {
         await endPtt(session);
       } else if (message.type === "call.end" && session) {
         await cleanup(session);
         session = null;
         send(ws, { type: "call.state", state: "idle" });
+      } else if (message.type === "monitor.end" && session) {
+        await cleanup(session);
+        session = null;
+        send(ws, { type: "monitor.state", state: "idle" });
       }
     },
     onClose: () => {
