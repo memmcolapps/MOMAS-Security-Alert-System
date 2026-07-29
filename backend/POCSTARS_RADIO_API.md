@@ -380,6 +380,22 @@ Binary WebSocket messages carry headerless AMR-NB frames in both directions.
 The backend rechecks the selected device against the signed-in operator's
 organization and unit before sending `SingleCall` to POCSTARS.
 
+### Public HTTPS proxy
+
+The public API host must proxy both ordinary HTTP and WebSocket upgrades to the
+Bun backend. An installable nginx example is provided at
+`deploy/nginx-momas.conf.example`.
+
+Verify that the public hostname reaches MOMAS:
+
+```bash
+bun run check:live-deploy -- https://memmcolapps.memmserve.com
+```
+
+The response must identify the runtime as `bun`. A Spring/WebFlux JSON 404
+means the hostname is routed to the wrong upstream. After installing the
+virtual host, `nginx -t` must pass before reloading nginx.
+
 ## Still required before field acceptance
 
 - a dedicated production dispatcher login with access to the field groups;
