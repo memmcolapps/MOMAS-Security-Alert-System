@@ -1,0 +1,24 @@
+[Unit]
+Description=Private reverse tunnel from POCSTARS to the MOMAS backend
+After=network-online.target pocstars-bridge.service
+Wants=network-online.target
+Requires=pocstars-bridge.service
+
+[Service]
+Type=simple
+User=administrator
+Group=administrator
+ExecStart=/usr/bin/ssh -NT \
+  -i /home/administrator/.ssh/momas_bridge_ed25519 \
+  -o BatchMode=yes \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -o StrictHostKeyChecking=yes \
+  -R 127.0.0.1:6892:127.0.0.1:16892 \
+  momasbridge@165.232.103.4
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

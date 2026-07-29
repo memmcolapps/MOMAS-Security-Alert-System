@@ -339,33 +339,34 @@ browser disconnects.
 
 ### Configuration
 
-Use a dedicated active POCSTARS dispatcher account. Reusing a human operator's
-account may terminate their dispatcher session.
+The voice adapter runs beside EChat on the POCSTARS server, where both its TCP
+control and UDP audio channels are local. A private reverse SSH tunnel exposes
+the adapter only on the MOMAS VPS loopback interface.
+
+MOMAS VPS:
 
 ```dotenv
-POCSTARS_PTT_CONTROL_HOST=192.168.1.65
-POCSTARS_PTT_CONTROL_PORT=22055
-POCSTARS_PTT_AUDIO_HOST=192.168.1.65
-POCSTARS_PTT_ACCOUNT=dedicated-momas-dispatcher
-POCSTARS_PTT_PASSWORD=vendor-supplied-password-or-hash
+POCSTARS_BRIDGE_URL=ws://127.0.0.1:6892/radio/live
+POCSTARS_BRIDGE_TOKEN=shared-bridge-token
+POCSTARS_PTT_TIMEOUT_MS=30000
 POCSTARS_PTT_MAX_SECONDS=60
 ```
 
-Leave `POCSTARS_PTT_CONTROL_HOST` empty to disable live calls safely.
-The backend must run on the POCSTARS private network (or a routed VPN) because
-live audio is UDP. A normal SSH `-L` tunnel can validate the TCP login and
-group query, but it does not carry RTP audio.
+POCSTARS bridge host:
 
-For a non-transmitting control smoke test from a development machine:
-
-```bash
-ssh -p 2966 -N \
-  -L 19220:192.168.1.65:22055 \
-  administrator@POCSTARS_PUBLIC_IP
+```dotenv
+BRIDGE_HOST=127.0.0.1
+BRIDGE_PORT=16892
+BRIDGE_TOKEN=shared-bridge-token
+BRIDGE_POCSTARS_CONTROL_HOST=192.168.1.65
+BRIDGE_POCSTARS_CONTROL_PORT=22055
+BRIDGE_POCSTARS_AUDIO_HOST=192.168.1.65
+BRIDGE_POCSTARS_ACCOUNT=dedicated-dispatcher-account
+BRIDGE_POCSTARS_PASSWORD=dispatcher-password-or-hash
 ```
 
-Then point only `POCSTARS_PTT_CONTROL_HOST/PORT` at `127.0.0.1:19220`.
-Do not start a private call until a controlled test radio is nominated.
+The dispatcher credentials never leave the POCSTARS server. Reusing a human
+operator's account may terminate their dispatcher session.
 
 ### Browser protocol
 

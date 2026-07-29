@@ -3,11 +3,11 @@ import type { WSContext, WSEvents } from "hono/ws";
 import { primaryOrganization } from "../auth";
 import { env } from "../config";
 import * as db from "../db";
-import { PocstarsLiveClient } from "./live-client";
+import { PocstarsBridgeClient } from "./bridge-client";
 
 type ActiveSession = {
   ws: WSContext;
-  client: PocstarsLiveClient;
+  client: PocstarsBridgeClient;
   device: any;
   user: any;
   pttHeld: boolean;
@@ -20,10 +20,16 @@ let activeSession: ActiveSession | null = null;
 
 export function liveRadioConfigured() {
   return Boolean(
-    env.POCSTARS_PTT_CONTROL_HOST
-      && env.POCSTARS_PTT_ACCOUNT
-      && env.POCSTARS_PTT_PASSWORD,
+    env.POCSTARS_BRIDGE_URL && env.POCSTARS_BRIDGE_TOKEN,
   );
+}
+
+function createLiveClient() {
+  return new PocstarsBridgeClient({
+    url: env.POCSTARS_BRIDGE_URL,
+    token: env.POCSTARS_BRIDGE_TOKEN,
+    timeoutMs: env.POCSTARS_PTT_TIMEOUT_MS,
+  });
 }
 
 function send(ws: WSContext, value: Record<string, unknown>) {
@@ -103,14 +109,7 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
     return;
   }
 
-  const client = new PocstarsLiveClient({
-    host: env.POCSTARS_PTT_CONTROL_HOST,
-    port: env.POCSTARS_PTT_CONTROL_PORT,
-    audioHost: env.POCSTARS_PTT_AUDIO_HOST || env.POCSTARS_PTT_CONTROL_HOST,
-    account: env.POCSTARS_PTT_ACCOUNT,
-    password: env.POCSTARS_PTT_PASSWORD,
-    timeoutMs: env.POCSTARS_PTT_TIMEOUT_MS,
-  });
+  const client = createLiveClient();
   const session: ActiveSession = {
     ws,
     client,

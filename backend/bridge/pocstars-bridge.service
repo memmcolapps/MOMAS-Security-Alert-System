@@ -1,0 +1,18 @@
+[Unit]
+Description=MOMAS bridge to the local POCSTARS voice service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=administrator
+Group=administrator
+EnvironmentFile=/etc/momas-pocstars-bridge.env
+ExecStart=/opt/momas-pocstars-bridge/pocstars-bridge
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
