@@ -1,6 +1,6 @@
 import protobuf from "protobufjs";
 
-const { Root } = protobuf;
+const { Root, Type } = protobuf;
 
 const root = Root.fromJSON({
   nested: {
@@ -112,6 +112,11 @@ const root = Root.fromJSON({
         },
         push: {
           nested: {
+            UsersChanged: {
+              fields: {
+                users: { rule: "repeated", type: "ptt.User", id: 1 },
+              },
+            },
             CurrentGroup: {
               fields: {
                 gid: { type: "uint32", id: 1 },
@@ -212,6 +217,14 @@ export function unpackControlFrame(packet: Buffer) {
     throw new Error("Invalid POCSTARS message name.");
   }
   const name = packet.subarray(6, nameEnd - 1).toString("utf8");
+  const messageType = root.lookup(name);
+  if (!(messageType instanceof Type)) {
+    return {
+      name,
+      value: {},
+      unknown: true,
+    };
+  }
   return {
     name,
     value: decodeMessage(name, packet.subarray(nameEnd, packet.length - 4)),

@@ -28,6 +28,32 @@ describe("POCSTARS live protocol", () => {
     expect(decoded?.payload).toEqual(Buffer.from(amr));
   });
 
+  test("decodes the UsersChanged notification emitted after login", () => {
+    const packet = packControlFrame("ptt.push.UsersChanged", {
+      users: [{ uid: 348, name: "POLICE", online: true }],
+    });
+    expect(unpackControlFrame(packet)).toEqual({
+      name: "ptt.push.UsersChanged",
+      value: {
+        users: [{ uid: 348, timestamp: 0, name: "POLICE", online: true }],
+      },
+    });
+  });
+
+  test("ignores unknown future push notifications without dropping the connection", () => {
+    const messageName = Buffer.from("ptt.push.FutureNotice\0", "utf8");
+    const packet = Buffer.alloc(4 + 2 + messageName.length + 4);
+    packet.writeUInt32BE(packet.length - 4, 0);
+    packet.writeUInt16BE(messageName.length, 4);
+    messageName.copy(packet, 6);
+
+    expect(unpackControlFrame(packet)).toEqual({
+      name: "ptt.push.FutureNotice",
+      value: {},
+      unknown: true,
+    });
+  });
+
   test("splits headerless AMR-NB MR122 frames", () => {
     const frame = Uint8Array.from([0x3c, ...new Array(31).fill(1)]);
     const frames = splitAmrFrames(Uint8Array.from([...frame, ...frame]));
@@ -35,4 +61,3 @@ describe("POCSTARS live protocol", () => {
     expect(frames[0]).toHaveLength(32);
   });
 });
-
