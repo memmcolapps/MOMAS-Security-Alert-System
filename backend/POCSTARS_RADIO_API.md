@@ -380,21 +380,27 @@ Binary WebSocket messages carry headerless AMR-NB frames in both directions.
 The backend rechecks the selected device against the signed-in operator's
 organization and unit before sending `SingleCall` to POCSTARS.
 
-### Public HTTPS proxy
+### Public Java gateway
 
-The public API host must proxy both ordinary HTTP and WebSocket upgrades to the
-Bun backend. An installable nginx example is provided at
-`deploy/nginx-momas.conf.example`.
+The production Java API gateway already exposes the Bun backend through
+`/epailsecurity/**` and removes that prefix before forwarding the request to
+port `5050`. It also passes WebSocket upgrades through the same route. Keep the
+frontend API base set to the prefixed URL:
 
-Verify that the public hostname reaches MOMAS:
-
-```bash
-bun run check:live-deploy -- https://memmcolapps.memmserve.com
+```dotenv
+MOMAS_API_BASE=https://memmcolapps.memmserve.com/epailsecurity
+VITE_MOMAS_API_BASE=https://memmcolapps.memmserve.com/epailsecurity
 ```
 
-The response must identify the runtime as `bun`. A Spring/WebFlux JSON 404
-means the hostname is routed to the wrong upstream. After installing the
-virtual host, `nginx -t` must pass before reloading nginx.
+Verify that the public API base reaches MOMAS:
+
+```bash
+bun run check:live-deploy -- https://memmcolapps.memmserve.com/epailsecurity
+```
+
+The response must identify the runtime as `bun`. If the `/epailsecurity`
+prefix is missing, the request stays in Spring and returns the gateway's JSON
+404 response.
 
 ## Still required before field acceptance
 

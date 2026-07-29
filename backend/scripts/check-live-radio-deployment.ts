@@ -3,7 +3,9 @@ export {};
 const base = String(process.argv[2] || "").replace(/\/+$/, "");
 
 if (!base || !/^https?:\/\//.test(base)) {
-  console.error("Usage: bun scripts/check-live-radio-deployment.ts https://your-api-host");
+  console.error(
+    "Usage: bun scripts/check-live-radio-deployment.ts https://your-api-host/optional-gateway-prefix",
+  );
   process.exit(2);
 }
 
@@ -26,7 +28,7 @@ try {
 if (!response.ok || json?.runtime !== "bun") {
   console.error(JSON.stringify({
     ok: false,
-    problem: "The public API host is not routed to the MOMAS Bun backend.",
+    problem: "The public API base is not routed to the MOMAS Bun backend.",
     status: response.status,
     contentType,
     response: json || body.slice(0, 200),

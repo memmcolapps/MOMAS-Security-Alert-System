@@ -8,7 +8,8 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test:live-radio-url": "node --test src/lib/live-radio-url.test.js"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.7",

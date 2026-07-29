@@ -2,6 +2,7 @@ import BenzAMRRecorder from "benz-amr-recorder";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { config } from "./app-config";
 import { getActiveOrganizationId, getAuthToken } from "./api";
+import { buildLiveRadioUrl } from "./live-radio-url";
 
 const AMR_HEADER = new Uint8Array([35, 33, 65, 77, 82, 10]);
 
@@ -17,9 +18,7 @@ function joinFloat32(chunks) {
 }
 
 function liveRadioUrl() {
-  const base = config.apiBase || window.location.origin;
-  const url = new URL("/api/pocstars/radio/live", base);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  const url = buildLiveRadioUrl(config.apiBase, window.location.origin);
   const token = getAuthToken();
   const organizationId = getActiveOrganizationId();
   if (token) url.searchParams.set("access_token", token);
