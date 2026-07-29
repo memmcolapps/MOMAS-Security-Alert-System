@@ -42,6 +42,7 @@ class BrowserRadioAudio {
     this.incoming = [];
     this.incomingTimer = null;
     this.playhead = 0;
+    this.closed = false;
   }
 
   async prepare() {
@@ -88,10 +89,12 @@ class BrowserRadioAudio {
     if (!this.captureLength) return;
     const samples = joinFloat32(this.capture);
     const sampleRate = this.context.sampleRate;
+    const decoder = this.decoder;
     this.capture = [];
     this.captureLength = 0;
+    if (!decoder) return;
     this.encodeQueue = this.encodeQueue.then(async () => {
-      const encoded = await this.decoder.encodeAMRAsync(samples, sampleRate);
+      const encoded = await decoder.encodeAMRAsync(samples, sampleRate);
       if (encoded?.length > AMR_HEADER.length) {
         this.sendAudio(encoded.subarray(AMR_HEADER.length));
       }
@@ -108,7 +111,9 @@ class BrowserRadioAudio {
   }
 
   async playIncoming() {
-    if (!this.incoming.length || !this.context) return;
+    const context = this.context;
+    const decoder = this.decoder;
+    if (!this.incoming.length || !context || !decoder) return;
     const length = this.incoming.reduce((total, frame) => total + frame.length, AMR_HEADER.length);
     const amr = new Uint8Array(length);
     amr.set(AMR_HEADER);
@@ -117,28 +122,35 @@ class BrowserRadioAudio {
       amr.set(frame, offset);
       offset += frame.length;
     }
-    const pcm = await this.decoder.decodeAMRAsync(amr);
-    if (!pcm?.length) return;
-    await this.context.resume();
-    const buffer = this.context.createBuffer(1, pcm.length, 8000);
+    const pcm = await decoder.decodeAMRAsync(amr);
+    if (!pcm?.length || this.closed || context.state === "closed") return;
+    await context.resume();
+    const buffer = context.createBuffer(1, pcm.length, 8000);
     buffer.copyToChannel(pcm, 0);
-    const source = this.context.createBufferSource();
+    const source = context.createBufferSource();
     source.buffer = buffer;
-    source.connect(this.context.destination);
-    const start = Math.max(this.context.currentTime + 0.025, this.playhead);
+    source.connect(context.destination);
+    const start = Math.max(context.currentTime + 0.025, this.playhead);
     source.start(start);
     this.playhead = start + buffer.duration;
   }
 
   close() {
+    if (this.closed) return;
+    this.closed = true;
     if (this.incomingTimer) window.clearTimeout(this.incomingTimer);
     this.incomingTimer = null;
+    this.capture = [];
+    this.captureLength = 0;
+    this.incoming = [];
     this.processor?.disconnect();
     this.source?.disconnect();
     this.silentGain?.disconnect();
     this.stream?.getTracks().forEach((track) => track.stop());
-    void this.context?.close();
-    this.decoder?.destroy();
+    void this.context?.close().catch(() => {});
+    // benz-amr-recorder 1.1.5 throws in destroy() when no playback source
+    // exists. Dropping the reference lets the browser reclaim it safely.
+    this.decoder = null;
     this.stream = null;
     this.context = null;
   }

@@ -442,7 +442,14 @@ export function DevicesRoute() {
                 ) : null}
 
                 <div className="mt-4">
-                  {liveRadio.callState === "idle" ? (
+                  {liveRadio.callState === "idle" && liveRadio.configured === false ? (
+                    <button
+                      className="w-full rounded-md border border-red-500/20 px-4 py-3 text-xs text-red-300/70"
+                      disabled
+                    >
+                      Live radio unavailable
+                    </button>
+                  ) : liveRadio.callState === "idle" ? (
                     <button
                       className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-ops-green px-4 py-3 text-xs font-bold text-black hover:opacity-85"
                       onClick={liveRadio.connect}
