@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessageSquare, Mic, Phone, PhoneOff, Plus, Radio, RefreshCw, Save, Send, Trash2, Volume2, X } from "lucide-react";
+import { Check, MessageSquare, Mic, Phone, PhoneOff, Plus, Radio, RefreshCw, Save, Search, Send, Trash2, Volume2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   deleteDevice,
@@ -84,7 +84,8 @@ export function DevicesRoute() {
   });
 
   const [orgFilter, setOrgFilter] = useState("all");
-  const [divisionFilter, setDivisionFilter] = useState("all");
+  const [channelFilter, setChannelFilter] = useState("all");
+  const [search, setSearch] = useState("");
 
   const allDevices = useMemo(() => devicesQuery.data?.devices || [], [devicesQuery.data?.devices]);
   const organizations = useMemo(() => orgsQuery.data?.organizations || [], [orgsQuery.data?.organizations]);
@@ -94,26 +95,40 @@ export function DevicesRoute() {
     if (orgFilter === "unassigned") return allDevices.filter((device) => !device.organization_id);
     return allDevices.filter((device) => String(device.organization_id) === String(orgFilter));
   }, [allDevices, orgFilter]);
-  const divisions = useMemo(() => {
-    const seen = new Set();
-    return organizationDevices
-      .filter((device) => device.unit_id)
-      .map((device) => ({
-        id: String(device.unit_id),
-        name: device.unit_name || `Division ${device.unit_id}`,
-        organizationName: device.organization_name,
-      }))
-      .filter((division) => {
-        if (seen.has(division.id)) return false;
-        seen.add(division.id);
-        return true;
-      });
+  const channels = useMemo(() => {
+    const seen = new Map();
+    for (const device of organizationDevices) {
+      for (const channel of device.channels || []) {
+        if (!seen.has(String(channel.id))) {
+          seen.set(String(channel.id), {
+            id: String(channel.id),
+            name: channel.name,
+            organizationName: device.organization_name,
+          });
+        }
+      }
+    }
+    return [...seen.values()];
   }, [organizationDevices]);
   const devices = useMemo(() => {
-    if (divisionFilter === "all") return organizationDevices;
-    if (divisionFilter === "unassigned") return organizationDevices.filter((device) => !device.unit_id);
-    return organizationDevices.filter((device) => String(device.unit_id) === divisionFilter);
-  }, [divisionFilter, organizationDevices]);
+    const term = search.trim().toLowerCase();
+    let list = organizationDevices;
+    if (channelFilter === "unassigned") {
+      list = list.filter((device) => !(device.channels || []).length);
+    } else if (channelFilter !== "all") {
+      list = list.filter((device) =>
+        (device.channels || []).some((channel) => String(channel.id) === channelFilter));
+    }
+    if (!term) return list;
+    // Search covers what people actually know: the IMEI printed on the handset,
+    // the radio name, who carries it, and which company owns it.
+    return list.filter((device) => [
+      device.device_id,
+      device.name,
+      device.operator,
+      device.organization_name,
+    ].filter(Boolean).some((value) => String(value).toLowerCase().includes(term)));
+  }, [channelFilter, organizationDevices, search]);
   const activeCount = useMemo(() => devices.filter((device) => device.active).length, [devices]);
   const radioMessageBytes = useMemo(
     () => new window.TextEncoder().encode(radioMessage.trim()).length,
@@ -137,7 +152,7 @@ export function DevicesRoute() {
   }, [toast]);
 
   useEffect(() => {
-    setDivisionFilter("all");
+    setChannelFilter("all");
   }, [orgFilter]);
 
   const saveMutation = useMutation({
@@ -344,20 +359,35 @@ export function DevicesRoute() {
       ) : null}
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <span className="mr-1 text-[9px] font-bold uppercase tracking-wider text-neutral-600">Division</span>
-        <FilterChip active={divisionFilter === "all"} onClick={() => setDivisionFilter("all")}>
+        <span className="mr-1 text-[9px] font-bold uppercase tracking-wider text-neutral-600">Channel</span>
+        <FilterChip active={channelFilter === "all"} onClick={() => setChannelFilter("all")}>
           All ({organizationDevices.length})
         </FilterChip>
-        <FilterChip active={divisionFilter === "unassigned"} onClick={() => setDivisionFilter("unassigned")}>
-          Unassigned ({organizationDevices.filter((device) => !device.unit_id).length})
+        <FilterChip active={channelFilter === "unassigned"} onClick={() => setChannelFilter("unassigned")}>
+          On no channel ({organizationDevices.filter((device) => !(device.channels || []).length).length})
         </FilterChip>
-        {divisions.map((division) => (
-          <FilterChip key={division.id} active={divisionFilter === division.id} onClick={() => setDivisionFilter(division.id)}>
-            {isPlatformAdmin && orgFilter === "all" && division.organizationName
-              ? `${division.organizationName} / ${division.name}`
-              : division.name}
+        {channels.map((channel) => (
+          <FilterChip key={channel.id} active={channelFilter === channel.id} onClick={() => setChannelFilter(channel.id)}>
+            {isPlatformAdmin && orgFilter === "all" && channel.organizationName
+              ? `${channel.organizationName} / ${channel.name}`
+              : channel.name}
           </FilterChip>
         ))}
+      </div>
+
+      <div className="mb-3 flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-3 py-2">
+        <Search size={14} className="text-neutral-500" />
+        <input
+          className="flex-1 bg-transparent text-xs text-neutral-200 placeholder:text-neutral-600 focus:outline-none"
+          placeholder="Search by IMEI, name, operator or company"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+        {search ? (
+          <button className="text-neutral-500 hover:text-neutral-200" onClick={() => setSearch("")} aria-label="Clear search">
+            <X size={13} />
+          </button>
+        ) : null}
       </div>
 
       <section className="glass-panel overflow-hidden rounded-lg border-green-500/25">
@@ -371,7 +401,7 @@ export function DevicesRoute() {
                 <th className="px-4 py-3">Device ID</th>
                 <th className="px-4 py-3">Name</th>
                 {isPlatformAdmin ? <th className="px-4 py-3">Company</th> : null}
-                <th className="px-4 py-3">Division</th>
+                <th className="px-4 py-3">Channels</th>
                 <th className="px-4 py-3">Operator</th>
                 <th className="px-4 py-3">Type</th>
                 <th className="px-4 py-3">Status</th>
@@ -392,8 +422,24 @@ export function DevicesRoute() {
                     {isPlatformAdmin ? (
                       <td className="px-4 py-3">{device.organization_name || <span className="text-neutral-700">Unassigned</span>}</td>
                     ) : null}
-                    <td className="px-4 py-3">{device.unit_name || <span className="text-neutral-700">Unassigned</span>}</td>
-                    <td className="px-4 py-3">{device.operator || <Muted />}</td>
+                    <td className="px-4 py-3">
+                      {(device.channels || []).length ? (
+                        <div className="flex flex-wrap gap-1">
+                          {device.channels.map((channel) => (
+                            <span key={channel.id} className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-neutral-300">
+                              {channel.name}
+                            </span>
+                          ))}
+                        </div>
+                      ) : <span className="text-neutral-700">No channel</span>}
+                    </td>
+                    <td className="px-4 py-3">
+                      <OperatorCell
+                        device={device}
+                        canEdit={canManageDevices}
+                        onSaved={() => queryClient.invalidateQueries({ queryKey: ["devices"] })}
+                      />
+                    </td>
                     <td className="px-4 py-3">{device.device_type ? deviceTypeLabel(device.device_type) : <Muted />}</td>
                     <td className="px-4 py-3">
                       <span className={`rounded-full border px-2 py-0.5 text-[9px] font-bold ${
@@ -459,7 +505,10 @@ export function DevicesRoute() {
                   {selectedRadio.operator ? ` · ${selectedRadio.operator}` : ""}
                 </p>
                 <p className="mt-1 text-[10px] text-neutral-500">
-                  {selectedRadio.organization_name || "Unassigned organization"} / {selectedRadio.unit_name || "Unassigned division"}
+                  {selectedRadio.organization_name || "Unallocated"}
+                  {(selectedRadio.channels || []).length
+                    ? ` · ${selectedRadio.channels.map((channel) => channel.name).join(", ")}`
+                    : " · on no channel"}
                 </p>
               </div>
               <button className="rounded p-2 text-neutral-500 hover:bg-white/5 hover:text-neutral-100" onClick={() => setSelectedRadio(null)}>
@@ -674,6 +723,67 @@ function Field({ label, required, wide, children }) {
       </span>
       {children}
     </label>
+  );
+}
+
+// Who is carrying this handset. MOMAS owns this fact - the radio network only
+// knows the device label - so it is edited in place rather than imported.
+function OperatorCell({ device, canEdit, onSaved }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(device.operator || "");
+  const mutation = useMutation({
+    mutationFn: (operator) => saveDevice({
+      device_id: device.device_id,
+      name: device.name,
+      organization_id: device.organization_id,
+      unit_id: device.unit_id,
+      operator: operator.trim() || null,
+      device_type: device.device_type,
+      notes: device.notes,
+      active: device.active,
+    }),
+    onSuccess: () => {
+      setEditing(false);
+      onSaved();
+    },
+  });
+
+  if (!canEdit) return device.operator || <Muted />;
+  if (!editing) {
+    return (
+      <button
+        className="rounded px-1 py-0.5 text-left hover:bg-white/[0.06]"
+        onClick={() => { setValue(device.operator || ""); setEditing(true); }}
+        title="Set who is carrying this radio"
+      >
+        {device.operator || <span className="text-neutral-700">Assign…</span>}
+      </button>
+    );
+  }
+  return (
+    <span className="flex items-center gap-1">
+      <input
+        className="w-28 rounded border border-white/15 bg-black/40 px-1.5 py-0.5 text-[11px] text-neutral-100 focus:outline-none"
+        value={value}
+        autoFocus
+        placeholder="Name"
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") mutation.mutate(value);
+          if (event.key === "Escape") setEditing(false);
+        }}
+      />
+      <button
+        className="rounded bg-ops-green px-1.5 py-0.5 text-[10px] font-bold text-black disabled:opacity-50"
+        disabled={mutation.isPending}
+        onClick={() => mutation.mutate(value)}
+      >
+        <Check size={10} />
+      </button>
+      <button className="text-neutral-500 hover:text-neutral-200" onClick={() => setEditing(false)} aria-label="Cancel">
+        <X size={11} />
+      </button>
+    </span>
   );
 }
 

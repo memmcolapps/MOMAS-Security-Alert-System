@@ -494,6 +494,8 @@ async function init() {
         WHERE pocstars_group_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_channels_organization
         ON channels(organization_id);
+      UPDATE devices SET operator = NULL
+       WHERE pocstars_managed = true AND operator IS NOT NULL AND operator = name;
       -- Units used to double as channels; move any existing vendor mapping onto
       -- a channel row so the tenant UI never has to show a vendor group id.
       INSERT INTO channels (organization_id, unit_id, name, pocstars_group_id)
@@ -2124,7 +2126,14 @@ async function listDevices(scope: any = {}) {
             ou.name AS unit_name,
             ou.type AS unit_type,
             ou.pocstars_group_id,
-            ou.pocstars_group_name
+            ou.pocstars_group_name,
+            COALESCE(
+              (SELECT json_agg(json_build_object('id', c.id, 'name', c.name) ORDER BY c.name)
+                 FROM channel_devices cd
+                 JOIN channels c ON c.id = cd.channel_id
+                WHERE cd.device_id = d.device_id AND c.active),
+              '[]'::json
+            ) AS channels
        FROM devices d
        LEFT JOIN organizations o ON o.id = d.organization_id
        LEFT JOIN organization_units ou ON ou.id = d.unit_id
@@ -2455,12 +2464,12 @@ async function syncPocstarsPlatformInventory(inventory: any) {
            device_type, active, pocstars_managed, pocstars_online,
            pocstars_last_seen_at, pocstars_source_dispatcher_uid
          )
-         VALUES ($1,$2,$3,$4,NULL,$4,'handheld',true,true,$5,NOW(),$6)
+         VALUES ($1,$2,$3,$4,NULL,NULL,'handheld',true,true,$5,NOW(),$6)
          ON CONFLICT (device_id) DO UPDATE SET
            organization_id = EXCLUDED.organization_id,
            unit_id = EXCLUDED.unit_id,
            name = EXCLUDED.name,
-           operator = COALESCE(devices.operator, EXCLUDED.operator),
+           operator = devices.operator,
            device_type = COALESCE(devices.device_type, EXCLUDED.device_type),
            active = true,
            pocstars_managed = true,
