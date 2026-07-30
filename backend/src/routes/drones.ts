@@ -121,9 +121,15 @@ router.post("/registry", async (c) => {
       return c.json({ drone });
     }
 
-    // Org manager: scoped to their own organization.
+    // Org manager: may only edit an aircraft already allocated to their own
+    // organization. Registering a sysid, or claiming one that is unallocated,
+    // is a platform act - otherwise any org admin could bind an unallocated
+    // sysid and receive that aircraft's telemetry.
     const existing = await db.getDrone(sysid);
-    if (existing && existing.organization_id && existing.organization_id !== membership.organization_id) {
+    if (!existing) {
+      return c.json({ error: "Only platform admins can register a new drone." }, 403);
+    }
+    if (Number(existing.organization_id) !== Number(membership.organization_id)) {
       return c.json({ error: "forbidden" }, 403);
     }
     const drone = await db.upsertDrone({

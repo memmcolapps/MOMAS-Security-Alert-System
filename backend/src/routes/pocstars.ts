@@ -532,8 +532,11 @@ router.post("/devices", async (c) => {
   if (!device_id?.trim()) return c.json({ error: "device_id is required" }, 400);
 
   try {
-    const membership = primaryOrganization(user);
-    if (user?.platform_role === "admin" || canManageOrganization(membership)) {
+    // A radio is a physical handset allocated by the platform, so only platform
+    // admins may create one or move it between organizations. This branch
+    // upserts organization_id, which previously let an organization admin claim
+    // an existing device_id and pull another tenant's radio into their own org.
+    if (user?.platform_role === "admin") {
       const device = await db.upsertDevice({
         device_id: device_id.trim(),
         name,
@@ -541,12 +544,12 @@ router.post("/devices", async (c) => {
         operator,
         device_type,
         notes,
-        organization_id: user?.platform_role === "admin" ? body.organization_id || null : membership.organization_id,
-        unit_id: body.unit_id || (membership?.scope_level === "unit" ? membership.unit_id : null),
+        organization_id: body.organization_id || null,
+        unit_id: body.unit_id || null,
         active: active ?? true,
       });
       await db.createAuditLog({
-        organization_id: user?.platform_role === "admin" ? body.organization_id || null : membership.organization_id,
+        organization_id: body.organization_id || null,
         actor_user_id: user?.id,
         action: "device.upsert",
         target_type: "device",

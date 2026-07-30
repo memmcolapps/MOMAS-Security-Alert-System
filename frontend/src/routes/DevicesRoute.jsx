@@ -252,7 +252,7 @@ export function DevicesRoute() {
               : "View your assigned devices and update operational details"}
           </p>
         </div>
-        {canManageDevices ? (
+        {isPlatformAdmin ? (
           <button className="inline-flex items-center gap-2 rounded-md bg-ops-green px-4 py-2 text-xs font-bold text-black hover:opacity-85" onClick={openAdd}>
             <Plus size={14} /> Add device
           </button>
@@ -445,9 +445,11 @@ export function DevicesRoute() {
                         <button className="inline-flex items-center gap-1 rounded border border-green-500/25 px-2 py-1 text-[10px] text-ops-green hover:bg-green-500/10" onClick={() => setSelectedRadio(device)}>
                           <MessageSquare size={11} /> Open radio
                         </button>
+                        {canManageDevices ? (
                         <button className="rounded border border-white/10 px-2 py-1 text-[10px] text-neutral-500 hover:border-ops-green hover:text-ops-green" onClick={() => openEdit(device)}>
                           Edit
                         </button>
+                        ) : null}
                         {isPlatformAdmin ? (
                           <button className="inline-flex items-center gap-1 rounded border border-red-500/20 px-2 py-1 text-[10px] text-red-400/70 hover:border-ops-red hover:text-ops-red" onClick={() => {
                             if (window.confirm(`Remove device ${device.device_id}?`)) deleteMutation.mutate(device.device_id);

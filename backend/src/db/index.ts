@@ -3072,6 +3072,7 @@ async function upsertOrganizationUser({
   role = "viewer",
   unit_id = null,
   scope_level = "organization",
+  allowCrossOrganization = false,
 }) {
   let user = await getUserByEmail(email);
   if (!user) {
@@ -3079,6 +3080,18 @@ async function upsertOrganizationUser({
     user = await createUser({ email, name, password, platform_role: "none" });
   } else {
     assertCanJoinOrganization(user);
+    // An organization admin must not be able to attach somebody else's account
+    // to their tenant by guessing an email. Only a platform admin may place a
+    // user who already belongs to another organization.
+    if (!allowCrossOrganization) {
+      const memberships = await getMembershipsForUser(user.id);
+      const elsewhere = memberships.some(
+        (membership: any) => Number(membership.organization_id) !== Number(organization_id),
+      );
+      if (elsewhere) {
+        throw new Error("That email already belongs to another organization.");
+      }
+    }
   }
   const finalUnitId = unit_id ? Number(unit_id) : null;
   await pool.query(
@@ -3213,8 +3226,8 @@ async function updateOrganizationUnit(organizationId, unitId, {
   state,
   lga,
   location,
-  pocstars_group_id,
-  pocstars_group_name,
+  pocstars_group_id = undefined,
+  pocstars_group_name = undefined,
 }) {
   const { rows } = await pool.query(
     `UPDATE organization_units

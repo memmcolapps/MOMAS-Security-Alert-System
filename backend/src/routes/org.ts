@@ -85,6 +85,7 @@ router.post("/users", async (c) => {
       role: body.role || "viewer",
       unit_id: body.unit_id || null,
       scope_level: body.scope_level || (body.unit_id ? "unit" : "organization"),
+      allowCrossOrganization: isPlatformAdmin(c),
     });
     await db.createAuditLog({
       organization_id: organizationId,
@@ -301,7 +302,18 @@ router.put("/units/:unit_id", async (c) => {
   if (!canManageUnit(membership(c), unitId) && !isPlatformAdmin(c)) return c.json({ error: "You can only update units you are allowed to manage." }, 403);
   const body = await c.req.json().catch(() => ({}));
   try {
-    const unit = await db.updateOrganizationUnit(organizationId, unitId, body);
+    // Whitelist the fields a tenant owns. Radio-network identifiers are never
+    // accepted from an organization: a unit carrying a vendor group id is
+    // promoted to a channel at startup, so accepting one here would let a
+    // tenant claim audio on a group it was never allocated.
+    const unit = await db.updateOrganizationUnit(organizationId, unitId, {
+      parent_unit_id: body.parent_unit_id ?? null,
+      name: body.name,
+      type: body.type,
+      state: body.state,
+      lga: body.lga,
+      location: body.location,
+    });
     if (!unit) return c.json({ error: "That unit could not be found in this organization." }, 404);
     await db.createAuditLog({
       organization_id: organizationId,
