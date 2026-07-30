@@ -26,6 +26,10 @@ export function LiveRadioProvider({ children }) {
   const modeRef = useRef(null);
   const resumeChannelRef = useRef(null);
   const startingRef = useRef(false);
+  // Each start() bumps this. A socket's handlers capture their own id, so a
+  // superseded (replaced) socket's late onclose is ignored, while the current
+  // socket's onclose remains the single authority for resetting state.
+  const sessionIdRef = useRef(0);
 
   const [mode, setMode] = useState(null);
   const [callState, setCallState] = useState("idle");
@@ -37,22 +41,30 @@ export function LiveRadioProvider({ children }) {
   const [channel, setChannel] = useState(null);
   const [callDevice, setCallDevice] = useState(null);
 
+  const resetVisibleState = useCallback(() => {
+    setMode(null);
+    setCallState("idle");
+    setPttState("idle");
+    setSpeaker(null);
+    setChannel(null);
+    setCallDevice(null);
+  }, []);
+
+  // Send the leave frames and close the socket. Ref/state cleanup is left to
+  // the socket's onclose so there is exactly one place that resets state.
   const teardown = useCallback(() => {
     heldRef.current = false;
     audioRef.current?.setTransmitting(false);
-    if (socketRef.current?.readyState === window.WebSocket.OPEN) {
+    const socket = socketRef.current;
+    if (socket?.readyState === window.WebSocket.OPEN) {
       if (modeRef.current === "private") {
-        socketRef.current.send(JSON.stringify({ type: "ptt.stop" }));
-        socketRef.current.send(JSON.stringify({ type: "call.end" }));
+        socket.send(JSON.stringify({ type: "ptt.stop" }));
+        socket.send(JSON.stringify({ type: "call.end" }));
       } else if (modeRef.current === "monitor") {
-        socketRef.current.send(JSON.stringify({ type: "monitor.end" }));
+        socket.send(JSON.stringify({ type: "monitor.end" }));
       }
     }
-    socketRef.current?.close();
-    socketRef.current = null;
-    audioRef.current?.close();
-    audioRef.current = null;
-    modeRef.current = null;
+    socket?.close();
   }, []);
 
   const start = useCallback(async ({ nextMode, nextChannel, nextDevice }) => {
@@ -60,6 +72,7 @@ export function LiveRadioProvider({ children }) {
     startingRef.current = true;
     setError("");
     setBusyBy(null);
+    const mySession = (sessionIdRef.current += 1);
     try {
       if (socketRef.current) {
         teardown();
@@ -117,51 +130,46 @@ export function LiveRadioProvider({ children }) {
           setError(message.message || "Live radio failed.");
           if (message.busyBy) setBusyBy(message.busyBy);
           if (START_FAIL_CODES.has(message.code)) {
-            setCallState("idle");
             resumeChannelRef.current = null;
             socket.close();
           }
         }
       };
       socket.onerror = () => {
-        setCallState("idle");
-        setError("The live-radio connection could not be opened.");
+        if (sessionIdRef.current === mySession) {
+          setError("The live-radio connection could not be opened.");
+        }
       };
       socket.onclose = () => {
         audio.setTransmitting(false);
         audio.close();
         if (audioRef.current === audio) audioRef.current = null;
-        if (socketRef.current === socket) {
-          socketRef.current = null;
-          const closedMode = modeRef.current;
-          modeRef.current = null;
-          setMode(null);
-          setCallState("idle");
-          setPttState("idle");
-          setSpeaker(null);
-          setCallDevice(null);
-          const resume = resumeChannelRef.current;
-          if (closedMode === "private" && resume) {
-            resumeChannelRef.current = null;
-            setTimeout(() => {
-              void startRef.current({ nextMode: "monitor", nextChannel: resume });
-            }, 400);
-          } else {
-            setChannel(null);
-          }
+        // A newer start() has superseded this socket — leave its state alone.
+        if (sessionIdRef.current !== mySession) return;
+        if (socketRef.current === socket) socketRef.current = null;
+        const closedMode = modeRef.current;
+        modeRef.current = null;
+        const resume = resumeChannelRef.current;
+        if (closedMode === "private" && resume) {
+          resumeChannelRef.current = null;
+          resetVisibleState();
+          setTimeout(() => {
+            void startRef.current({ nextMode: "monitor", nextChannel: resume });
+          }, 400);
+        } else {
+          resetVisibleState();
         }
       };
     } catch (reason) {
-      setCallState("idle");
-      setMode(null);
-      setChannel(null);
-      setCallDevice(null);
-      setError(reason instanceof Error ? reason.message : "Live radio could not be started.");
+      if (sessionIdRef.current === mySession) {
+        setError(reason instanceof Error ? reason.message : "Live radio could not be started.");
+        resetVisibleState();
+      }
       teardown();
     } finally {
       startingRef.current = false;
     }
-  }, [teardown]);
+  }, [resetVisibleState, teardown]);
 
   const startRef = useRef(start);
   startRef.current = start;

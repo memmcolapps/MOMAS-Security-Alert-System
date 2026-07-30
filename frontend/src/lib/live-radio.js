@@ -129,9 +129,17 @@ export class BrowserRadioAudio {
     const source = context.createBufferSource();
     source.buffer = buffer;
     source.connect(context.destination);
-    const start = Math.max(context.currentTime + 0.025, this.playhead);
-    source.start(start);
-    this.playhead = start + buffer.duration;
+    // Clamp the scheduling cursor to a small jitter window ahead of the clock.
+    // Without this, playhead only ever grows: audio arriving faster than
+    // real-time (bursts, bridge buffering) pushes it seconds into the future
+    // and it never recovers across the silence between speakers, so a busy
+    // channel appears to hang after the first talk-spurt.
+    const now = context.currentTime;
+    if (this.playhead < now + 0.025 || this.playhead > now + 0.5) {
+      this.playhead = now + 0.05;
+    }
+    source.start(this.playhead);
+    this.playhead += buffer.duration;
   }
 
   close() {
