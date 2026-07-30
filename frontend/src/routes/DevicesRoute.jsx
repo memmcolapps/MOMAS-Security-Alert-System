@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Headphones, MessageSquare, Mic, Phone, PhoneOff, Plus, Radio, RefreshCw, Save, Send, Trash2, Volume2, X } from "lucide-react";
+import { MessageSquare, Mic, Phone, PhoneOff, Plus, Radio, RefreshCw, Save, Send, Trash2, Volume2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   deleteDevice,
@@ -13,7 +13,7 @@ import {
   sendRadioMessage,
 } from "../lib/api";
 import { deviceTypeLabel } from "../lib/domain";
-import { useLiveRadio } from "../lib/live-radio";
+import { useLiveRadioSession } from "../lib/live-radio-session";
 
 const emptyForm = {
   device_id: "",
@@ -60,7 +60,7 @@ export function DevicesRoute() {
   const [selectedRadio, setSelectedRadio] = useState(null);
   const [radioMessage, setRadioMessage] = useState("");
   const [sentMessages, setSentMessages] = useState({});
-  const liveRadio = useLiveRadio(selectedRadio?.device_id);
+  const liveRadio = useLiveRadioSession();
 
   const devicesQuery = useQuery({
     queryKey: ["devices"],
@@ -472,77 +472,66 @@ export function DevicesRoute() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h3 className="flex items-center gap-2 text-xs font-bold text-neutral-100">
-                      <Radio size={14} className="text-ops-green" /> Live radio
+                      <Radio size={14} className="text-ops-green" /> Private call
                     </h3>
                     <p className="mt-1 text-[10px] text-neutral-500">
-                      Listen to this radio's division, or open a private call to this handset.
+                      Open a private POCSTARS call to this handset. To listen to a whole division, use the channel bar at the top.
                     </p>
                   </div>
                   <span className={`rounded-full border px-2 py-1 text-[9px] font-bold uppercase ${
-                    liveRadio.callState === "connected"
+                    liveRadio.mode === "private" && liveRadio.callState === "connected"
                       ? "border-green-500/30 bg-green-500/10 text-ops-green"
                       : "border-white/10 text-neutral-500"
                   }`}>
-                    {liveRadio.callState === "connected" && liveRadio.mode === "monitor"
-                      ? "listening"
-                      : liveRadio.callState}
+                    {liveRadio.mode === "private" ? liveRadio.callState : "idle"}
                   </span>
                 </div>
 
-                {liveRadio.error ? (
+                {liveRadio.error && liveRadio.mode !== "monitor" ? (
                   <p className="mt-3 rounded bg-red-500/10 px-3 py-2 text-[11px] text-red-300">{liveRadio.error}</p>
                 ) : null}
-                {liveRadio.speakerUid ? (
+                {liveRadio.mode === "private" && liveRadio.speaker ? (
                   <p className="mt-3 flex items-center gap-2 text-[11px] text-ops-green">
-                    <Volume2 size={13} className="animate-pulse" /> Radio {liveRadio.speakerUid} is speaking
+                    <Volume2 size={13} className="animate-pulse" /> {liveRadio.speaker.name || `Radio ${liveRadio.speaker.uid}`} is speaking
                   </p>
                 ) : null}
 
                 <div className="mt-4">
-                  {liveRadio.callState === "idle" && liveRadio.configured === false ? (
+                  {liveRadio.configured === false ? (
                     <button
                       className="w-full rounded-md border border-red-500/20 px-4 py-3 text-xs text-red-300/70"
                       disabled
                     >
                       Live radio unavailable
                     </button>
-                  ) : liveRadio.callState === "idle" ? (
-                    <div className="grid gap-3 sm:grid-cols-2">
+                  ) : liveRadio.mode !== "private" ? (
+                    <div className="space-y-2">
                       <button
-                        className="inline-flex min-h-20 items-center justify-center gap-2 rounded-md border border-green-500/35 bg-green-500/10 px-4 py-3 text-xs font-bold text-ops-green hover:bg-green-500/15 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/[0.02] disabled:text-neutral-600"
-                        disabled={!selectedRadio.pocstars_group_id}
-                        onClick={liveRadio.listenToDivision}
-                        title={selectedRadio.pocstars_group_id ? `Listen to ${selectedRadio.unit_name}` : "Map this division to a POCSTARS group first"}
-                      >
-                        <Headphones size={17} /> Listen to division
-                      </button>
-                      <button
-                        className="inline-flex min-h-20 items-center justify-center gap-2 rounded-md bg-ops-green px-4 py-3 text-xs font-bold text-black hover:opacity-85"
-                        onClick={liveRadio.callRadio}
+                        className="inline-flex min-h-20 w-full items-center justify-center gap-2 rounded-md bg-ops-green px-4 py-3 text-xs font-bold text-black hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40"
+                        disabled={liveRadio.callState === "connecting"}
+                        onClick={() => liveRadio.callRadio(selectedRadio)}
                       >
                         <Phone size={16} /> Call this radio
                       </button>
-                      {!selectedRadio.pocstars_group_id ? (
-                        <p className="sm:col-span-2 text-[10px] text-amber-300/80">
-                          Division listening is unavailable until {selectedRadio.unit_name || "this division"} is mapped to its POCSTARS group in Organization admin.
+                      {liveRadio.mode === "monitor" ? (
+                        <p className="text-[10px] text-neutral-500">
+                          Channel listening pauses during the call and resumes when it ends.
                         </p>
                       ) : null}
                     </div>
-                  ) : liveRadio.callState === "connected" && liveRadio.mode === "monitor" ? (
+                  ) : liveRadio.callDevice && String(liveRadio.callDevice.device_id) !== String(selectedRadio.device_id) ? (
                     <div className="space-y-3">
-                      <div className="flex min-h-24 flex-col items-center justify-center gap-2 rounded-lg border border-green-500/35 bg-green-500/10 text-center text-ops-green">
-                        <Headphones size={24} />
-                        <strong className="text-xs">Listening to {selectedRadio.unit_name || selectedRadio.pocstars_group_name || "division"}</strong>
-                        <span className="text-[10px] text-neutral-500">Incoming POCSTARS group audio will play automatically.</span>
-                      </div>
+                      <p className="rounded border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
+                        In a call with {liveRadio.callDevice.name || liveRadio.callDevice.device_id}. End it before calling this radio.
+                      </p>
                       <button
                         className="inline-flex w-full items-center justify-center gap-2 rounded border border-red-500/25 px-3 py-2 text-[11px] text-red-300 hover:bg-red-500/10"
-                        onClick={liveRadio.disconnect}
+                        onClick={liveRadio.endCall}
                       >
-                        <PhoneOff size={13} /> Stop listening
+                        <PhoneOff size={13} /> End that call
                       </button>
                     </div>
-                  ) : liveRadio.callState === "connected" && liveRadio.mode === "private" ? (
+                  ) : liveRadio.callState === "connected" ? (
                     <div className="space-y-3">
                       <button
                         className={`flex min-h-24 w-full touch-none select-none flex-col items-center justify-center gap-2 rounded-lg border text-sm font-black uppercase tracking-wider transition ${
@@ -571,14 +560,14 @@ export function DevicesRoute() {
                       </button>
                       <button
                         className="inline-flex w-full items-center justify-center gap-2 rounded border border-red-500/25 px-3 py-2 text-[11px] text-red-300 hover:bg-red-500/10"
-                        onClick={liveRadio.disconnect}
+                        onClick={liveRadio.endCall}
                       >
                         <PhoneOff size={13} /> End call
                       </button>
                     </div>
                   ) : (
                     <button className="w-full rounded-md border border-white/10 px-4 py-3 text-xs text-neutral-500" disabled>
-                      {liveRadio.mode === "monitor" ? "Connecting to division audio…" : "Calling through POCSTARS…"}
+                      Calling through POCSTARS…
                     </button>
                   )}
                 </div>

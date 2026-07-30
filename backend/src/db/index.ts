@@ -2095,6 +2095,33 @@ async function listDevices(scope: any = {}) {
   return rows;
 }
 
+// Divisions the user may live-monitor: units mapped to a POCSTARS group,
+// narrowed to the caller's scope. Platform admins see every mapped unit.
+async function listMonitorableUnits(scope: any = {}) {
+  const vals: any[] = [];
+  const conds = ["ou.pocstars_group_id IS NOT NULL"];
+  if (scope.organizationId) {
+    conds.push(`ou.organization_id = $${vals.length + 1}`);
+    vals.push(scope.organizationId);
+  }
+  if (scope.unitId) {
+    conds.push(`ou.id = $${vals.length + 1}`);
+    vals.push(scope.unitId);
+  }
+  const { rows } = await pool.query(
+    `SELECT ou.id, ou.name, ou.organization_id, ou.pocstars_group_id, ou.pocstars_group_name,
+            o.name AS organization_name,
+            (SELECT COUNT(*)::int FROM devices d
+              WHERE d.unit_id = ou.id AND d.active AND d.pocstars_online) AS online_count
+       FROM organization_units ou
+       JOIN organizations o ON o.id = ou.organization_id
+      WHERE ${conds.join(" AND ")}
+      ORDER BY o.name, ou.name`,
+    vals,
+  );
+  return rows;
+}
+
 async function hasPocstarsDispatchers() {
   const { rows } = await pool.query("SELECT 1 FROM pocstars_dispatchers LIMIT 1");
   return Boolean(rows[0]);
@@ -3113,6 +3140,7 @@ export {
   assignDeviceToOrganization,
   assignDeviceToUnit,
   hasPocstarsDispatchers,
+  listMonitorableUnits,
   syncPocstarsPlatformInventory,
   assignPocstarsGroupToOrganization,
   listPocstarsRegistry,

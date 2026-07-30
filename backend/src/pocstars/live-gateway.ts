@@ -11,6 +11,8 @@ type ActiveSession = {
   device: any;
   user: any;
   mode: "private" | "monitor";
+  divisionName: string | null;
+  speakerNames: Map<string, string>;
   pttHeld: boolean;
   microphoneGranted: boolean;
   pttTimer: ReturnType<typeof setTimeout> | null;
@@ -18,6 +20,47 @@ type ActiveSession = {
 };
 
 let activeSession: ActiveSession | null = null;
+
+function busyBy() {
+  if (!activeSession || activeSession.closed) return null;
+  return {
+    operator: activeSession.user?.name || activeSession.user?.email || "another operator",
+    mode: activeSession.mode,
+    division: activeSession.divisionName,
+  };
+}
+
+async function speakerName(session: ActiveSession, uid: unknown) {
+  const key = String(uid ?? "");
+  if (!key) return null;
+  const cached = session.speakerNames.get(key);
+  if (cached) return cached;
+  const device = await db.getDevice(key).catch(() => null);
+  const name = device?.name || `Radio ${key}`;
+  session.speakerNames.set(key, name);
+  return name;
+}
+
+function attachSpeakerEvents(session: ActiveSession) {
+  const { ws, client } = session;
+  let lastAudioUid: string | null = null;
+  client.on("audio", (audio: Buffer, info: any) => {
+    const uid = String(info?.uid ?? "");
+    if (uid !== lastAudioUid) {
+      lastAudioUid = uid;
+      void speakerName(session, uid).then((name) => {
+        send(ws, { type: "speaker", uid: info?.uid, name, speaking: true });
+      });
+    }
+    if (ws.readyState === 1) ws.send(Uint8Array.from(audio));
+  });
+  client.on("speaker", (state: any) => {
+    if (!state?.speaking) lastAudioUid = null;
+    void speakerName(session, state?.uid).then((name) => {
+      send(ws, { type: "speaker", ...state, name });
+    });
+  });
+}
 
 export function liveRadioConfigured() {
   return Boolean(
@@ -105,6 +148,7 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
       type: "error",
       code: "radio_console_busy",
       message: "Another operator is using the live radio console.",
+      busyBy: busyBy(),
     });
     return;
   }
@@ -134,17 +178,15 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
     device,
     user,
     mode: "private",
+    divisionName: device.name ? `call with ${device.name}` : null,
+    speakerNames: new Map(),
     pttHeld: false,
     microphoneGranted: false,
     pttTimer: null,
     closed: false,
   };
   activeSession = session;
-  client.on("audio", (audio: Buffer, info: any) => {
-    send(ws, { type: "speaker", uid: info.uid, speaking: true });
-    if (ws.readyState === 1) ws.send(Uint8Array.from(audio));
-  });
-  client.on("speaker", (state) => send(ws, { type: "speaker", ...state }));
+  attachSpeakerEvents(session);
   client.on("mic", (state: any) => {
     session.microphoneGranted = Boolean(state.speaking);
     send(ws, { type: "ptt.state", state: state.speaking ? "granted" : "idle", reason: state.reason });
@@ -174,7 +216,17 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
   }
 }
 
-async function startMonitor(ws: WSContext, user: any, deviceId: string) {
+// A user may monitor a division when it is inside their scope: platform admins
+// any mapped unit, org members units of their org, unit-scoped members only
+// their own unit.
+async function monitorableUnit(user: any, unitId: number) {
+  const scope = operatorScope(user);
+  if (scope.organizationId === -1) return null;
+  const units = await db.listMonitorableUnits(scope);
+  return units.find((unit: any) => Number(unit.id) === unitId) || null;
+}
+
+async function startMonitor(ws: WSContext, user: any, message: any) {
   if (!liveRadioConfigured()) {
     send(ws, {
       type: "error",
@@ -188,24 +240,33 @@ async function startMonitor(ws: WSContext, user: any, deviceId: string) {
       type: "error",
       code: "radio_console_busy",
       message: "Another operator is using the live radio console.",
+      busyBy: busyBy(),
     });
     return;
   }
-  const device = await visibleDevice(user, deviceId);
-  if (!device) {
+
+  // Preferred: monitor a division directly. Legacy: derive it from a device.
+  let unit: any = null;
+  if (message.unitId !== undefined) {
+    unit = await monitorableUnit(user, Number(message.unitId));
+  } else if (message.deviceId) {
+    const device = await visibleDevice(user, String(message.deviceId));
+    if (device?.unit_id) unit = await monitorableUnit(user, Number(device.unit_id));
+  }
+  if (!unit) {
     send(ws, {
       type: "error",
       code: "forbidden",
-      message: "That radio is inactive or outside your operational scope.",
+      message: "That division is outside your operational scope or not mapped yet.",
     });
     return;
   }
-  const groupId = Number(device.pocstars_group_id);
+  const groupId = Number(unit.pocstars_group_id);
   if (!Number.isSafeInteger(groupId) || groupId <= 0) {
     send(ws, {
       type: "error",
       code: "division_not_mapped",
-      message: "This radio's division is not mapped to a POCSTARS group yet.",
+      message: "This division is not mapped to a POCSTARS group yet.",
     });
     return;
   }
@@ -214,20 +275,23 @@ async function startMonitor(ws: WSContext, user: any, deviceId: string) {
   const session: ActiveSession = {
     ws,
     client,
-    device,
+    device: {
+      device_id: `unit:${unit.id}`,
+      organization_id: unit.organization_id,
+      unit_id: unit.id,
+      unit_name: unit.name,
+    },
     user,
     mode: "monitor",
+    divisionName: unit.name,
+    speakerNames: new Map(),
     pttHeld: false,
     microphoneGranted: false,
     pttTimer: null,
     closed: false,
   };
   activeSession = session;
-  client.on("audio", (audio: Buffer, info: any) => {
-    send(ws, { type: "speaker", uid: info.uid, speaking: true });
-    if (ws.readyState === 1) ws.send(Uint8Array.from(audio));
-  });
-  client.on("speaker", (state) => send(ws, { type: "speaker", ...state }));
+  attachSpeakerEvents(session);
   client.on("error", (error: Error) => {
     if (!session.closed) send(ws, { type: "error", code: "pocstars_voice_error", message: error.message });
   });
@@ -236,20 +300,18 @@ async function startMonitor(ws: WSContext, user: any, deviceId: string) {
     send(ws, {
       type: "monitor.state",
       state: "connecting",
-      deviceId,
-      division: { id: device.unit_id, name: device.unit_name },
+      division: { id: unit.id, name: unit.name },
     });
     await client.connect();
     const group = await client.startWatchGroup(groupId);
     await audit(session, "radio.monitor.start", {
-      unit_id: device.unit_id,
+      unit_id: unit.id,
       pocstars_group_id: group.gid,
     });
     send(ws, {
       type: "monitor.state",
       state: "connected",
-      deviceId,
-      division: { id: device.unit_id, name: device.unit_name },
+      division: { id: unit.id, name: unit.name },
       group: { id: group.gid, name: group.name },
     });
   } catch (error) {
@@ -312,6 +374,7 @@ export function liveRadioWebSocket(c: Context): WSEvents {
         type: "ready",
         configured: liveRadioConfigured(),
         busy: Boolean(activeSession && !activeSession.closed),
+        busyBy: busyBy(),
       });
     },
     onMessage: async (event, ws) => {
@@ -343,7 +406,7 @@ export function liveRadioWebSocket(c: Context): WSEvents {
         if (activeSession?.ws === ws) session = activeSession;
       } else if (message.type === "monitor.start") {
         if (session) return;
-        await startMonitor(ws, user, String(message.deviceId || ""));
+        await startMonitor(ws, user, message);
         if (activeSession?.ws === ws) session = activeSession;
       } else if (message.type === "ptt.start" && session?.mode === "private" && !session.closed) {
         await beginPtt(session);

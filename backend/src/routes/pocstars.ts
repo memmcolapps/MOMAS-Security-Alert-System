@@ -516,6 +516,15 @@ router.get("/devices", async (c) => {
   }
 });
 
+router.get("/radio/channels", async (c) => {
+  try {
+    const channels = await db.listMonitorableUnits(orgScope(c));
+    return c.json({ channels });
+  } catch (error) {
+    return c.json(jsonError(error), 500);
+  }
+});
+
 router.post("/devices", async (c) => {
   const user = (c as any).get("user");
   const body = await c.req.json().catch(() => ({}));

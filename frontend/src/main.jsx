@@ -11,6 +11,8 @@ import {
 } from "@tanstack/react-router";
 import { createRoot } from "react-dom/client";
 import { AppHeader } from "./components/AppHeader";
+import { LiveRadioBar } from "./components/LiveRadioBar";
+import { LiveRadioProvider } from "./lib/live-radio-session";
 import { getAuthToken, getMe } from "./lib/api";
 import { AlarmsRoute } from "./routes/AlarmsRoute";
 import { AdminOrganizationDetailRoute } from "./routes/AdminOrganizationDetailRoute";
@@ -38,10 +40,11 @@ function RootLayout() {
   const router = useRouterState();
   const showHeader = !["/login", "/change-password"].includes(router.location.pathname);
   return (
-    <>
+    <LiveRadioProvider>
       {showHeader ? <AppHeader /> : null}
+      {showHeader ? <LiveRadioBar /> : null}
       <Outlet />
-    </>
+    </LiveRadioProvider>
   );
 }
 

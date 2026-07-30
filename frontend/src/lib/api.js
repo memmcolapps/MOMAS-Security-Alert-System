@@ -92,6 +92,10 @@ export function updateOrganizationAccess(id, payload) {
   });
 }
 
+export function getRadioChannels() {
+  return request("/api/pocstars/radio/channels");
+}
+
 export function getPocstarsRegistry() {
   return request("/api/pocstars/admin/registry");
 }
