@@ -80,7 +80,7 @@ export function liveRadioConfigured() {
 
 export async function queryPocstarsInventory() {
   if (!liveRadioConfigured()) {
-    throw new Error("The POCSTARS bridge is not configured on this MOMAS server.");
+    throw new Error("The radio network link is not configured on this MOMAS server.");
   }
   if (sessionIsBusy()) {
     throw new Error("The live radio console is currently in use. Try the inventory sync again shortly.");
@@ -176,7 +176,7 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
     send(ws, {
       type: "error",
       code: "invalid_radio_uid",
-      message: "This device does not have a valid POCSTARS user ID.",
+      message: "This device does not have a valid radio ID.",
     });
     return;
   }
@@ -220,7 +220,7 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
     send(ws, {
       type: "error",
       code: "pocstars_call_failed",
-      message: error instanceof Error ? error.message : "The POCSTARS call could not be started.",
+      message: error instanceof Error ? error.message : "The call could not be started.",
     });
     await cleanup(session, "connect_failed");
   }
@@ -323,7 +323,7 @@ async function startMonitor(ws: WSContext, user: any, message: any) {
     send(ws, {
       type: "error",
       code: "pocstars_monitor_failed",
-      message: error instanceof Error ? error.message : "The POCSTARS group could not be monitored.",
+      message: error instanceof Error ? error.message : "That channel could not be monitored.",
     });
     await cleanup(session, "connect_failed");
   }
@@ -354,7 +354,7 @@ async function beginPtt(session: ActiveSession) {
     send(session.ws, {
       type: "error",
       code: "microphone_not_granted",
-      message: error instanceof Error ? error.message : "POCSTARS did not grant the microphone.",
+      message: error instanceof Error ? error.message : "The radio network did not grant the microphone.",
     });
     send(session.ws, { type: "ptt.state", state: "idle" });
   }

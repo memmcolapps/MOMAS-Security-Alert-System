@@ -40,11 +40,11 @@ export class PocstarsBridgeClient extends EventEmitter {
     socket.binaryType = "arraybuffer";
     this.socket = socket;
     socket.onmessage = (event) => this.receive(event.data);
-    socket.onerror = () => this.fail(new Error("Could not connect to the POCSTARS bridge."));
+    socket.onerror = () => this.fail(new Error("Could not connect to the radio link."));
     socket.onclose = () => {
       this.socket = null;
       this.stopKeepalive();
-      if (!this.closing) this.fail(new Error("The POCSTARS bridge connection closed."));
+      if (!this.closing) this.fail(new Error("The radio link connection closed."));
     };
     await ready;
     // Monitoring is silent for long stretches, so without this the bridge's
@@ -128,12 +128,12 @@ export class PocstarsBridgeClient extends EventEmitter {
     this.mode = null;
     this.socket?.close();
     this.socket = null;
-    this.rejectWaiters(new Error("POCSTARS bridge client closed."));
+    this.rejectWaiters(new Error("The radio link client closed."));
   }
 
   private request(value: Record<string, unknown>, accept: (message: any) => boolean) {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error("The POCSTARS bridge is not connected."));
+      return Promise.reject(new Error("The radio link is not connected."));
     }
     const response = this.waitFor(accept);
     this.socket.send(JSON.stringify(value));
@@ -148,7 +148,7 @@ export class PocstarsBridgeClient extends EventEmitter {
         reject,
         timer: setTimeout(() => {
           this.waiters.delete(waiter);
-          reject(new Error("The POCSTARS bridge timed out."));
+          reject(new Error("The radio link timed out."));
         }, this.options.timeoutMs || 15_000),
       };
       this.waiters.add(waiter);
@@ -166,11 +166,11 @@ export class PocstarsBridgeClient extends EventEmitter {
     try {
       message = JSON.parse(data);
     } catch {
-      this.fail(new Error("The POCSTARS bridge returned an invalid message."));
+      this.fail(new Error("The radio link returned an invalid message."));
       return;
     }
     if (message.type === "error") {
-      const error = new Error(message.message || "The POCSTARS bridge reported an error.");
+      const error = new Error(message.message || "The radio link reported an error.");
       this.rejectWaiters(error);
       this.emit("error", error);
       return;

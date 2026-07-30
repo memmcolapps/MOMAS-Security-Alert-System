@@ -475,7 +475,7 @@ export function DevicesRoute() {
                       <Radio size={14} className="text-ops-green" /> Private call
                     </h3>
                     <p className="mt-1 text-[10px] text-neutral-500">
-                      Open a private POCSTARS call to this handset. To listen to a whole division, use the channel bar at the top.
+                      Open a private call to this handset. To listen to a whole channel, use the channel bar at the top.
                     </p>
                   </div>
                   <span className={`rounded-full border px-2 py-1 text-[9px] font-bold uppercase ${
@@ -567,7 +567,7 @@ export function DevicesRoute() {
                     </div>
                   ) : (
                     <button className="w-full rounded-md border border-white/10 px-4 py-3 text-xs text-neutral-500" disabled>
-                      Calling through POCSTARS…
+                      Connecting the call…
                     </button>
                   )}
                 </div>
@@ -642,7 +642,7 @@ export function DevicesRoute() {
               />
               <div className="mt-2 flex items-center justify-between gap-3">
                 <span className={`text-[9px] ${radioMessageBytes > 200 ? "text-red-400" : "text-neutral-600"}`}>
-                  {radioMessageBytes}/200 bytes · delivered by POCSTARS
+                  {radioMessageBytes}/200 bytes · delivered over the radio network
                 </span>
                 <button
                   type="submit"

@@ -202,7 +202,7 @@ const server = Bun.serve<BridgeSession>({
           send(ws, {
             type: "error",
             code: "pocstars_inventory_failed",
-            message: error instanceof Error ? error.message : "POCSTARS inventory query failed.",
+            message: error instanceof Error ? error.message : "The radio network inventory query failed.",
           });
         } finally {
           await closeSession(ws);
@@ -211,7 +211,7 @@ const server = Bun.serve<BridgeSession>({
         if (ws.data.client) return;
         const deviceId = Number(message.deviceId);
         if (!Number.isSafeInteger(deviceId) || deviceId <= 0) {
-          send(ws, { type: "error", code: "invalid_radio_uid", message: "Invalid POCSTARS radio ID." });
+          send(ws, { type: "error", code: "invalid_radio_uid", message: "Invalid radio ID." });
           return;
         }
         const client = new PocstarsLiveClient({
@@ -239,7 +239,7 @@ const server = Bun.serve<BridgeSession>({
           send(ws, {
             type: "error",
             code: "pocstars_call_failed",
-            message: error instanceof Error ? error.message : "POCSTARS call failed.",
+            message: error instanceof Error ? error.message : "The call failed.",
           });
           await closeSession(ws);
         }
@@ -247,7 +247,7 @@ const server = Bun.serve<BridgeSession>({
         if (ws.data.client) return;
         const groupId = Number(message.groupId);
         if (!Number.isSafeInteger(groupId) || groupId <= 0) {
-          send(ws, { type: "error", code: "invalid_group_id", message: "Invalid POCSTARS group ID." });
+          send(ws, { type: "error", code: "invalid_group_id", message: "Invalid channel ID." });
           return;
         }
         const client = new PocstarsLiveClient({
@@ -274,7 +274,7 @@ const server = Bun.serve<BridgeSession>({
           send(ws, {
             type: "error",
             code: "pocstars_monitor_failed",
-            message: error instanceof Error ? error.message : "POCSTARS group monitoring failed.",
+            message: error instanceof Error ? error.message : "Channel monitoring failed.",
           });
           await closeSession(ws);
         }
@@ -295,7 +295,7 @@ const server = Bun.serve<BridgeSession>({
           send(ws, {
             type: "error",
             code: "microphone_not_granted",
-            message: error instanceof Error ? error.message : "POCSTARS did not grant the microphone.",
+            message: error instanceof Error ? error.message : "The radio network did not grant the microphone.",
           });
           send(ws, { type: "ptt.state", state: "idle" });
         }

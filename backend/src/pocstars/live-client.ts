@@ -89,12 +89,12 @@ export class PocstarsLiveClient extends EventEmitter {
       if (this.closing) return;
       this.fail(new Error(
         this.kicked
-          ? "POCSTARS signed this dispatcher account in somewhere else and ended the radio session."
-          : "POCSTARS voice connection closed.",
+          ? "This radio session was ended because the account was used somewhere else."
+          : "The radio voice connection closed.",
       ));
     });
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("POCSTARS voice server timed out.")), this.options.timeoutMs || 10_000);
+      const timer = setTimeout(() => reject(new Error("The radio voice server timed out.")), this.options.timeoutMs || 10_000);
       this.control?.once("connect", () => {
         clearTimeout(timer);
         resolve();
@@ -115,7 +115,7 @@ export class PocstarsLiveClient extends EventEmitter {
       acceptPayloads: [101],
     }, "ptt.rr.LoginAck");
     if (Number(ack.result) !== 0) {
-      throw new Error(ack.what || `POCSTARS login failed (${ack.result}).`);
+      throw new Error(ack.what || `Radio network sign-in failed (${ack.result}).`);
     }
     this.uid = Number(ack.self?.uid || 0);
     this.name = String(ack.self?.name || this.options.account);
@@ -132,7 +132,7 @@ export class PocstarsLiveClient extends EventEmitter {
       includeTemp: true,
       includeCreated: true,
     }, "ptt.rr.QueryGroupAck");
-    if (Number(ack.result) !== 0) throw new Error(`POCSTARS group query failed (${ack.result}).`);
+    if (Number(ack.result) !== 0) throw new Error(`Channel query failed (${ack.result}).`);
     return ack.groups || [];
   }
 
@@ -142,7 +142,7 @@ export class PocstarsLiveClient extends EventEmitter {
       timestamp: 0,
       onlyOnline: false,
     }, "ptt.rr.QueryContactsAck");
-    if (Number(ack.result) !== 0) throw new Error(`POCSTARS contact query failed (${ack.result}).`);
+    if (Number(ack.result) !== 0) throw new Error(`Radio query failed (${ack.result}).`);
     return ack.users || [];
   }
 
@@ -154,7 +154,7 @@ export class PocstarsLiveClient extends EventEmitter {
       version2: false,
       allowPage: false,
     }, "ptt.rr.QueryMembersAck");
-    if (Number(ack.result) !== 0) throw new Error(`POCSTARS group-member query failed (${ack.result}).`);
+    if (Number(ack.result) !== 0) throw new Error(`Channel member query failed (${ack.result}).`);
     return ack.members || [];
   }
 
@@ -217,17 +217,17 @@ export class PocstarsLiveClient extends EventEmitter {
     this.watching = false;
     const generation = this.groupGeneration;
     const ack = await this.request("ptt.rr.SingleCall", { uid: targetUid }, "ptt.rr.SingleCallAck");
-    if (Number(ack.result) !== 0) throw new Error(`POCSTARS rejected the private call (${ack.result}).`);
+    if (Number(ack.result) !== 0) throw new Error(`The private call was rejected (${ack.result}).`);
     if (this.groupGeneration === generation) {
       await this.waitFor("group", 10_000);
     }
-    if (!this.group) throw new Error("POCSTARS did not assign an audio channel.");
+    if (!this.group) throw new Error("No audio channel was assigned.");
     return this.group;
   }
 
   async startWatchGroup(groupId: number) {
     if (!Number.isSafeInteger(groupId) || groupId <= 0) {
-      throw new Error("Invalid POCSTARS group ID.");
+      throw new Error("Invalid channel ID.");
     }
     const generation = this.groupGeneration;
     const ack = await this.request("ptt.rr.WatchGroup", {
@@ -238,7 +238,7 @@ export class PocstarsLiveClient extends EventEmitter {
       store: true,
     }, "ptt.rr.WatchGroupAck");
     if (Number(ack.result) !== 0) {
-      throw new Error(`POCSTARS rejected group monitoring (${ack.result}).`);
+      throw new Error(`Channel monitoring was rejected (${ack.result}).`);
     }
 
     const group = ack.group || {};
@@ -254,13 +254,13 @@ export class PocstarsLiveClient extends EventEmitter {
     } else if (this.groupGeneration === generation) {
       await this.waitFor("group", 10_000);
     }
-    if (!this.group) throw new Error("POCSTARS did not provide the group audio channel.");
+    if (!this.group) throw new Error("No channel audio was provided.");
     this.watching = true;
     return this.group;
   }
 
   async requestMic() {
-    if (!this.group) throw new Error("No POCSTARS radio call is active.");
+    if (!this.group) throw new Error("No radio call is active.");
     const ack = await this.request("ptt.rr.RequestMic", {
       gid: this.group.gid,
       uid: this.uid,
@@ -268,7 +268,7 @@ export class PocstarsLiveClient extends EventEmitter {
       sessionId: randomUUID(),
       timestamp: nowSeconds(),
     }, "ptt.rr.RequestMicAck");
-    if (Number(ack.result) !== 0) throw new Error(`The POCSTARS microphone is busy (${ack.reason || ack.result}).`);
+    if (Number(ack.result) !== 0) throw new Error(`The channel microphone is busy (${ack.reason || ack.result}).`);
     this.speechId = String(ack.speechId || "0");
     this.speaking = true;
     this.emit("mic", { speaking: true, speechId: this.speechId });
@@ -318,19 +318,19 @@ export class PocstarsLiveClient extends EventEmitter {
   async close() {
     this.closing = true;
     await this.endCall().catch(() => {});
-    this.rejectPending(new Error("POCSTARS voice client closed."));
+    this.rejectPending(new Error("The radio voice client closed."));
     this.control?.destroy();
     this.control = null;
     this.connected = false;
   }
 
   private request(name: string, value: Record<string, unknown>, ackName: string) {
-    if (!this.control || this.control.destroyed) return Promise.reject(new Error("POCSTARS is not connected."));
+    if (!this.control || this.control.destroyed) return Promise.reject(new Error("The radio network is not connected."));
     return new Promise<any>((resolve, reject) => {
       const timer = setTimeout(() => {
         const queue = this.pending.get(ackName) || [];
         this.pending.set(ackName, queue.filter((item) => item.resolve !== resolve));
-        reject(new Error(`POCSTARS did not answer ${name}.`));
+        reject(new Error(`The radio network did not answer ${name}.`));
       }, this.options.timeoutMs || 10_000);
       const queue = this.pending.get(ackName) || [];
       queue.push({ resolve, reject, timer });
@@ -343,7 +343,7 @@ export class PocstarsLiveClient extends EventEmitter {
     this.input = Buffer.concat([this.input, chunk]);
     while (this.input.length >= 4) {
       const length = this.input.readUInt32BE(0) + 4;
-      if (length < 11 || length > 2 * 1024 * 1024) return this.fail(new Error("Invalid POCSTARS frame."));
+      if (length < 11 || length > 2 * 1024 * 1024) return this.fail(new Error("Invalid radio network frame."));
       if (this.input.length < length) return;
       const packet = this.input.subarray(0, length);
       this.input = this.input.subarray(length);
@@ -385,7 +385,7 @@ export class PocstarsLiveClient extends EventEmitter {
     if (name === "ptt.push.Kickout") {
       this.kicked = true;
       this.emit("error", new Error(
-        "POCSTARS signed this dispatcher account in somewhere else and ended the radio session.",
+        "This radio session was ended because the account was used somewhere else.",
       ));
       return;
     }
@@ -450,7 +450,7 @@ export class PocstarsLiveClient extends EventEmitter {
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.off(event, done);
-        reject(new Error("POCSTARS audio channel timed out."));
+        reject(new Error("The audio channel timed out."));
       }, timeoutMs);
       const done = () => {
         clearTimeout(timer);

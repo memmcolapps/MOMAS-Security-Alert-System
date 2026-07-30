@@ -69,7 +69,7 @@ router.post("/groups/:group_id/assign", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const organizationId = Number(body.organization_id);
   if (!Number.isSafeInteger(organizationId) || organizationId <= 0) {
-    return c.json({ error: "Choose the organization this POCSTARS group belongs to." }, 400);
+    return c.json({ error: "Choose the organization this channel belongs to." }, 400);
   }
   try {
     const result = await db.assignPocstarsGroupToOrganization({

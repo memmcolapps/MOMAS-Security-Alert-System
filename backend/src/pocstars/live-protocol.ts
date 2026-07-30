@@ -267,7 +267,7 @@ export function packControlFrame(name: string, value: Record<string, unknown> = 
 
 export function unpackControlFrame(packet: Buffer) {
   if (packet.length < 11 || packet.readUInt32BE(0) + 4 !== packet.length) {
-    throw new Error("Invalid POCSTARS control frame length.");
+    throw new Error("Invalid radio control frame length.");
   }
   // The installed server emits a four-byte vendor integrity trailer that is
   // not Adler-32 on replies, even though it accepts the legacy Adler-32 form
@@ -276,7 +276,7 @@ export function unpackControlFrame(packet: Buffer) {
   const nameLength = packet.readUInt16BE(4);
   const nameEnd = 6 + nameLength;
   if (nameLength < 2 || nameEnd > packet.length - 4) {
-    throw new Error("Invalid POCSTARS message name.");
+    throw new Error("Invalid radio message name.");
   }
   const name = packet.subarray(6, nameEnd - 1).toString("utf8");
   const messageType = root.lookup(name);

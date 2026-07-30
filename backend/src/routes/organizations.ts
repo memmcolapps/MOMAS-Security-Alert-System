@@ -86,7 +86,7 @@ router.put("/:id/access", async (c) => {
 });
 
 router.post("/:id/pocstars/sync", (c) => c.json({
-  error: "POCSTARS sync is now platform-wide. Use POST /api/pocstars/admin/sync and assign groups to organizations from the registry.",
+  error: "Radio sync is now platform-wide. Use POST /api/pocstars/admin/sync and claim channels from the registry.",
 }, 410));
 
 router.post("/:id/users", async (c) => {

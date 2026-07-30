@@ -177,7 +177,7 @@ async function transcodeAmrToMp3(rawAudio: Buffer) {
         (result[0] === 0xff && (result[1] & 0xe0) === 0xe0);
       if (!result.length || (code !== 0 && !hasMp3Header)) {
         const detail = Buffer.concat(errors).toString("utf8").trim().slice(0, 500);
-        reject(new Error(detail || "POCSTARS radio audio could not be decoded."));
+        reject(new Error(detail || "The radio audio could not be decoded."));
         return;
       }
       resolve(result);
@@ -203,7 +203,7 @@ async function fetchAndTranscodeRecording(path: string) {
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) {
-    const error: any = new Error(`POCSTARS recording server returned ${response.status}.`);
+    const error: any = new Error(`The recording server returned ${response.status}.`);
     error.status = 502;
     throw error;
   }
@@ -215,7 +215,7 @@ async function fetchAndTranscodeRecording(path: string) {
   }
   const raw = Buffer.from(await response.arrayBuffer());
   if (!raw.length) {
-    const error: any = new Error("POCSTARS returned an empty radio clip.");
+    const error: any = new Error("The recording server returned an empty clip.");
     error.status = 502;
     throw error;
   }
@@ -693,7 +693,7 @@ router.get("/radio/recordings", async (c) => {
     if (data?.success === false || Number(data?.code) !== 200) {
       return c.json({
         error: "pocstars_recordings_failed",
-        message: data?.message || "POCSTARS did not return radio recordings.",
+        message: data?.message || "No radio recordings were returned.",
       }, 502);
     }
 
@@ -782,7 +782,7 @@ router.post("/radio/messages", async (c) => {
   if (Buffer.byteLength(message, "utf8") > 200) {
     return c.json({
       error: "message_too_long",
-      message: "POCSTARS radio messages are limited to 200 bytes.",
+      message: "Radio messages are limited to 200 bytes.",
     }, 400);
   }
   if (!DISPATCHER_UID) {
@@ -827,7 +827,7 @@ router.post("/radio/messages", async (c) => {
     if (data?.success === false || upstreamCode >= 400) {
       return c.json({
         error: "pocstars_message_failed",
-        message: data?.message || data?.response?.message || "POCSTARS rejected the message.",
+        message: data?.message || data?.response?.message || "The radio network rejected the message.",
       }, 502);
     }
 
@@ -922,7 +922,7 @@ router.get("/history", async (c) => {
 
 router.get("/sos", async (c) => {
   if (!isPlatformAdmin(c)) {
-    return c.json({ error: "The raw POCSTARS SOS feed is restricted to platform administrators." }, 403);
+    return c.json({ error: "The raw SOS feed is restricted to platform administrators." }, 403);
   }
   const query = c.req.query();
   const targetUid = query.targetUid || DEFAULT_TARGET_UID;

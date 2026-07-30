@@ -2312,7 +2312,7 @@ async function hasPocstarsDispatchers() {
 async function syncPocstarsPlatformInventory(inventory: any) {
   const dispatcherUid = String(inventory?.dispatcher?.id || "");
   if (!dispatcherUid || !Array.isArray(inventory?.groups) || !Array.isArray(inventory?.radios)) {
-    throw new Error("POCSTARS returned an invalid inventory snapshot.");
+    throw new Error("The radio network returned an invalid inventory snapshot.");
   }
 
   const client = await pool.connect();
@@ -2575,7 +2575,7 @@ async function assignPocstarsGroupToOrganization({ group_id, organization_id, un
       [groupId],
     );
     const group = groups[0];
-    if (!group) throw new Error("That POCSTARS group is not in the registry. Run a sync first.");
+    if (!group) throw new Error("That channel is not in the registry. Run a sync first.");
     const { rows: organizations } = await client.query(
       "SELECT id, name FROM organizations WHERE id = $1",
       [organization_id],
@@ -2590,7 +2590,7 @@ async function assignPocstarsGroupToOrganization({ group_id, organization_id, un
     );
     const existingChannel = existingChannels[0];
     if (existingChannel && Number(existingChannel.organization_id) !== Number(organization_id)) {
-      throw new Error(`POCSTARS group ${group.name} is already claimed by ${existingChannel.organization_name}.`);
+      throw new Error(`Channel ${group.name} is already claimed by ${existingChannel.organization_name}.`);
     }
 
     let channelId: number;

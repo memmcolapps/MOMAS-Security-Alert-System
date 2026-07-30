@@ -16,8 +16,6 @@ const emptyOrg = {
   slug: "",
   all_states: false,
   states: [],
-  pocstars_company_id: "",
-  pocstars_company_name: "",
 };
 
 export function AdminOrganizationsRoute() {
@@ -83,12 +81,6 @@ export function AdminOrganizationsRoute() {
             <Field label="Slug">
               <input className="field-input" value={orgForm.slug} onChange={(event) => setOrgForm({ ...orgForm, slug: event.target.value })} placeholder="auto-created if blank" />
             </Field>
-            <Field label="POCSTARS company ID">
-              <input className="field-input font-mono" value={orgForm.pocstars_company_id} onChange={(event) => setOrgForm({ ...orgForm, pocstars_company_id: event.target.value })} placeholder="Optional vendor company ID" />
-            </Field>
-            <Field label="POCSTARS company name">
-              <input className="field-input" value={orgForm.pocstars_company_name} onChange={(event) => setOrgForm({ ...orgForm, pocstars_company_name: event.target.value })} placeholder="Optional vendor display name" />
-            </Field>
           </div>
           <StatePicker value={orgForm} onChange={setOrgForm} />
           {createMutation.error ? <p className="mt-3 text-xs text-ops-red">{createMutation.error.message}</p> : null}
@@ -141,12 +133,12 @@ export function AdminOrganizationsRoute() {
         </div>
       </section>
 
-      <PocstarsRegistryPanel organizations={organizations} />
+      <RadioNetworkPanel organizations={organizations} />
     </main>
   );
 }
 
-function PocstarsRegistryPanel({ organizations }) {
+function RadioNetworkPanel({ organizations }) {
   const queryClient = useQueryClient();
   const [assignTargets, setAssignTargets] = useState({});
 
@@ -182,16 +174,16 @@ function PocstarsRegistryPanel({ organizations }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="flex items-center gap-2 text-[13px] font-bold text-ops-green">
-            <Radio size={15} /> POCSTARS radio network
+            <Radio size={15} /> Radio network
           </h2>
           <p className="mt-1 text-[11px] text-neutral-500">
-            The whole radio network imports here first. Assign each POCSTARS group to a company; its radios follow automatically. Unassigned radios stay platform-only until you place them.
+            The whole radio network imports here first. Assign each channel to a company and its radios follow automatically. Unassigned radios stay platform-only until you place them.
           </p>
           <p className="mt-1 text-[11px] text-neutral-500">
             {dispatcher
-              ? `Dispatcher ${dispatcher.name || dispatcher.dispatcher_uid} (UID ${dispatcher.dispatcher_uid})${dispatcher.last_sync_at ? ` · Last sync ${new Date(dispatcher.last_sync_at).toLocaleString("en-GB")}` : ""}`
+              ? `Connected${dispatcher.last_sync_at ? ` · Last sync ${new Date(dispatcher.last_sync_at).toLocaleString("en-GB")}` : ""}`
               : "No sync has run yet."}
-            {registry && !registry.configured ? " · Live bridge not configured on this server." : ""}
+            {registry && !registry.configured ? " · Radio link not configured on this server." : ""}
           </p>
         </div>
         <button
@@ -199,7 +191,7 @@ function PocstarsRegistryPanel({ organizations }) {
           disabled={syncMutation.isPending || (registry && !registry.configured)}
           onClick={() => syncMutation.mutate()}
         >
-          <Radio size={13} /> {syncMutation.isPending ? "Syncing from POCSTARS…" : "Sync from POCSTARS"}
+          <Radio size={13} /> {syncMutation.isPending ? "Syncing radio network…" : "Sync radio network"}
         </button>
       </div>
 
@@ -217,8 +209,8 @@ function PocstarsRegistryPanel({ organizations }) {
           <table className="w-full text-left text-[11px]">
             <thead>
               <tr className="text-[10px] uppercase tracking-wide text-neutral-500">
-                <th className="py-2 pr-3">Group</th>
-                <th className="py-2 pr-3">POCSTARS ID</th>
+                <th className="py-2 pr-3">Channel</th>
+                <th className="py-2 pr-3">Network ID</th>
                 <th className="py-2 pr-3">Radios</th>
                 <th className="py-2 pr-3">Assigned to</th>
                 <th className="py-2" />
@@ -229,7 +221,7 @@ function PocstarsRegistryPanel({ organizations }) {
                 <tr key={group.group_id} className={group.active ? "" : "opacity-50"}>
                   <td className="py-2 pr-3 font-bold text-neutral-200">
                     {group.name}
-                    {group.active ? "" : " (gone from POCSTARS)"}
+                    {group.active ? "" : " (no longer on the network)"}
                   </td>
                   <td className="py-2 pr-3 font-mono text-neutral-400">{group.group_id}</td>
                   <td className="py-2 pr-3 text-neutral-400">{group.radio_count}</td>
@@ -269,7 +261,7 @@ function PocstarsRegistryPanel({ organizations }) {
       ) : registryQuery.isLoading ? (
         <p className="mt-4 text-[11px] text-neutral-500">Loading registry…</p>
       ) : (
-        <p className="mt-4 text-[11px] text-neutral-500">No POCSTARS groups imported yet. Run a sync to load the radio network.</p>
+        <p className="mt-4 text-[11px] text-neutral-500">No channels imported yet. Run a sync to load the radio network.</p>
       )}
 
       {poolRadios.length ? (

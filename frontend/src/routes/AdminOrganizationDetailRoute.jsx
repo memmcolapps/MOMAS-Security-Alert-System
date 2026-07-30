@@ -339,8 +339,6 @@ function SettingsSection({ organization, onSaved }) {
   const [draft, setDraft] = useState({
     name: organization.name,
     status: organization.status,
-    pocstars_company_id: organization.pocstars_company_id || "",
-    pocstars_company_name: organization.pocstars_company_name || "",
   });
   const mutation = useMutation({
     mutationFn: (payload) => updateOrganizationAccess(organization.id, payload),
@@ -359,12 +357,6 @@ function SettingsSection({ organization, onSaved }) {
             <option value="suspended">Suspended</option>
           </select>
         </Field>
-        <Field label="POCSTARS company ID">
-          <input className="field-input font-mono" value={draft.pocstars_company_id} onChange={(event) => setDraft({ ...draft, pocstars_company_id: event.target.value })} placeholder="Vendor company ID" />
-        </Field>
-        <Field label="POCSTARS company name">
-          <input className="field-input" value={draft.pocstars_company_name} onChange={(event) => setDraft({ ...draft, pocstars_company_name: event.target.value })} placeholder="Vendor display name" />
-        </Field>
       </div>
       <div className="mt-3 flex items-center gap-3">
         <button
@@ -378,10 +370,10 @@ function SettingsSection({ organization, onSaved }) {
       </div>
 
       <div className="mt-6 border-t border-white/10 pt-5">
-        <h3 className="text-[12px] font-bold text-ops-green">POCSTARS radios</h3>
+        <h3 className="text-[12px] font-bold text-ops-green">Radios</h3>
         <p className="mt-1 max-w-2xl text-[11px] text-neutral-500">
-          Radios import into the platform-level POCSTARS registry on the Companies page.
-          Assign a POCSTARS group to this company there and its radios move in automatically.
+          Radios import into the platform-level radio network registry on the Companies page.
+          Assign a channel to this company there and its radios move in automatically.
         </p>
       </div>
     </section>
