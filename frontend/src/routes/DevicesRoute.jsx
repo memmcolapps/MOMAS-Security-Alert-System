@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, MessageSquare, Mic, Phone, PhoneOff, Plus, Radio, RefreshCw, Save, Search, Send, Trash2, Volume2, X } from "lucide-react";
+import { Check, MessageSquare, Mic, Phone, PhoneOff, Plus, Radio, Save, Search, Send, Trash2, Volume2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   deleteDevice,
@@ -7,8 +7,6 @@ import {
   getOrgAdmin,
   listDevices,
   listOrganizations,
-  listRadioRecordings,
-  radioRecordingAudioUrl,
   saveDevice,
   sendRadioMessage,
 } from "../lib/api";
@@ -46,10 +44,6 @@ function formatRadioTime(value) {
   });
 }
 
-function formatDuration(milliseconds) {
-  const seconds = Math.max(0, Math.round(Number(milliseconds || 0) / 1000));
-  return `${seconds}s`;
-}
 
 export function DevicesRoute() {
   const queryClient = useQueryClient();
@@ -135,15 +129,6 @@ export function DevicesRoute() {
     [radioMessage],
   );
 
-  const radioTrafficQuery = useQuery({
-    queryKey: ["radio-recordings", selectedRadio?.device_id],
-    queryFn: () => listRadioRecordings({
-      speakerUserId: selectedRadio.device_id,
-      pageSize: 50,
-    }),
-    enabled: Boolean(selectedRadio?.device_id),
-    refetchInterval: selectedRadio ? 3_000 : false,
-  });
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -490,10 +475,10 @@ export function DevicesRoute() {
         <>
           <button
             aria-label="Close radio console"
-            className="fixed inset-0 z-[998] cursor-default bg-black/60"
+            className="fixed inset-x-0 bottom-0 top-20 z-[998] cursor-default bg-black/60"
             onClick={() => setSelectedRadio(null)}
           />
-          <aside className="fixed inset-y-0 right-0 z-[999] flex w-full max-w-xl flex-col border-l border-green-500/25 bg-[#090d0b] shadow-2xl">
+          <aside className="fixed bottom-0 right-0 top-20 z-[999] flex w-full max-w-md flex-col border-l border-green-500/25 bg-[#090d0b] shadow-2xl">
             <header className="flex items-start justify-between border-b border-white/10 px-5 py-4">
               <div>
                 <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-ops-green">Radio console</p>
@@ -516,7 +501,7 @@ export function DevicesRoute() {
               </button>
             </header>
 
-            <div className="flex-1 space-y-5 overflow-y-auto p-5">
+            <div className="flex-1 space-y-4 overflow-y-auto p-4">
               <section className="rounded-lg border border-green-500/25 bg-green-500/[0.04] p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -556,7 +541,7 @@ export function DevicesRoute() {
                   ) : liveRadio.mode !== "private" ? (
                     <div className="space-y-2">
                       <button
-                        className="inline-flex min-h-20 w-full items-center justify-center gap-2 rounded-md bg-ops-green px-4 py-3 text-xs font-bold text-black hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-ops-green px-4 py-2.5 text-xs font-bold text-black hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40"
                         disabled={liveRadio.callState === "connecting"}
                         onClick={() => liveRadio.callRadio(selectedRadio)}
                       >
@@ -622,47 +607,6 @@ export function DevicesRoute() {
                 </div>
               </section>
 
-              <section className="rounded-lg border border-white/10 bg-white/[0.025] p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <div>
-                    <h3 className="flex items-center gap-2 text-xs font-bold text-neutral-200">
-                      <Volume2 size={14} className="text-ops-green" /> Incoming voice
-                    </h3>
-                    <p className="mt-1 text-[10px] text-neutral-600">New clips appear after the handset releases push-to-talk.</p>
-                  </div>
-                  <button
-                    className="rounded border border-white/10 p-2 text-neutral-500 hover:border-ops-green hover:text-ops-green disabled:opacity-50"
-                    disabled={radioTrafficQuery.isFetching}
-                    onClick={() => radioTrafficQuery.refetch()}
-                    title="Refresh radio traffic"
-                  >
-                    <RefreshCw size={13} className={radioTrafficQuery.isFetching ? "animate-spin" : ""} />
-                  </button>
-                </div>
-
-                {radioTrafficQuery.error ? (
-                  <p className="rounded bg-red-500/10 px-3 py-2 text-[11px] text-red-300">{radioTrafficQuery.error.message}</p>
-                ) : null}
-                {radioTrafficQuery.isLoading ? (
-                  <p className="py-5 text-center text-[11px] text-neutral-600">Loading radio traffic...</p>
-                ) : null}
-                <div className="space-y-3">
-                  {(radioTrafficQuery.data?.recordings || []).map((recording) => (
-                    <article className="rounded-md border border-white/10 bg-black/25 p-3" key={recording.id}>
-                      <div className="mb-2 flex items-center justify-between gap-3 text-[10px]">
-                        <span className="font-semibold text-neutral-300">{recording.speakerName || selectedRadio.name || `Radio ${recording.speakerUserId}`}</span>
-                        <span className="text-neutral-600">{formatRadioTime(recording.startedAt)} · {formatDuration(recording.durationMs)}</span>
-                      </div>
-                      <audio className="h-8 w-full" controls preload="none" src={radioRecordingAudioUrl(recording.playbackToken)}>
-                        Your browser does not support audio playback.
-                      </audio>
-                    </article>
-                  ))}
-                </div>
-                {!radioTrafficQuery.isLoading && !(radioTrafficQuery.data?.recordings || []).length ? (
-                  <p className="py-5 text-center text-[11px] text-neutral-600">No recent voice traffic from this radio.</p>
-                ) : null}
-              </section>
 
               {(sentMessages[selectedRadio.device_id] || []).length ? (
                 <section>
