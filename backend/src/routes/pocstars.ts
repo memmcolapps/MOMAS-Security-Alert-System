@@ -518,7 +518,7 @@ router.get("/devices", async (c) => {
 
 router.get("/radio/channels", async (c) => {
   try {
-    const channels = await db.listMonitorableUnits(orgScope(c));
+    const channels = await db.listMonitorableChannels(orgScope(c));
     return c.json({ channels });
   } catch (error) {
     return c.json(jsonError(error), 500);

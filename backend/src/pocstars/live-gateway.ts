@@ -226,14 +226,14 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
   }
 }
 
-// A user may monitor a division when it is inside their scope: platform admins
-// any mapped unit, org members units of their org, unit-scoped members only
-// their own unit.
-async function monitorableUnit(user: any, unitId: number) {
+// A user may monitor a channel when it is inside their scope: platform admins
+// any organization's channels, org members their own, unit-scoped members only
+// channels pinned to their unit. Channels are never shared across orgs.
+async function monitorableChannel(user: any, channelId: number) {
   const scope = operatorScope(user);
   if (scope.organizationId === -1) return null;
-  const units = await db.listMonitorableUnits(scope);
-  return units.find((unit: any) => Number(unit.id) === unitId) || null;
+  const channels = await db.listMonitorableChannels(scope);
+  return channels.find((channel: any) => Number(channel.id) === channelId) || null;
 }
 
 async function startMonitor(ws: WSContext, user: any, message: any) {
@@ -255,28 +255,23 @@ async function startMonitor(ws: WSContext, user: any, message: any) {
     return;
   }
 
-  // Preferred: monitor a division directly. Legacy: derive it from a device.
-  let unit: any = null;
-  if (message.unitId !== undefined) {
-    unit = await monitorableUnit(user, Number(message.unitId));
-  } else if (message.deviceId) {
-    const device = await visibleDevice(user, String(message.deviceId));
-    if (device?.unit_id) unit = await monitorableUnit(user, Number(device.unit_id));
-  }
-  if (!unit) {
+  const channel = message.channelId !== undefined
+    ? await monitorableChannel(user, Number(message.channelId))
+    : null;
+  if (!channel) {
     send(ws, {
       type: "error",
       code: "forbidden",
-      message: "That division is outside your operational scope or not mapped yet.",
+      message: "That channel is outside your operational scope.",
     });
     return;
   }
-  const groupId = Number(unit.pocstars_group_id);
+  const groupId = Number(channel.pocstars_group_id);
   if (!Number.isSafeInteger(groupId) || groupId <= 0) {
     send(ws, {
       type: "error",
-      code: "division_not_mapped",
-      message: "This division is not mapped to a POCSTARS group yet.",
+      code: "channel_not_provisioned",
+      message: "This channel is not live on the radio network yet.",
     });
     return;
   }
@@ -286,14 +281,14 @@ async function startMonitor(ws: WSContext, user: any, message: any) {
     ws,
     client,
     device: {
-      device_id: `unit:${unit.id}`,
-      organization_id: unit.organization_id,
-      unit_id: unit.id,
-      unit_name: unit.name,
+      device_id: `channel:${channel.id}`,
+      organization_id: channel.organization_id,
+      unit_id: channel.unit_id,
+      unit_name: channel.name,
     },
     user,
     mode: "monitor",
-    divisionName: unit.name,
+    divisionName: channel.name,
     speakerNames: new Map(),
     pttHeld: false,
     microphoneGranted: false,
@@ -310,18 +305,18 @@ async function startMonitor(ws: WSContext, user: any, message: any) {
     send(ws, {
       type: "monitor.state",
       state: "connecting",
-      division: { id: unit.id, name: unit.name },
+      channel: { id: channel.id, name: channel.name },
     });
     await client.connect();
     const group = await client.startWatchGroup(groupId);
     await audit(session, "radio.monitor.start", {
-      unit_id: unit.id,
+      channel_id: channel.id,
       pocstars_group_id: group.gid,
     });
     send(ws, {
       type: "monitor.state",
       state: "connected",
-      division: { id: unit.id, name: unit.name },
+      channel: { id: channel.id, name: channel.name },
       group: { id: group.gid, name: group.name },
     });
   } catch (error) {

@@ -39,6 +39,31 @@ router.post("/sync", async (c) => {
   }
 });
 
+// Allocation is a platform-admin act: a handset is physical and belongs to
+// exactly one organization. Orgs arrange their allocated radios themselves.
+router.post("/devices/:device_id/allocate", async (c) => {
+  const user = (c as any).get("user");
+  const body = await c.req.json().catch(() => ({}));
+  const organizationId = body.organization_id === null ? null : Number(body.organization_id);
+  if (organizationId !== null && (!Number.isSafeInteger(organizationId) || organizationId <= 0)) {
+    return c.json({ error: "Choose the organization this radio belongs to." }, 400);
+  }
+  try {
+    const device = await db.allocateDeviceToOrganization(c.req.param("device_id"), organizationId);
+    await db.createAuditLog({
+      organization_id: organizationId,
+      actor_user_id: user?.id || null,
+      action: organizationId ? "radio.allocate" : "radio.deallocate",
+      target_type: "device",
+      target_id: device.device_id,
+      metadata: { organization_id: organizationId },
+    });
+    return c.json({ device });
+  } catch (error) {
+    return c.json(jsonError(error), 409);
+  }
+});
+
 router.post("/groups/:group_id/assign", async (c) => {
   const user = (c as any).get("user");
   const body = await c.req.json().catch(() => ({}));

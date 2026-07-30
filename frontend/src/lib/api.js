@@ -96,6 +96,45 @@ export function getRadioChannels() {
   return request("/api/pocstars/radio/channels");
 }
 
+export function listOrgChannels() {
+  return request("/api/org/channels");
+}
+
+export function createOrgChannel(payload) {
+  return request("/api/org/channels", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateOrgChannel(channelId, payload) {
+  return request(`/api/org/channels/${channelId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteOrgChannel(channelId) {
+  return request(`/api/org/channels/${channelId}`, { method: "DELETE" });
+}
+
+export function listOrgChannelDevices(channelId) {
+  return request(`/api/org/channels/${channelId}/devices`);
+}
+
+export function setOrgChannelDevice(channelId, deviceId, member) {
+  return request(`/api/org/channels/${channelId}/devices/${deviceId}`, {
+    method: member ? "POST" : "DELETE",
+  });
+}
+
+export function allocateRadioToOrganization(deviceId, organizationId) {
+  return request(`/api/pocstars/admin/devices/${deviceId}/allocate`, {
+    method: "POST",
+    body: JSON.stringify({ organization_id: organizationId }),
+  });
+}
+
 export function getPocstarsRegistry() {
   return request("/api/pocstars/admin/registry");
 }

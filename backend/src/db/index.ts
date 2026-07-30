@@ -225,6 +225,30 @@ async function init() {
       updated_at      TIMESTAMPTZ DEFAULT NOW()
     );
 
+    -- A channel is a talk group: who hears whom. It belongs to one organization
+    -- (never shared across orgs) and is arranged by that org's admins. Units
+    -- stay separate because they answer a different question - who works
+    -- together and who may see what - and a radio can sit on several channels
+    -- while living in one unit.
+    CREATE TABLE IF NOT EXISTS channels (
+      id                SERIAL PRIMARY KEY,
+      organization_id   INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      unit_id           INTEGER REFERENCES organization_units(id) ON DELETE SET NULL,
+      name              TEXT NOT NULL,
+      pocstars_group_id TEXT,
+      provision_state   TEXT NOT NULL DEFAULT 'ready',
+      active            BOOLEAN NOT NULL DEFAULT true,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS channel_devices (
+      channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+      device_id  TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+      added_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (channel_id, device_id)
+    );
+
     CREATE TABLE IF NOT EXISTS pocstars_radio_group_memberships (
       device_id    TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
       group_id     TEXT NOT NULL,
@@ -465,6 +489,22 @@ async function init() {
         WHERE pocstars_dispatcher_uid IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_pocstars_membership_group
         ON pocstars_radio_group_memberships(group_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_channels_pocstars_group
+        ON channels(pocstars_group_id)
+        WHERE pocstars_group_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_channels_organization
+        ON channels(organization_id);
+      -- Units used to double as channels; move any existing vendor mapping onto
+      -- a channel row so the tenant UI never has to show a vendor group id.
+      INSERT INTO channels (organization_id, unit_id, name, pocstars_group_id)
+      SELECT ou.organization_id, ou.id,
+             COALESCE(ou.pocstars_group_name, ou.name),
+             ou.pocstars_group_id
+        FROM organization_units ou
+       WHERE ou.pocstars_group_id IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM channels c WHERE c.pocstars_group_id = ou.pocstars_group_id
+         );
       CREATE INDEX IF NOT EXISTS idx_devices_org ON devices(organization_id);
       CREATE INDEX IF NOT EXISTS idx_devices_unit ON devices(unit_id);
       CREATE INDEX IF NOT EXISTS idx_source_items_created ON source_items(created_at DESC);
@@ -2095,31 +2135,168 @@ async function listDevices(scope: any = {}) {
   return rows;
 }
 
-// Divisions the user may live-monitor: units mapped to a POCSTARS group,
-// narrowed to the caller's scope. Platform admins see every mapped unit.
-async function listMonitorableUnits(scope: any = {}) {
+// Channels the caller may live-monitor. Platform admins see every org's
+// channels; org members see their own; unit-scoped members only channels
+// pinned to their unit (or org-wide ones). Channels are never cross-org.
+async function listMonitorableChannels(scope: any = {}) {
   const vals: any[] = [];
-  const conds = ["ou.pocstars_group_id IS NOT NULL"];
+  const conds = ["c.active", "c.pocstars_group_id IS NOT NULL"];
   if (scope.organizationId) {
-    conds.push(`ou.organization_id = $${vals.length + 1}`);
+    conds.push(`c.organization_id = $${vals.length + 1}`);
     vals.push(scope.organizationId);
   }
   if (scope.unitId) {
-    conds.push(`ou.id = $${vals.length + 1}`);
+    conds.push(`(c.unit_id IS NULL OR c.unit_id = $${vals.length + 1})`);
     vals.push(scope.unitId);
   }
   const { rows } = await pool.query(
-    `SELECT ou.id, ou.name, ou.organization_id, ou.pocstars_group_id, ou.pocstars_group_name,
+    `SELECT c.id, c.name, c.organization_id, c.unit_id, c.pocstars_group_id,
             o.name AS organization_name,
-            (SELECT COUNT(*)::int FROM devices d
-              WHERE d.unit_id = ou.id AND d.active AND d.pocstars_online) AS online_count
-       FROM organization_units ou
-       JOIN organizations o ON o.id = ou.organization_id
+            ou.name AS unit_name,
+            (SELECT COUNT(*)::int FROM channel_devices cd
+               JOIN devices d ON d.device_id = cd.device_id
+              WHERE cd.channel_id = c.id AND d.active AND d.pocstars_online) AS online_count
+       FROM channels c
+       JOIN organizations o ON o.id = c.organization_id
+       LEFT JOIN organization_units ou ON ou.id = c.unit_id
       WHERE ${conds.join(" AND ")}
-      ORDER BY o.name, ou.name`,
+      ORDER BY o.name, c.name`,
     vals,
   );
   return rows;
+}
+
+async function listChannels(organizationId: number) {
+  const { rows } = await pool.query(
+    `SELECT c.*, ou.name AS unit_name,
+            (SELECT COUNT(*)::int FROM channel_devices cd WHERE cd.channel_id = c.id) AS device_count,
+            (SELECT COUNT(*)::int FROM channel_devices cd
+               JOIN devices d ON d.device_id = cd.device_id
+              WHERE cd.channel_id = c.id AND d.active AND d.pocstars_online) AS online_count
+       FROM channels c
+       LEFT JOIN organization_units ou ON ou.id = c.unit_id
+      WHERE c.organization_id = $1
+      ORDER BY c.active DESC, c.name`,
+    [organizationId],
+  );
+  return rows;
+}
+
+async function getChannel(channelId: number) {
+  const { rows } = await pool.query("SELECT * FROM channels WHERE id = $1", [channelId]);
+  return rows[0] ?? null;
+}
+
+// A newly created channel has no vendor group yet: it is provisioned into
+// POCSTARS separately, and cannot carry audio until it is.
+async function createChannel({ organization_id, name, unit_id }: {
+  organization_id: number; name: string; unit_id?: number | null;
+}) {
+  const { rows } = await pool.query(
+    `INSERT INTO channels (organization_id, unit_id, name, provision_state)
+     VALUES ($1,$2,$3,'pending')
+     RETURNING *`,
+    [organization_id, unit_id || null, name],
+  );
+  return rows[0];
+}
+
+async function updateChannel(channelId: number, { name, unit_id, active }: any) {
+  const { rows } = await pool.query(
+    `UPDATE channels
+        SET name = COALESCE($2, name),
+            unit_id = CASE WHEN $3::boolean THEN $4 ELSE unit_id END,
+            active = COALESCE($5, active),
+            updated_at = NOW()
+      WHERE id = $1
+      RETURNING *`,
+    [channelId, name ?? null, unit_id !== undefined, unit_id ?? null, active ?? null],
+  );
+  return rows[0] ?? null;
+}
+
+async function deleteChannel(channelId: number) {
+  const { rowCount } = await pool.query("DELETE FROM channels WHERE id = $1", [channelId]);
+  return rowCount > 0;
+}
+
+async function listChannelDevices(channelId: number) {
+  const { rows } = await pool.query(
+    `SELECT d.device_id, d.name, d.pocstars_online, d.active
+       FROM channel_devices cd
+       JOIN devices d ON d.device_id = cd.device_id
+      WHERE cd.channel_id = $1
+      ORDER BY d.name`,
+    [channelId],
+  );
+  return rows;
+}
+
+// Membership changes are validated against the channel's own organization so a
+// tenant can only ever arrange radios that were allocated to it.
+async function setChannelDevice(channelId: number, deviceId: string, member: boolean) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: channels } = await client.query(
+      "SELECT organization_id FROM channels WHERE id = $1 FOR UPDATE",
+      [channelId],
+    );
+    const channel = channels[0];
+    if (!channel) throw new Error("That channel could not be found.");
+    const { rows: devices } = await client.query(
+      "SELECT organization_id FROM devices WHERE device_id = $1",
+      [deviceId],
+    );
+    const device = devices[0];
+    if (!device) throw new Error("That radio could not be found.");
+    if (Number(device.organization_id) !== Number(channel.organization_id)) {
+      throw new Error("That radio belongs to a different organization.");
+    }
+    if (member) {
+      await client.query(
+        `INSERT INTO channel_devices (channel_id, device_id) VALUES ($1,$2)
+         ON CONFLICT DO NOTHING`,
+        [channelId, deviceId],
+      );
+    } else {
+      await client.query(
+        "DELETE FROM channel_devices WHERE channel_id = $1 AND device_id = $2",
+        [channelId, deviceId],
+      );
+    }
+    await client.query("COMMIT");
+    return true;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// Platform-admin allocation: a radio is a physical handset and belongs to
+// exactly one organization. Moving it clears its channel memberships, which
+// belong to the previous owner.
+async function allocateDeviceToOrganization(deviceId: string, organizationId: number | null) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `UPDATE devices SET organization_id = $2, unit_id = NULL
+        WHERE device_id = $1 RETURNING *`,
+      [deviceId, organizationId],
+    );
+    if (!rows[0]) throw new Error("That radio could not be found.");
+    await client.query("DELETE FROM channel_devices WHERE device_id = $1", [deviceId]);
+    await client.query("COMMIT");
+    return rows[0];
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function hasPocstarsDispatchers() {
@@ -2172,10 +2349,10 @@ async function syncPocstarsPlatformInventory(inventory: any) {
       );
       if (rows[0]?.inserted) groupsCreated += 1;
       else groupsUpdated += 1;
-      // Keep already-assigned units' display names in step with the vendor.
+      // Keep an already-claimed channel's name in step with the vendor.
       await client.query(
-        `UPDATE organization_units
-            SET name = $2, pocstars_group_name = $2, updated_at = NOW()
+        `UPDATE channels
+            SET name = $2, updated_at = NOW()
           WHERE pocstars_group_id = $1 AND name IS DISTINCT FROM $2`,
         [group.id, group.name],
       );
@@ -2189,17 +2366,18 @@ async function syncPocstarsPlatformInventory(inventory: any) {
       );
     }
 
-    // Existing organization units mapped to POCSTARS groups (the admin's
-    // assignments) — radios follow these automatically.
-    const { rows: mappedUnits } = await client.query(
-      `SELECT id, organization_id, pocstars_group_id FROM organization_units
+    // Channels already claimed by an organization. Radios in these groups
+    // follow the channel's owner automatically.
+    const { rows: claimedChannels } = await client.query(
+      `SELECT id, organization_id, unit_id, pocstars_group_id FROM channels
         WHERE pocstars_group_id IS NOT NULL`,
     );
-    const unitByGroup = new Map<string, { unitId: number; organizationId: number }>();
-    for (const unit of mappedUnits) {
-      unitByGroup.set(String(unit.pocstars_group_id), {
-        unitId: Number(unit.id),
-        organizationId: Number(unit.organization_id),
+    const unitByGroup = new Map<string, { channelId: number; unitId: number | null; organizationId: number }>();
+    for (const channel of claimedChannels) {
+      unitByGroup.set(String(channel.pocstars_group_id), {
+        channelId: Number(channel.id),
+        unitId: channel.unit_id ? Number(channel.unit_id) : null,
+        organizationId: Number(channel.organization_id),
       });
     }
 
@@ -2302,6 +2480,27 @@ async function syncPocstarsPlatformInventory(inventory: any) {
       if (existing) radiosUpdated += 1;
       else radiosCreated += 1;
 
+      // Mirror vendor group membership onto the claimed channels of the radio's
+      // own organization, so a tenant's channel list reflects the radio network
+      // without anyone re-entering it.
+      await client.query(
+        `DELETE FROM channel_devices cd USING channels c
+          WHERE cd.channel_id = c.id AND cd.device_id = $1
+            AND c.pocstars_group_id IS NOT NULL`,
+        [radioId],
+      );
+      if (organizationId) {
+        for (const groupId of membershipIds) {
+          const target = unitByGroup.get(groupId);
+          if (!target || target.organizationId !== organizationId) continue;
+          await client.query(
+            `INSERT INTO channel_devices (channel_id, device_id) VALUES ($1,$2)
+             ON CONFLICT DO NOTHING`,
+            [target.channelId, radioId],
+          );
+        }
+      }
+
       await client.query(
         "DELETE FROM pocstars_radio_group_memberships WHERE device_id = $1",
         [radioId],
@@ -2383,43 +2582,50 @@ async function assignPocstarsGroupToOrganization({ group_id, organization_id, un
     );
     if (!organizations[0]) throw new Error("The selected MOMAS organization could not be found.");
 
-    const { rows: existingUnits } = await client.query(
-      `SELECT ou.id, ou.organization_id, o.name AS organization_name
-         FROM organization_units ou JOIN organizations o ON o.id = ou.organization_id
-        WHERE ou.pocstars_group_id = $1`,
+    const { rows: existingChannels } = await client.query(
+      `SELECT c.id, c.organization_id, o.name AS organization_name
+         FROM channels c JOIN organizations o ON o.id = c.organization_id
+        WHERE c.pocstars_group_id = $1`,
       [groupId],
     );
-    const existingUnit = existingUnits[0];
-    if (existingUnit && Number(existingUnit.organization_id) !== Number(organization_id)) {
-      throw new Error(`POCSTARS group ${group.name} is already assigned to ${existingUnit.organization_name}.`);
+    const existingChannel = existingChannels[0];
+    if (existingChannel && Number(existingChannel.organization_id) !== Number(organization_id)) {
+      throw new Error(`POCSTARS group ${group.name} is already claimed by ${existingChannel.organization_name}.`);
     }
 
-    let unitId: number;
-    if (existingUnit) {
-      unitId = Number(existingUnit.id);
+    let channelId: number;
+    if (existingChannel) {
+      channelId = Number(existingChannel.id);
     } else {
       const { rows } = await client.query(
-        `INSERT INTO organization_units (
-           organization_id, name, type, pocstars_group_id, pocstars_group_name
-         )
-         VALUES ($1,$2,'POCSTARS group',$3,$4)
+        `INSERT INTO channels (organization_id, name, pocstars_group_id, provision_state)
+         VALUES ($1,$2,$3,'ready')
          RETURNING id`,
-        [organization_id, unit_name || group.name || `Group ${groupId}`, groupId, group.name],
+        [organization_id, unit_name || group.name || `Channel ${groupId}`, groupId],
       );
-      unitId = Number(rows[0].id);
+      channelId = Number(rows[0].id);
     }
 
-    // Move this group's pool radios into the organization. Radios already owned
-    // by an organization are left where they are.
+    // Claim this group's unallocated radios for the organization, then mirror
+    // their membership onto the new channel.
     const { rows: moved } = await client.query(
       `UPDATE devices d
-          SET organization_id = $2, unit_id = $3
+          SET organization_id = $2
          FROM pocstars_radio_group_memberships m
         WHERE m.device_id = d.device_id
           AND m.group_id = $1
           AND d.organization_id IS NULL
         RETURNING d.device_id`,
-      [groupId, organization_id, unitId],
+      [groupId, organization_id],
+    );
+    await client.query(
+      `INSERT INTO channel_devices (channel_id, device_id)
+       SELECT $1, d.device_id
+         FROM pocstars_radio_group_memberships m
+         JOIN devices d ON d.device_id = m.device_id
+        WHERE m.group_id = $2 AND d.organization_id = $3
+       ON CONFLICT DO NOTHING`,
+      [channelId, groupId, organization_id],
     );
 
     await client.query("COMMIT");
@@ -2427,7 +2633,7 @@ async function assignPocstarsGroupToOrganization({ group_id, organization_id, un
       group_id: groupId,
       group_name: group.name,
       organization_id: Number(organization_id),
-      unit_id: unitId,
+      channel_id: channelId,
       radiosMoved: moved.length,
     };
   } catch (error) {
@@ -2966,8 +3172,8 @@ async function createOrganizationUnit({
   state,
   lga,
   location,
-  pocstars_group_id,
-  pocstars_group_name,
+  pocstars_group_id = null,
+  pocstars_group_name = null,
 }) {
   const { rows } = await pool.query(
     `INSERT INTO organization_units (
@@ -3140,7 +3346,15 @@ export {
   assignDeviceToOrganization,
   assignDeviceToUnit,
   hasPocstarsDispatchers,
-  listMonitorableUnits,
+  listMonitorableChannels,
+  listChannels,
+  getChannel,
+  createChannel,
+  updateChannel,
+  deleteChannel,
+  listChannelDevices,
+  setChannelDevice,
+  allocateDeviceToOrganization,
   syncPocstarsPlatformInventory,
   assignPocstarsGroupToOrganization,
   listPocstarsRegistry,

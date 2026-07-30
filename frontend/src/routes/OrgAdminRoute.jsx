@@ -1,19 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, ClipboardList, Radio, Save, Trash2, UserPlus, UsersRound } from "lucide-react";
+import { Building2, ClipboardList, Plus, Radio, RadioTower, Save, Trash2, UserPlus, UsersRound, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   addOrgAdminUser,
   assignDeviceUnit,
+  createOrgChannel,
   createOrgUnit,
+  deleteOrgChannel,
   deleteOrgUnit,
   getMe,
   getOrgAdmin,
+  listOrgChannelDevices,
+  listOrgChannels,
   removeOrgAdminUser,
+  setOrgChannelDevice,
+  updateOrgChannel,
   updateOrgUnit,
 } from "../lib/api";
 import { NIGERIAN_STATES, deviceTypeLabel } from "../lib/domain";
 
 const TABS = [
+  { id: "channels", label: "Channels", icon: RadioTower },
   { id: "units", label: "Units", icon: Building2 },
   { id: "users", label: "Users", icon: UsersRound },
   { id: "devices", label: "Devices", icon: Radio },
@@ -30,7 +37,7 @@ const ROLES = [
 
 export function OrgAdminRoute() {
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState("units");
+  const [tab, setTab] = useState("channels");
   const orgQuery = useQuery({ queryKey: ["org-admin"], queryFn: getOrgAdmin });
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
   const data = orgQuery.data || {};
@@ -71,6 +78,7 @@ export function OrgAdminRoute() {
         })}
       </div>
 
+      {tab === "channels" ? <ChannelsSection devices={data.devices || []} units={data.units || []} canManage={canCreateUnits} /> : null}
       {tab === "units" ? <UnitsSection units={data.units || []} canCreateUnits={canCreateUnits} onChanged={refresh} /> : null}
       {tab === "users" ? <UsersSection users={data.users || []} units={data.units || []} onChanged={refresh} /> : null}
       {tab === "devices" ? <DevicesSection devices={data.devices || []} units={data.units || []} onChanged={refresh} /> : null}
@@ -91,8 +99,6 @@ function UnitsSection({ units, canCreateUnits, onChanged }) {
     state: "",
     lga: "",
     location: "",
-    pocstars_group_id: "",
-    pocstars_group_name: "",
   };
   const [form, setForm] = useState(emptyUnit);
   const createMutation = useMutation({
@@ -138,12 +144,6 @@ function UnitsSection({ units, canCreateUnits, onChanged }) {
           <Field label="Location">
             <input className="field-input" value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} />
           </Field>
-          <Field label="POCSTARS group ID">
-            <input className="field-input font-mono" value={form.pocstars_group_id} onChange={(event) => setForm({ ...form, pocstars_group_id: event.target.value })} placeholder="Required for live listening" />
-          </Field>
-          <Field label="POCSTARS group name">
-            <input className="field-input" value={form.pocstars_group_name} onChange={(event) => setForm({ ...form, pocstars_group_name: event.target.value })} placeholder="Optional display name" />
-          </Field>
         </div>
         {createMutation.error ? <p className="mt-2 text-xs text-ops-red">{createMutation.error.message}</p> : null}
         <button className="mt-4 inline-flex items-center gap-2 rounded bg-ops-red px-4 py-2 text-xs font-bold text-black disabled:opacity-50" disabled={createMutation.isPending}>
@@ -161,28 +161,7 @@ function UnitsSection({ units, canCreateUnits, onChanged }) {
 }
 
 function UnitRow({ unit, onChanged }) {
-  const [editing, setEditing] = useState(false);
-  const [mapping, setMapping] = useState({
-    pocstars_group_id: unit.pocstars_group_id || "",
-    pocstars_group_name: unit.pocstars_group_name || "",
-  });
   const deleteMutation = useMutation({ mutationFn: () => deleteOrgUnit(unit.id), onSuccess: onChanged });
-  const updateMutation = useMutation({
-    mutationFn: () => updateOrgUnit(unit.id, {
-      parent_unit_id: unit.parent_unit_id || null,
-      name: unit.name,
-      type: unit.type || null,
-      state: unit.state || null,
-      lga: unit.lga || null,
-      location: unit.location || null,
-      pocstars_group_id: mapping.pocstars_group_id.trim() || null,
-      pocstars_group_name: mapping.pocstars_group_name.trim() || null,
-    }),
-    onSuccess: () => {
-      setEditing(false);
-      onChanged();
-    },
-  });
   return (
     <article className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
       <div className="min-w-0 flex-1">
@@ -190,29 +169,8 @@ function UnitRow({ unit, onChanged }) {
         <p className="text-[11px] text-neutral-500">
           {unit.type || "Unit"} · {unit.parent_name || "top level"} · {unit.state || "all states"} · {unit.user_count || 0} users · {unit.device_count || 0} devices
         </p>
-        <p className="mt-1 text-[10px] text-neutral-600">
-          POCSTARS group: {unit.pocstars_group_id
-            ? `${unit.pocstars_group_name || "Group"} (${unit.pocstars_group_id})`
-            : "not mapped"}
-        </p>
-        {editing ? (
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            <input className="field-input font-mono" value={mapping.pocstars_group_id} onChange={(event) => setMapping({ ...mapping, pocstars_group_id: event.target.value })} placeholder="POCSTARS group ID" />
-            <input className="field-input" value={mapping.pocstars_group_name} onChange={(event) => setMapping({ ...mapping, pocstars_group_name: event.target.value })} placeholder="POCSTARS group name" />
-            <div className="flex gap-2 sm:col-span-2">
-              <button className="rounded bg-ops-green px-3 py-1.5 text-[10px] font-bold text-black disabled:opacity-50" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate()}>
-                {updateMutation.isPending ? "Saving…" : "Save mapping"}
-              </button>
-              <button className="rounded border border-white/10 px-3 py-1.5 text-[10px] text-neutral-400" onClick={() => setEditing(false)}>Cancel</button>
-            </div>
-            {updateMutation.error ? <p className="text-[10px] text-ops-red sm:col-span-2">{updateMutation.error.message}</p> : null}
-          </div>
-        ) : null}
       </div>
       <div className="flex gap-2">
-        <button className="rounded border border-green-500/25 px-2 py-1 text-[10px] text-ops-green" onClick={() => setEditing((value) => !value)}>
-          Map group
-        </button>
         <button className="inline-flex items-center gap-1 rounded border border-red-500/20 px-2 py-1 text-[10px] text-red-400/70 hover:border-ops-red hover:text-ops-red" onClick={() => {
           if (window.confirm(`Remove ${unit.name}?`)) deleteMutation.mutate();
         }}>
@@ -220,6 +178,170 @@ function UnitRow({ unit, onChanged }) {
         </button>
       </div>
     </article>
+  );
+}
+
+// Channels are this organization's own talk groups. Radios allocated to the org
+// by the platform admin are arranged here; the vendor group id never surfaces.
+function ChannelsSection({ devices, units, canManage }) {
+  const queryClient = useQueryClient();
+  const [form, setForm] = useState({ name: "", unit_id: "" });
+  const [openChannelId, setOpenChannelId] = useState(null);
+
+  const channelsQuery = useQuery({ queryKey: ["org-channels"], queryFn: listOrgChannels });
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["org-channels"] });
+
+  const createMutation = useMutation({
+    mutationFn: createOrgChannel,
+    onSuccess: () => { setForm({ name: "", unit_id: "" }); refresh(); },
+  });
+  const renameMutation = useMutation({
+    mutationFn: ({ id, name }) => updateOrgChannel(id, { name }),
+    onSuccess: refresh,
+  });
+  const removeMutation = useMutation({ mutationFn: deleteOrgChannel, onSuccess: refresh });
+
+  const channels = channelsQuery.data?.channels || [];
+
+  return (
+    <section className="space-y-5">
+      {canManage ? (
+        <form
+          className="glass-panel rounded-lg p-5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            createMutation.mutate({ name: form.name, unit_id: form.unit_id || null });
+          }}
+        >
+          <h2 className="mb-1 flex items-center gap-2 text-[13px] font-bold text-ops-red">
+            <RadioTower size={15} /> Add channel
+          </h2>
+          <p className="mb-4 text-[11px] text-neutral-500">
+            A channel is a talk group — the radios on it hear each other. Pin it to a unit to limit who can listen.
+          </p>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Channel name">
+              <input className="field-input" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="e.g. Lagos Patrol" />
+            </Field>
+            <Field label="Restrict to unit (optional)">
+              <select className="field-input" value={form.unit_id} onChange={(event) => setForm({ ...form, unit_id: event.target.value })}>
+                <option value="">Whole organization</option>
+                {units.map((unit) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}
+              </select>
+            </Field>
+          </div>
+          {createMutation.error ? <p className="mt-2 text-xs text-ops-red">{createMutation.error.message}</p> : null}
+          <button className="mt-4 inline-flex items-center gap-2 rounded bg-ops-red px-4 py-2 text-xs font-bold text-black disabled:opacity-50" disabled={createMutation.isPending || !form.name.trim()}>
+            <Plus size={14} /> {createMutation.isPending ? "Creating…" : "Create channel"}
+          </button>
+        </form>
+      ) : null}
+
+      <List title={`${channels.length} channel${channels.length === 1 ? "" : "s"}`}>
+        {channelsQuery.isLoading ? <p className="px-4 py-6 text-[11px] text-neutral-500">Loading channels…</p> : null}
+        {channels.map((channel) => (
+          <article key={channel.id} className={`px-4 py-3 ${channel.active ? "" : "opacity-50"}`}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm text-neutral-100">{channel.name}</h3>
+                <p className="text-[11px] text-neutral-500">
+                  {channel.unit_name ? `${channel.unit_name} only` : "Whole organization"} · {channel.device_count} radio{channel.device_count === 1 ? "" : "s"} · {channel.online_count} online
+                  {channel.provision_state === "pending" ? " · not live yet" : ""}
+                  {channel.active ? "" : " · retired"}
+                </p>
+                {channel.provision_state === "pending" ? (
+                  <p className="mt-1 text-[10px] text-amber-300/80">
+                    Waiting to be created on the radio network. It cannot carry audio until then.
+                  </p>
+                ) : null}
+              </div>
+              {canManage ? (
+                <div className="flex gap-2">
+                  <button
+                    className="rounded border border-white/10 px-2 py-1 text-[10px] text-neutral-300 hover:border-ops-green hover:text-ops-green"
+                    onClick={() => setOpenChannelId(openChannelId === channel.id ? null : channel.id)}
+                  >
+                    {openChannelId === channel.id ? "Close" : "Radios"}
+                  </button>
+                  <button
+                    className="rounded border border-white/10 px-2 py-1 text-[10px] text-neutral-300 hover:border-ops-green hover:text-ops-green"
+                    onClick={() => {
+                      const name = window.prompt("Rename channel", channel.name);
+                      if (name?.trim()) renameMutation.mutate({ id: channel.id, name: name.trim() });
+                    }}
+                  >
+                    Rename
+                  </button>
+                  <button
+                    className="inline-flex items-center gap-1 rounded border border-red-500/20 px-2 py-1 text-[10px] text-red-400/70 hover:border-ops-red hover:text-ops-red"
+                    onClick={() => {
+                      if (window.confirm(`Remove ${channel.name}?`)) removeMutation.mutate(channel.id);
+                    }}
+                  >
+                    <Trash2 size={11} /> Remove
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            {openChannelId === channel.id ? (
+              <ChannelMembers channel={channel} devices={devices} onChanged={refresh} />
+            ) : null}
+          </article>
+        ))}
+        {!channelsQuery.isLoading && !channels.length ? (
+          <p className="px-4 py-10 text-center text-[12px] text-neutral-500">
+            No channels yet. Create one to group radios that should hear each other.
+          </p>
+        ) : null}
+      </List>
+    </section>
+  );
+}
+
+function ChannelMembers({ channel, devices, onChanged }) {
+  const queryClient = useQueryClient();
+  const membersQuery = useQuery({
+    queryKey: ["org-channel-devices", channel.id],
+    queryFn: () => listOrgChannelDevices(channel.id),
+  });
+  const toggleMutation = useMutation({
+    mutationFn: ({ deviceId, member }) => setOrgChannelDevice(channel.id, deviceId, member),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["org-channel-devices", channel.id] });
+      onChanged();
+    },
+  });
+  const memberIds = new Set((membersQuery.data?.devices || []).map((device) => String(device.device_id)));
+
+  return (
+    <div className="mt-3 rounded border border-white/10 bg-white/[0.03] p-3">
+      <h4 className="text-[11px] font-bold text-neutral-300">Radios on this channel</h4>
+      {toggleMutation.error ? <p className="mt-1 text-[10px] text-ops-red">{toggleMutation.error.message}</p> : null}
+      <div className="mt-2 flex flex-wrap gap-2">
+        {devices.map((device) => {
+          const member = memberIds.has(String(device.device_id));
+          return (
+            <button
+              key={device.device_id}
+              className={`inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] ${
+                member ? "bg-ops-green text-black" : "border border-white/10 text-neutral-400 hover:border-ops-green hover:text-ops-green"
+              }`}
+              disabled={toggleMutation.isPending}
+              onClick={() => toggleMutation.mutate({ deviceId: device.device_id, member: !member })}
+            >
+              {member ? <X size={10} /> : <Plus size={10} />}
+              <span className={`h-1.5 w-1.5 rounded-full ${device.pocstars_online ? "bg-ops-green" : "bg-neutral-600"} ${member ? "opacity-60" : ""}`} />
+              {device.name || device.device_id}
+            </button>
+          );
+        })}
+        {!devices.length ? (
+          <p className="text-[10px] text-neutral-500">
+            No radios allocated to this organization yet. A platform admin assigns them.
+          </p>
+        ) : null}
+      </div>
+    </div>
   );
 }
 

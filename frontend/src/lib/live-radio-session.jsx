@@ -121,7 +121,7 @@ export function LiveRadioProvider({ children }) {
           }
           socket.send(JSON.stringify(
             nextMode === "monitor"
-              ? { type: "monitor.start", unitId: nextChannel.id }
+              ? { type: "monitor.start", channelId: nextChannel.id }
               : { type: "call.start", deviceId: nextDevice.device_id },
           ));
         }

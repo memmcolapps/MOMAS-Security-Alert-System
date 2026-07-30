@@ -116,6 +116,146 @@ router.delete("/users/:user_id", async (c) => {
   return c.json({ ok: true });
 });
 
+// Channels are arranged by the organization itself. Every handler re-checks
+// that the channel belongs to the caller's organization, so a tenant can never
+// touch another tenant's channel even by guessing an id.
+async function ownedChannel(c: any, channelId: number) {
+  const organizationId = organizationIdFor(c);
+  const channel = await db.getChannel(channelId);
+  if (!channel || Number(channel.organization_id) !== Number(organizationId)) return null;
+  return channel;
+}
+
+router.get("/channels", async (c) => {
+  const organizationId = organizationIdFor(c);
+  if (!organizationId) return c.json({ channels: [] });
+  const channels = await db.listChannels(organizationId);
+  const scopedUnitId = unitScoped(c);
+  return c.json({
+    channels: scopedUnitId
+      ? channels.filter((channel: any) => !channel.unit_id || Number(channel.unit_id) === scopedUnitId)
+      : channels,
+  });
+});
+
+router.post("/channels", async (c) => {
+  const organizationId = organizationIdFor(c);
+  const body = await c.req.json().catch(() => ({}));
+  if (!body.name?.trim()) return c.json({ error: "Enter a channel name." }, 400);
+  if (!isPlatformAdmin(c) && !canManageOrganization(membership(c))) {
+    return c.json({ error: "Only organization admins can create channels." }, 403);
+  }
+  try {
+    const channel = await db.createChannel({
+      organization_id: organizationId,
+      name: String(body.name).trim(),
+      unit_id: body.unit_id ? Number(body.unit_id) : null,
+    });
+    await db.createAuditLog({
+      organization_id: organizationId,
+      actor_user_id: actor(c),
+      action: "channel.create",
+      target_type: "channel",
+      target_id: channel.id,
+      metadata: { name: channel.name },
+    });
+    return c.json({ channel }, 201);
+  } catch (error) {
+    const next = clientError(error);
+    return c.json(next.body, next.status);
+  }
+});
+
+router.put("/channels/:channel_id", async (c) => {
+  const channelId = Number(c.req.param("channel_id"));
+  const body = await c.req.json().catch(() => ({}));
+  if (!isPlatformAdmin(c) && !canManageOrganization(membership(c))) {
+    return c.json({ error: "Only organization admins can change channels." }, 403);
+  }
+  if (!(await ownedChannel(c, channelId))) {
+    return c.json({ error: "That channel could not be found." }, 404);
+  }
+  const channel = await db.updateChannel(channelId, {
+    name: body.name?.trim() || null,
+    unit_id: body.unit_id === undefined ? undefined : (body.unit_id ? Number(body.unit_id) : null),
+    active: body.active === undefined ? null : Boolean(body.active),
+  });
+  await db.createAuditLog({
+    organization_id: organizationIdFor(c),
+    actor_user_id: actor(c),
+    action: "channel.update",
+    target_type: "channel",
+    target_id: channelId,
+    metadata: { name: channel?.name },
+  });
+  return c.json({ channel });
+});
+
+router.delete("/channels/:channel_id", async (c) => {
+  const channelId = Number(c.req.param("channel_id"));
+  if (!isPlatformAdmin(c) && !canManageOrganization(membership(c))) {
+    return c.json({ error: "Only organization admins can delete channels." }, 403);
+  }
+  const channel = await ownedChannel(c, channelId);
+  if (!channel) return c.json({ error: "That channel could not be found." }, 404);
+  // A channel that exists on the radio network is still carrying real group
+  // audio; retire it in MOMAS rather than silently dropping the vendor group.
+  if (channel.pocstars_group_id) {
+    await db.updateChannel(channelId, { active: false });
+    return c.json({ ok: true, retired: true });
+  }
+  await db.deleteChannel(channelId);
+  await db.createAuditLog({
+    organization_id: organizationIdFor(c),
+    actor_user_id: actor(c),
+    action: "channel.delete",
+    target_type: "channel",
+    target_id: channelId,
+    metadata: { name: channel.name },
+  });
+  return c.json({ ok: true });
+});
+
+router.get("/channels/:channel_id/devices", async (c) => {
+  const channelId = Number(c.req.param("channel_id"));
+  if (!(await ownedChannel(c, channelId))) {
+    return c.json({ error: "That channel could not be found." }, 404);
+  }
+  return c.json({ devices: await db.listChannelDevices(channelId) });
+});
+
+router.post("/channels/:channel_id/devices/:device_id", async (c) => {
+  const channelId = Number(c.req.param("channel_id"));
+  if (!isPlatformAdmin(c) && !canManageOrganization(membership(c))) {
+    return c.json({ error: "Only organization admins can change channel members." }, 403);
+  }
+  if (!(await ownedChannel(c, channelId))) {
+    return c.json({ error: "That channel could not be found." }, 404);
+  }
+  try {
+    await db.setChannelDevice(channelId, c.req.param("device_id"), true);
+    return c.json({ ok: true });
+  } catch (error) {
+    return c.json(jsonError(error), 400);
+  }
+});
+
+router.delete("/channels/:channel_id/devices/:device_id", async (c) => {
+  const channelId = Number(c.req.param("channel_id"));
+  if (!isPlatformAdmin(c) && !canManageOrganization(membership(c))) {
+    return c.json({ error: "Only organization admins can change channel members." }, 403);
+  }
+  if (!(await ownedChannel(c, channelId))) {
+    return c.json({ error: "That channel could not be found." }, 404);
+  }
+  try {
+    await db.setChannelDevice(channelId, c.req.param("device_id"), false);
+    return c.json({ ok: true });
+  } catch (error) {
+    return c.json(jsonError(error), 400);
+  }
+});
+
 router.get("/units", async (c) => {
   const organizationId = organizationIdFor(c);
   const units = await db.listOrganizationUnits(organizationId);
@@ -139,8 +279,6 @@ router.post("/units", async (c) => {
       state: body.state,
       lga: body.lga,
       location: body.location,
-      pocstars_group_id: body.pocstars_group_id || null,
-      pocstars_group_name: body.pocstars_group_name || null,
     });
     await db.createAuditLog({
       organization_id: organizationId,
