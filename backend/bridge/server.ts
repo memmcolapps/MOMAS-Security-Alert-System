@@ -30,6 +30,43 @@ if (!account || !password) {
 }
 
 let activeSocket: ServerWebSocket<BridgeSession> | null = null;
+let activeSince: number | null = null;
+let lastClientMessageAt: number | null = null;
+
+// The MOMAS backend reaches this bridge through a reverse SSH tunnel. When a
+// client dies without a clean close (browser tab killed, laptop asleep, backend
+// restart), the tunnel can hold the connection half-open: the bridge never gets
+// a close event, so the console slot is never released and every later session
+// is refused until the service restarts.
+//
+// Liveness is proven with protocol-level pings rather than application
+// messages: every WebSocket implementation answers a ping automatically, so a
+// silent-but-healthy monitoring session stays up regardless of which MOMAS
+// build is on the other end, while a dead peer stops answering and is reaped.
+const CLIENT_IDLE_LIMIT_MS = 90_000;
+const PING_INTERVAL_MS = 20_000;
+
+setInterval(() => {
+  const ws = activeSocket;
+  if (!ws) return;
+  const idleFor = Date.now() - (lastClientMessageAt || Date.now());
+  if (idleFor >= CLIENT_IDLE_LIMIT_MS) {
+    console.warn(`Reaping stale bridge session: no client response for ${Math.round(idleFor / 1000)}s`);
+    void closeSession(ws);
+    try {
+      ws.close(1001, "Idle bridge session reaped");
+    } catch {
+      // Already gone; closeSession has freed the slot.
+    }
+    return;
+  }
+  try {
+    ws.ping();
+  } catch {
+    // Ping failed outright: the peer is unreachable, so free the slot now.
+    void closeSession(ws);
+  }
+}, PING_INTERVAL_MS);
 
 function tokenMatches(candidate: string) {
   const expected = Buffer.from(token);
@@ -42,6 +79,10 @@ function send(ws: ServerWebSocket<BridgeSession>, value: Record<string, unknown>
 }
 
 async function closeSession(ws: ServerWebSocket<BridgeSession>) {
+  // Release the console slot first and unconditionally. A re-entrant call used
+  // to hit the `closing` guard and return before this line, which left the
+  // bridge permanently "busy" and refusing every later session.
+  if (activeSocket === ws) activeSocket = null;
   if (ws.data.closing) return;
   ws.data.closing = true;
   if (ws.data.pttTimer) clearTimeout(ws.data.pttTimer);
@@ -49,7 +90,6 @@ async function closeSession(ws: ServerWebSocket<BridgeSession>) {
   const client = ws.data.client;
   ws.data.client = null;
   await client?.close().catch(() => {});
-  if (activeSocket === ws) activeSocket = null;
 }
 
 function attachClientEvents(
@@ -87,6 +127,10 @@ const server = Bun.serve<BridgeSession>({
         status: "ok",
         configured: Boolean(account && password),
         active: Boolean(activeSocket),
+        activeSince: activeSince ? new Date(activeSince).toISOString() : null,
+        lastSeenSecondsAgo: activeSocket && lastClientMessageAt
+          ? Math.round((Date.now() - lastClientMessageAt) / 1000)
+          : null,
       });
     }
     if (url.pathname !== "/radio/live") {
@@ -104,11 +148,17 @@ const server = Bun.serve<BridgeSession>({
     return upgraded ? undefined : new Response("WebSocket upgrade required", { status: 426 });
   },
   websocket: {
+    // Backstop for the half-open tunnel case: Bun drops the socket when no
+    // frame arrives within the window. The MOMAS client pings well inside it.
+    idleTimeout: 120,
     open(ws) {
       activeSocket = ws;
+      activeSince = Date.now();
+      lastClientMessageAt = Date.now();
       send(ws, { type: "ready", configured: true });
     },
     async message(ws, incoming) {
+      if (activeSocket === ws) lastClientMessageAt = Date.now();
       if (typeof incoming !== "string") {
         if (ws.data.client?.speaking) {
           const bytes = incoming instanceof ArrayBuffer
@@ -124,6 +174,11 @@ const server = Bun.serve<BridgeSession>({
         message = JSON.parse(incoming);
       } catch {
         send(ws, { type: "error", code: "invalid_message", message: "Invalid bridge command." });
+        return;
+      }
+
+      if (message.type === "ping") {
+        send(ws, { type: "pong" });
         return;
       }
 
@@ -256,6 +311,9 @@ const server = Bun.serve<BridgeSession>({
         await closeSession(ws);
         send(ws, { type: "monitor.state", state: "idle" });
       }
+    },
+    pong(ws) {
+      if (activeSocket === ws) lastClientMessageAt = Date.now();
     },
     close(ws) {
       void closeSession(ws);

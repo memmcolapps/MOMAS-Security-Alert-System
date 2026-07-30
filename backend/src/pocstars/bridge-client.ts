@@ -17,6 +17,7 @@ export class PocstarsBridgeClient extends EventEmitter {
   private options: BridgeClientOptions;
   private socket: WebSocket | null = null;
   private waiters = new Set<Waiter>();
+  private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   private closing = false;
   private speakerUid = 0;
   private mode: "private" | "monitor" | null = null;
@@ -42,9 +43,17 @@ export class PocstarsBridgeClient extends EventEmitter {
     socket.onerror = () => this.fail(new Error("Could not connect to the POCSTARS bridge."));
     socket.onclose = () => {
       this.socket = null;
+      this.stopKeepalive();
       if (!this.closing) this.fail(new Error("The POCSTARS bridge connection closed."));
     };
     await ready;
+    // Monitoring is silent for long stretches, so without this the bridge's
+    // idle reaper would drop a perfectly healthy listening session.
+    this.keepaliveTimer = setInterval(() => {
+      if (this.socket?.readyState === WebSocket.OPEN) {
+        this.socket.send(JSON.stringify({ type: "ping" }));
+      }
+    }, 25_000);
   }
 
   async startSingleCall(targetUid: number) {
@@ -103,10 +112,16 @@ export class PocstarsBridgeClient extends EventEmitter {
     }
   }
 
+  private stopKeepalive() {
+    if (this.keepaliveTimer) clearInterval(this.keepaliveTimer);
+    this.keepaliveTimer = null;
+  }
+
   async close() {
     this.closing = true;
     this.speaking = false;
     this.group = null;
+    this.stopKeepalive();
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify({ type: this.mode === "monitor" ? "monitor.end" : "call.end" }));
     }

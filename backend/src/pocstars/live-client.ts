@@ -56,6 +56,7 @@ export class PocstarsLiveClient extends EventEmitter {
   private groupGeneration = 0;
   private connected = false;
   private closing = false;
+  private kicked = false;
   private rtpSequence = Math.floor(Math.random() * 65536);
   private rtpTimestamp = Math.floor(Math.random() * 0xffffffff);
   private heartbeatSequence = 0;
@@ -75,6 +76,7 @@ export class PocstarsLiveClient extends EventEmitter {
   async connect() {
     if (this.connected) return;
     this.closing = false;
+    this.kicked = false;
     this.control = net.createConnection({
       host: this.options.host,
       port: this.options.port,
@@ -84,7 +86,12 @@ export class PocstarsLiveClient extends EventEmitter {
     this.control.on("error", (error) => this.fail(error));
     this.control.on("close", () => {
       this.connected = false;
-      if (!this.closing) this.fail(new Error("POCSTARS voice connection closed."));
+      if (this.closing) return;
+      this.fail(new Error(
+        this.kicked
+          ? "POCSTARS signed this dispatcher account in somewhere else and ended the radio session."
+          : "POCSTARS voice connection closed.",
+      ));
     });
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("POCSTARS voice server timed out.")), this.options.timeoutMs || 10_000);
@@ -370,6 +377,16 @@ export class PocstarsLiveClient extends EventEmitter {
           port,
         });
       }
+      return;
+    }
+    // EChat allows one login per dispatcher account and evicts the older
+    // session with this push, then closes the socket. Without it the operator
+    // only sees a bare "connection closed" and no reason.
+    if (name === "ptt.push.Kickout") {
+      this.kicked = true;
+      this.emit("error", new Error(
+        "POCSTARS signed this dispatcher account in somewhere else and ended the radio session.",
+      ));
       return;
     }
     if (name === "ptt.push.MemberGetMic") {

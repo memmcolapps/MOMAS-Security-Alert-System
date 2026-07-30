@@ -74,11 +74,20 @@ export function LiveRadioProvider({ children }) {
     setBusyBy(null);
     const mySession = (sessionIdRef.current += 1);
     try {
-      if (socketRef.current) {
+      const previous = socketRef.current;
+      if (previous) {
         teardown();
-        // Give the backend a beat to release the single global session before
-        // the replacement connects, or it answers "console busy" to ourselves.
-        await new Promise((resolve) => setTimeout(resolve, 350));
+        // POCSTARS allows one login per dispatcher account and evicts the older
+        // session, so the previous socket must be fully closed before the
+        // replacement connects — otherwise switching channels kicks itself.
+        // Wait for the real close rather than guessing a delay.
+        await new Promise((resolve) => {
+          if (previous.readyState === window.WebSocket.CLOSED) return resolve();
+          const done = () => resolve();
+          previous.addEventListener("close", done, { once: true });
+          setTimeout(done, 3000);
+        });
+        await new Promise((resolve) => setTimeout(resolve, 250));
       }
       modeRef.current = nextMode;
       setMode(nextMode);

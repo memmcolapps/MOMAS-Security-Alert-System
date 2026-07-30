@@ -21,6 +21,16 @@ type ActiveSession = {
 
 let activeSession: ActiveSession | null = null;
 
+// A browser socket that dies behind the Java gateway may never deliver a close
+// event, which would otherwise leave the console permanently "busy". Treat a
+// session whose socket is no longer open as finished.
+function sessionIsBusy() {
+  if (!activeSession || activeSession.closed) return false;
+  if (activeSession.ws.readyState === 1) return true;
+  void cleanup(activeSession, "socket_dead");
+  return false;
+}
+
 function busyBy() {
   if (!activeSession || activeSession.closed) return null;
   return {
@@ -72,7 +82,7 @@ export async function queryPocstarsInventory() {
   if (!liveRadioConfigured()) {
     throw new Error("The POCSTARS bridge is not configured on this MOMAS server.");
   }
-  if (activeSession && !activeSession.closed) {
+  if (sessionIsBusy()) {
     throw new Error("The live radio console is currently in use. Try the inventory sync again shortly.");
   }
   const client = createLiveClient();
@@ -143,7 +153,7 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
     });
     return;
   }
-  if (activeSession && !activeSession.closed) {
+  if (sessionIsBusy()) {
     send(ws, {
       type: "error",
       code: "radio_console_busy",
@@ -235,7 +245,7 @@ async function startMonitor(ws: WSContext, user: any, message: any) {
     });
     return;
   }
-  if (activeSession && !activeSession.closed) {
+  if (sessionIsBusy()) {
     send(ws, {
       type: "error",
       code: "radio_console_busy",
@@ -373,7 +383,7 @@ export function liveRadioWebSocket(c: Context): WSEvents {
       send(ws, {
         type: "ready",
         configured: liveRadioConfigured(),
-        busy: Boolean(activeSession && !activeSession.closed),
+        busy: sessionIsBusy(),
         busyBy: busyBy(),
       });
     },
