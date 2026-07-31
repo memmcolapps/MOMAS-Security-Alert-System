@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { PocstarsLiveClient } from "../src/pocstars/live-client";
+import { PocstarsProvisioning } from "./provisioning";
 
 type BridgeSession = {
   client: PocstarsLiveClient | null;
@@ -19,6 +20,18 @@ const account = process.env.BRIDGE_POCSTARS_ACCOUNT || "";
 const password = process.env.BRIDGE_POCSTARS_PASSWORD || "";
 const timeoutMs = Number(process.env.POCSTARS_PTT_TIMEOUT_MS || 10_000);
 const maxPttSeconds = Number(process.env.POCSTARS_PTT_MAX_SECONDS || 60);
+
+// Provisioning is optional: leave BRIDGE_DB_PASSWORD unset and the bridge keeps
+// working as a pure voice adapter, refusing provisioning commands.
+const provisioning = process.env.BRIDGE_DB_PASSWORD
+  ? new PocstarsProvisioning({
+      host: process.env.BRIDGE_DB_HOST || "127.0.0.1",
+      port: Number(process.env.BRIDGE_DB_PORT || 3306),
+      user: process.env.BRIDGE_DB_USER || "italkpro",
+      password: process.env.BRIDGE_DB_PASSWORD,
+      database: process.env.BRIDGE_DB_NAME || "Poc_star_en",
+    })
+  : null;
 
 if (token.length < 32) {
   throw new Error("BRIDGE_TOKEN must contain at least 32 characters.");
@@ -117,6 +130,80 @@ function attachClientEvents(
   });
 }
 
+// Provisioning commands are request/response and carry a caller-supplied id so
+// the MOMAS backend can correlate replies. They never touch the voice session.
+async function handleProvisioning(ws: ServerWebSocket<BridgeSession>, message: any) {
+  const requestId = message.requestId ?? null;
+  const fail = (error: string) =>
+    send(ws, { type: "provision.result", requestId, ok: false, error });
+  if (!provisioning) {
+    return fail("Provisioning is not enabled on this bridge.");
+  }
+  const companyId = Number(message.companyId);
+  try {
+    switch (message.type) {
+      case "provision.ping": {
+        return send(ws, { type: "provision.result", requestId, ok: true, result: { ok: await provisioning.ping() } });
+      }
+      case "provision.seats": {
+        const seats = await provisioning.listSeats(companyId);
+        // Never hand the password hashes to the MOMAS backend; the bridge is
+        // the only component that needs them.
+        return send(ws, {
+          type: "provision.result", requestId, ok: true,
+          result: seats.map((seat) => ({ uid: seat.uid, account: seat.account, serviceEndsAt: seat.serviceEndsAt })),
+        });
+      }
+      case "provision.groups": {
+        return send(ws, { type: "provision.result", requestId, ok: true, result: await provisioning.listGroups(companyId) });
+      }
+      case "provision.channel.create": {
+        const name = String(message.name || "").trim();
+        if (!name) return fail("A channel name is required.");
+        return send(ws, {
+          type: "provision.result", requestId, ok: true,
+          result: await provisioning.createChannel({ companyId, name }),
+        });
+      }
+      case "provision.channel.rename": {
+        return send(ws, {
+          type: "provision.result", requestId, ok: true,
+          result: await provisioning.renameChannel({
+            groupId: Number(message.groupId), companyId, name: String(message.name || "").trim(),
+          }),
+        });
+      }
+      case "provision.channel.retire": {
+        return send(ws, {
+          type: "provision.result", requestId, ok: true,
+          result: await provisioning.retireChannel({ groupId: Number(message.groupId), companyId }),
+        });
+      }
+      case "provision.radio.channel": {
+        return send(ws, {
+          type: "provision.result", requestId, ok: true,
+          result: await provisioning.setRadioOnChannel({
+            companyId,
+            groupId: Number(message.groupId),
+            radioUid: Number(message.radioUid),
+            member: Boolean(message.member),
+          }),
+        });
+      }
+      case "provision.seat.renew": {
+        return send(ws, {
+          type: "provision.result", requestId, ok: true,
+          result: await provisioning.renewSeat({ uid: Number(message.uid), until: String(message.until) }),
+        });
+      }
+      default:
+        return fail(`Unknown provisioning command ${message.type}.`);
+    }
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
 const server = Bun.serve<BridgeSession>({
   hostname: host,
   port,
@@ -179,6 +266,11 @@ const server = Bun.serve<BridgeSession>({
 
       if (message.type === "ping") {
         send(ws, { type: "pong" });
+        return;
+      }
+
+      if (typeof message.type === "string" && message.type.startsWith("provision.")) {
+        await handleProvisioning(ws, message);
         return;
       }
 
