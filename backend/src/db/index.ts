@@ -468,6 +468,10 @@ async function init() {
       ALTER TABLE organization_units ALTER COLUMN type DROP NOT NULL;
       ALTER TABLE organization_units ALTER COLUMN type DROP DEFAULT;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS pocstars_company_id TEXT;
+      -- Concurrent audio sessions this tenant may hold, plus the seats reserved
+      -- for platform operators so our monitoring never consumes theirs.
+      ALTER TABLE organizations ADD COLUMN IF NOT EXISTS radio_seats INTEGER NOT NULL DEFAULT 2;
+      ALTER TABLE organizations ADD COLUMN IF NOT EXISTS platform_radio_seats INTEGER NOT NULL DEFAULT 1;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS pocstars_company_name TEXT;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS pocstars_dispatcher_uid TEXT;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS pocstars_last_sync_at TIMESTAMPTZ;
@@ -2965,13 +2969,16 @@ async function createOrganization({
   status = "active",
   pocstars_company_id = null,
   pocstars_company_name = null,
+  radio_seats = 2,
+  platform_radio_seats = 1,
 }) {
   const finalSlug = slugify(slug || name);
   const { rows } = await pool.query(
     `INSERT INTO organizations (
-       name, slug, status, all_states, pocstars_company_id, pocstars_company_name
+       name, slug, status, all_states, pocstars_company_id, pocstars_company_name,
+       radio_seats, platform_radio_seats
      )
-     VALUES ($1,$2,$3,$4,$5,$6)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
      RETURNING *`,
     [
       name,
@@ -2980,6 +2987,8 @@ async function createOrganization({
       Boolean(all_states),
       pocstars_company_id ? String(pocstars_company_id) : null,
       pocstars_company_name || null,
+      Math.max(1, Number(radio_seats) || 2),
+      Math.max(0, Number(platform_radio_seats) || 0),
     ],
   );
   await setOrganizationStates(rows[0].id, states);

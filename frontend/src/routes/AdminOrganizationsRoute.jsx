@@ -16,6 +16,8 @@ const emptyOrg = {
   slug: "",
   all_states: false,
   states: [],
+  radio_seats: 2,
+  platform_radio_seats: 1,
 };
 
 export function AdminOrganizationsRoute() {
@@ -29,11 +31,13 @@ export function AdminOrganizationsRoute() {
     queryFn: listOrganizations,
   });
 
+  const [createWarning, setCreateWarning] = useState("");
   const createMutation = useMutation({
     mutationFn: createOrganization,
-    onSuccess: () => {
+    onSuccess: (result) => {
       setOrgForm(emptyOrg);
       setCreating(false);
+      setCreateWarning(result?.warning || "");
       queryClient.invalidateQueries({ queryKey: ["organizations"] });
     },
   });
@@ -81,9 +85,18 @@ export function AdminOrganizationsRoute() {
             <Field label="Slug">
               <input className="field-input" value={orgForm.slug} onChange={(event) => setOrgForm({ ...orgForm, slug: event.target.value })} placeholder="auto-created if blank" />
             </Field>
+            <Field label="Radio seats (their concurrent audio sessions)">
+              <input className="field-input" type="number" min="1" value={orgForm.radio_seats} onChange={(event) => setOrgForm({ ...orgForm, radio_seats: event.target.value })} />
+            </Field>
+            <Field label="Platform seats (reserved for us)">
+              <input className="field-input" type="number" min="0" value={orgForm.platform_radio_seats} onChange={(event) => setOrgForm({ ...orgForm, platform_radio_seats: event.target.value })} />
+            </Field>
           </div>
           <StatePicker value={orgForm} onChange={setOrgForm} />
           {createMutation.error ? <p className="mt-3 text-xs text-ops-red">{createMutation.error.message}</p> : null}
+          <p className="mt-3 text-[11px] text-neutral-500">
+            The company, its dispatcher seats and their credentials are created on the radio network automatically.
+          </p>
           <button className="mt-4 inline-flex items-center gap-2 rounded bg-ops-red px-4 py-2 text-xs font-bold text-black disabled:opacity-50" disabled={createMutation.isPending || !orgForm.name.trim()}>
             <Plus size={14} /> Create company
           </button>
@@ -132,6 +145,10 @@ export function AdminOrganizationsRoute() {
           ) : null}
         </div>
       </section>
+
+      {createWarning ? (
+        <p className="mt-4 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">{createWarning}</p>
+      ) : null}
 
       <RadioNetworkPanel organizations={organizations} />
     </main>

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { requirePlatformAdmin } from "../auth";
 import * as db from "../db";
-import { liveRadioConfigured, queryPocstarsInventory } from "../pocstars/live-gateway";
+import { liveRadioConfigured, provisionOnNetwork, queryPocstarsInventory } from "../pocstars/live-gateway";
 
 const router = new Hono();
 
@@ -34,6 +34,8 @@ router.post("/", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   if (!body.name) return c.json({ error: "Enter an organization name." }, 400);
   try {
+    const tenantSeats = Math.max(1, Number(body.radio_seats) || 2);
+    const platformSeats = Math.max(0, Number(body.platform_radio_seats ?? 1));
     const organization = await db.createOrganization({
       name: body.name,
       slug: body.slug,
@@ -42,8 +44,34 @@ router.post("/", async (c) => {
       status: body.status || "active",
       pocstars_company_id: body.pocstars_company_id || null,
       pocstars_company_name: body.pocstars_company_name || null,
+      radio_seats: tenantSeats,
+      platform_radio_seats: platformSeats,
     });
-    return c.json({ organization }, 201);
+
+    // Give the organization its own company on the radio network, so its
+    // dispatcher seats and channels are never shared with another tenant.
+    // A failure here leaves a usable MOMAS organization that simply has no
+    // radio yet, rather than rolling back the whole creation.
+    let radio: any = null;
+    let warning: string | undefined;
+    if (!organization.pocstars_company_id) {
+      try {
+        radio = await provisionOnNetwork("provision.company.create", {
+          name: organization.name,
+          slug: organization.slug,
+          seats: tenantSeats + platformSeats,
+        });
+        if (radio?.companyId) {
+          await db.setOrganizationCompanyId(organization.id, Number(radio.companyId));
+          organization.pocstars_company_id = String(radio.companyId);
+        }
+      } catch (error) {
+        warning = error instanceof Error
+          ? `The organization was created, but the radio network setup failed: ${error.message}`
+          : "The organization was created, but the radio network setup failed.";
+      }
+    }
+    return c.json({ organization, radio, warning }, 201);
   } catch (error) {
     const next = clientError(error);
     return c.json(next.body, next.status);

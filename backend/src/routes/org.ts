@@ -198,7 +198,15 @@ router.post("/channels", async (c) => {
     // 'pending' if this fails, so it is visibly not live rather than silently
     // broken, and the operator can retry.
     const companyId = await companyIdFor(organizationId);
-    if (companyId) {
+    if (!companyId) {
+      // Nothing to create the group against. Say so rather than leaving a
+      // channel that is silently pending with no explanation.
+      return c.json({
+        channel,
+        warning: "This organization has no company on the radio network yet, so the channel is not live. A platform admin must set it up.",
+      }, 201);
+    }
+    {
       try {
         const created = await provisionOnNetwork("provision.channel.create", {
           companyId,

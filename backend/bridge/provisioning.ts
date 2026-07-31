@@ -69,6 +69,85 @@ export class PocstarsProvisioning {
     return rows as Array<{ uid: number; account: string; password: string; serviceEndsAt: Date }>;
   }
 
+  // Create a company on the radio network plus its dispatcher seats, mirroring
+  // the shape of an existing working company. The seat passwords are generated
+  // and never leave this method: echat authenticates with the stored hash
+  // verbatim, so the bridge can sign in later without anyone keeping the
+  // plaintext. Nothing outside this host ever sees a credential.
+  async createCompany({ name, slug, seats, agentOrgId = 11, serviceEndsAt }: {
+    name: string; slug: string; seats: number; agentOrgId?: number; serviceEndsAt: string;
+  }) {
+    const seatCount = Math.max(1, Math.min(50, Math.floor(seats)));
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      const [clash]: any = await connection.query(
+        "SELECT Corg_ID FROM tb_ComOrg WHERE Corg_Name = ? AND IsActive = 1",
+        [name],
+      );
+      if (clash.length) throw new Error(`The radio network already has a company named ${name}.`);
+
+      const [company]: any = await connection.query(
+        `INSERT INTO tb_ComOrg
+           (Aorg_ID, Corg_Name, Corg_Parent, Corg_Type, IsComDispatch, IsControl,
+            Dis_Size, IsActive, Creation_Time, Last_Update_Time)
+         VALUES (?, ?, 0, 0, 0, 1, ?, 1, NOW(), NOW())`,
+        [agentOrgId, name, seatCount],
+      );
+      const companyId = Number(company.insertId);
+      if (!companyId) throw new Error("The radio network did not return a company id.");
+
+      const realm = this.realmFor(slug);
+      const created: Array<{ uid: number; account: string }> = [];
+      for (let index = 1; index <= seatCount; index += 1) {
+        const account = `dp${index}@${realm}.TSY`;
+        const [existing]: any = await connection.query(
+          "SELECT User_ID FROM tb_User WHERE User_Account = ?",
+          [account],
+        );
+        if (existing.length) {
+          throw new Error(`Dispatcher account ${account} already exists on the radio network.`);
+        }
+        const [seat]: any = await connection.query(
+          `INSERT INTO tb_User
+             (User_Account, User_Password, User_Name, User_CompanyID, User_AgentID,
+              User_Type, User_AudioStatus, User_Enable, IsActive, User_Back,
+              Parent_CompanyID, User_Banned, User_Encrypt, network_type, chargeType,
+              User_GPSswitch, User_GPSfrequency, sort,
+              User_CreateTime, User_UpdateTime, User_ServiceBeginTime, User_ServiceEndTime,
+              Creation_Time, Last_Update_Time)
+           VALUES (?, ?, ?, ?, ?, 3, 1, 1, 1, 1, ?, 0, 0, 1, 1, 1, 30, 99,
+                   NOW(), NOW(), NOW(), ?, NOW(), NOW())`,
+          [account, this.newSeatPasswordHash(), account, companyId, agentOrgId, companyId, serviceEndsAt],
+        );
+        created.push({ uid: Number(seat.insertId), account });
+      }
+
+      await connection.commit();
+      return { companyId, seats: created };
+    } catch (error) {
+      await connection.rollback().catch(() => {});
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  // echat compares against the stored value, so a random hash is a password
+  // nobody knows and nobody needs to know.
+  private newSeatPasswordHash() {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+  }
+
+  private realmFor(slug: string) {
+    const cleaned = String(slug || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!cleaned) throw new Error("An organization slug is required to name dispatcher accounts.");
+    return cleaned.slice(0, 12);
+  }
+
   // An organization's vendor company id is not carried by the voice protocol,
   // so it is recovered from any group already claimed by that organization.
   async companyForGroup(groupId: number) {

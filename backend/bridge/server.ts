@@ -154,6 +154,19 @@ async function handleProvisioning(ws: ServerWebSocket<BridgeSession>, message: a
           result: seats.map((seat) => ({ uid: seat.uid, account: seat.account, serviceEndsAt: seat.serviceEndsAt })),
         });
       }
+      case "provision.company.create": {
+        const name = String(message.name || "").trim();
+        const slug = String(message.slug || "").trim();
+        if (!name || !slug) return fail("A company name and slug are required.");
+        return send(ws, {
+          type: "provision.result", requestId, ok: true,
+          result: await provisioning.createCompany({
+            name, slug,
+            seats: Number(message.seats || 3),
+            serviceEndsAt: String(message.serviceEndsAt || "2035-01-01 00:00:00"),
+          }),
+        });
+      }
       case "provision.company.forGroup": {
         return send(ws, {
           type: "provision.result", requestId, ok: true,
