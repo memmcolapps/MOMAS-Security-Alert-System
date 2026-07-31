@@ -470,6 +470,24 @@ async function init() {
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS pocstars_company_id TEXT;
       -- Concurrent audio sessions this tenant may hold, plus the seats reserved
       -- for platform operators so our monitoring never consumes theirs.
+      -- devices.organization_id had no foreign key, so deleting an organization
+      -- left its radios pointing at a row that no longer existed: invisible to
+      -- every tenant and not in the unallocated pool either. SET NULL returns
+      -- them to the pool, which is what "platform allocates" means anyway.
+      UPDATE devices SET organization_id = NULL
+       WHERE organization_id IS NOT NULL
+         AND organization_id NOT IN (SELECT id FROM organizations);
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+           WHERE constraint_name = 'devices_organization_id_fkey'
+        ) THEN
+          ALTER TABLE devices
+            ADD CONSTRAINT devices_organization_id_fkey
+            FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE SET NULL;
+        END IF;
+      END $$;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS radio_seats INTEGER NOT NULL DEFAULT 2;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS platform_radio_seats INTEGER NOT NULL DEFAULT 1;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS pocstars_company_name TEXT;

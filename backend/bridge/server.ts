@@ -8,6 +8,11 @@ type BridgeSession = {
   mode: "private" | "monitor" | null;
   closing: boolean;
   pttTimer: ReturnType<typeof setTimeout> | null;
+  seatUid: number | null;
+  seatAccount: string | null;
+  companyId: number | null;
+  openedAt: number;
+  lastSeenAt: number;
 };
 
 const host = process.env.BRIDGE_HOST || "127.0.0.1";
@@ -42,9 +47,43 @@ if (!account || !password) {
   );
 }
 
-let activeSocket: ServerWebSocket<BridgeSession> | null = null;
-let activeSince: number | null = null;
-let lastClientMessageAt: number | null = null;
+// Every live session holds one dispatcher seat. Seats belong to a company and
+// are interchangeable within it, so a session is served by whichever seat is
+// free. Leases are tracked here rather than in the database: they are process
+// state, and a bridge restart releases them all, which is correct.
+const sessions = new Set<ServerWebSocket<BridgeSession>>();
+const leasedSeatUids = new Set<number>();
+
+// Seat pool for the single-account deployments that predate leasing. When no
+// company is supplied the bridge falls back to the configured account, which
+// keeps a plain voice-only bridge working exactly as before.
+const FALLBACK_SEAT_UID = -1;
+
+async function leaseSeat(companyId: number | null) {
+  if (!companyId || !provisioning) {
+    if (leasedSeatUids.has(FALLBACK_SEAT_UID)) {
+      throw new Error("The radio console is already in use.");
+    }
+    leasedSeatUids.add(FALLBACK_SEAT_UID);
+    return { uid: FALLBACK_SEAT_UID, account, password };
+  }
+  const seats = await provisioning.listSeats(companyId);
+  if (!seats.length) {
+    throw new Error("This organization has no usable dispatcher seats on the radio network.");
+  }
+  const free = seats.find((seat) => !leasedSeatUids.has(Number(seat.uid)));
+  if (!free) {
+    throw new Error(`All ${seats.length} radio consoles for this organization are in use.`);
+  }
+  leasedSeatUids.add(Number(free.uid));
+  return { uid: Number(free.uid), account: free.account, password: free.password };
+}
+
+function releaseSeat(ws: ServerWebSocket<BridgeSession>) {
+  if (ws.data.seatUid !== null) leasedSeatUids.delete(ws.data.seatUid);
+  ws.data.seatUid = null;
+  ws.data.seatAccount = null;
+}
 
 // The MOMAS backend reaches this bridge through a reverse SSH tunnel. When a
 // client dies without a clean close (browser tab killed, laptop asleep, backend
@@ -60,24 +99,27 @@ const CLIENT_IDLE_LIMIT_MS = 90_000;
 const PING_INTERVAL_MS = 20_000;
 
 setInterval(() => {
-  const ws = activeSocket;
-  if (!ws) return;
-  const idleFor = Date.now() - (lastClientMessageAt || Date.now());
-  if (idleFor >= CLIENT_IDLE_LIMIT_MS) {
-    console.warn(`Reaping stale bridge session: no client response for ${Math.round(idleFor / 1000)}s`);
-    void closeSession(ws);
-    try {
-      ws.close(1001, "Idle bridge session reaped");
-    } catch {
-      // Already gone; closeSession has freed the slot.
+  for (const ws of [...sessions]) {
+    const idleFor = Date.now() - (ws.data.lastSeenAt || Date.now());
+    if (idleFor >= CLIENT_IDLE_LIMIT_MS) {
+      console.warn(
+        `Reaping stale bridge session (seat ${ws.data.seatAccount || "fallback"}): `
+        + `no client response for ${Math.round(idleFor / 1000)}s`,
+      );
+      void closeSession(ws);
+      try {
+        ws.close(1001, "Idle bridge session reaped");
+      } catch {
+        // Already gone; closeSession has freed the seat.
+      }
+      continue;
     }
-    return;
-  }
-  try {
-    ws.ping();
-  } catch {
-    // Ping failed outright: the peer is unreachable, so free the slot now.
-    void closeSession(ws);
+    try {
+      ws.ping();
+    } catch {
+      // Ping failed outright: the peer is unreachable, so free the seat now.
+      void closeSession(ws);
+    }
   }
 }, PING_INTERVAL_MS);
 
@@ -92,10 +134,11 @@ function send(ws: ServerWebSocket<BridgeSession>, value: Record<string, unknown>
 }
 
 async function closeSession(ws: ServerWebSocket<BridgeSession>) {
-  // Release the console slot first and unconditionally. A re-entrant call used
-  // to hit the `closing` guard and return before this line, which left the
-  // bridge permanently "busy" and refusing every later session.
-  if (activeSocket === ws) activeSocket = null;
+  // Release the seat first and unconditionally. A re-entrant call used to hit
+  // the `closing` guard and return before this line, which leaked the lease and
+  // left the bridge refusing later sessions.
+  releaseSeat(ws);
+  sessions.delete(ws);
   if (ws.data.closing) return;
   ws.data.closing = true;
   if (ws.data.pttTimer) clearTimeout(ws.data.pttTimer);
@@ -128,6 +171,27 @@ function attachClientEvents(
       message: error.message,
     });
   });
+}
+
+// Lease a seat for this session and build a voice client bound to it. The seat
+// password comes straight from the vendor database, so no credential for a
+// provisioned organization ever needs to be configured anywhere.
+async function openLeasedClient(ws: ServerWebSocket<BridgeSession>, companyId: number | null) {
+  const seat = await leaseSeat(companyId);
+  ws.data.seatUid = seat.uid;
+  ws.data.seatAccount = seat.account;
+  ws.data.companyId = companyId;
+  const client = new PocstarsLiveClient({
+    host: controlHost,
+    port: controlPort,
+    audioHost,
+    account: seat.account,
+    password: seat.password,
+    timeoutMs,
+  });
+  ws.data.client = client;
+  attachClientEvents(ws, client);
+  return client;
 }
 
 // Provisioning commands are request/response and carry a caller-supplied id so
@@ -171,6 +235,12 @@ async function handleProvisioning(ws: ServerWebSocket<BridgeSession>, message: a
         return send(ws, {
           type: "provision.result", requestId, ok: true,
           result: { companyId: await provisioning.companyForGroup(Number(message.groupId)) },
+        });
+      }
+      case "provision.radios": {
+        return send(ws, {
+          type: "provision.result", requestId, ok: true,
+          result: await provisioning.listRadios(companyId),
         });
       }
       case "provision.groups": {
@@ -232,11 +302,22 @@ const server = Bun.serve<BridgeSession>({
       return Response.json({
         status: "ok",
         configured: Boolean(account && password),
-        active: Boolean(activeSocket),
-        activeSince: activeSince ? new Date(activeSince).toISOString() : null,
-        lastSeenSecondsAgo: activeSocket && lastClientMessageAt
-          ? Math.round((Date.now() - lastClientMessageAt) / 1000)
-          : null,
+        provisioning: Boolean(provisioning),
+        // Only seat-holding sessions are real capacity. A socket that connected
+        // but was refused a seat (or has not started one yet) is just an idle
+        // connection and must not be reported as a leased console.
+        active: leasedSeatUids.size > 0,
+        seatsInUse: leasedSeatUids.size,
+        idleConnections: [...sessions].filter((ws) => ws.data.seatUid === null).length,
+        sessions: [...sessions]
+          .filter((ws) => ws.data.seatUid !== null)
+          .map((ws) => ({
+            seat: ws.data.seatAccount,
+            companyId: ws.data.companyId,
+            mode: ws.data.mode,
+            sinceSeconds: Math.round((Date.now() - ws.data.openedAt) / 1000),
+            lastSeenSecondsAgo: Math.round((Date.now() - ws.data.lastSeenAt) / 1000),
+          })),
       });
     }
     if (url.pathname !== "/radio/live") {
@@ -245,11 +326,15 @@ const server = Bun.serve<BridgeSession>({
     if (!tokenMatches(url.searchParams.get("token") || "")) {
       return new Response("Unauthorized", { status: 401 });
     }
-    if (activeSocket) {
-      return new Response("Radio bridge busy", { status: 409 });
-    }
+    // Capacity is no longer decided here: a connection is cheap, and the real
+    // limit is how many dispatcher seats the organization has. That is applied
+    // when the session asks to start and a seat is leased.
     const upgraded = server.upgrade(request, {
-      data: { client: null, mode: null, closing: false, pttTimer: null },
+      data: {
+        client: null, mode: null, closing: false, pttTimer: null,
+        seatUid: null, seatAccount: null, companyId: null,
+        openedAt: Date.now(), lastSeenAt: Date.now(),
+      },
     });
     return upgraded ? undefined : new Response("WebSocket upgrade required", { status: 426 });
   },
@@ -258,13 +343,13 @@ const server = Bun.serve<BridgeSession>({
     // frame arrives within the window. The MOMAS client pings well inside it.
     idleTimeout: 120,
     open(ws) {
-      activeSocket = ws;
-      activeSince = Date.now();
-      lastClientMessageAt = Date.now();
+      sessions.add(ws);
+      ws.data.openedAt = Date.now();
+      ws.data.lastSeenAt = Date.now();
       send(ws, { type: "ready", configured: true });
     },
     async message(ws, incoming) {
-      if (activeSocket === ws) lastClientMessageAt = Date.now();
+      ws.data.lastSeenAt = Date.now();
       if (typeof incoming !== "string") {
         if (ws.data.client?.speaking) {
           const bytes = incoming instanceof ArrayBuffer
@@ -295,16 +380,16 @@ const server = Bun.serve<BridgeSession>({
 
       if (message.type === "inventory.query") {
         if (ws.data.client) return;
-        const client = new PocstarsLiveClient({
-          host: controlHost,
-          port: controlPort,
-          audioHost,
-          account,
-          password,
-          timeoutMs,
-        });
-        ws.data.client = client;
-        attachClientEvents(ws, client);
+        let client: PocstarsLiveClient;
+        try {
+          client = await openLeasedClient(ws, message.companyId ? Number(message.companyId) : null);
+        } catch (error) {
+          send(ws, {
+            type: "error", code: "radio_console_busy",
+            message: error instanceof Error ? error.message : "No radio console is free.",
+          });
+          return;
+        }
         try {
           await client.connect();
           const inventory = await client.queryInventory();
@@ -325,17 +410,17 @@ const server = Bun.serve<BridgeSession>({
           send(ws, { type: "error", code: "invalid_radio_uid", message: "Invalid radio ID." });
           return;
         }
-        const client = new PocstarsLiveClient({
-          host: controlHost,
-          port: controlPort,
-          audioHost,
-          account,
-          password,
-          timeoutMs,
-        });
-        ws.data.client = client;
+        let client: PocstarsLiveClient;
+        try {
+          client = await openLeasedClient(ws, message.companyId ? Number(message.companyId) : null);
+        } catch (error) {
+          send(ws, {
+            type: "error", code: "radio_console_busy",
+            message: error instanceof Error ? error.message : "No radio console is free.",
+          });
+          return;
+        }
         ws.data.mode = "private";
-        attachClientEvents(ws, client);
         try {
           send(ws, { type: "call.state", state: "connecting", deviceId });
           await client.connect();
@@ -361,17 +446,17 @@ const server = Bun.serve<BridgeSession>({
           send(ws, { type: "error", code: "invalid_group_id", message: "Invalid channel ID." });
           return;
         }
-        const client = new PocstarsLiveClient({
-          host: controlHost,
-          port: controlPort,
-          audioHost,
-          account,
-          password,
-          timeoutMs,
-        });
-        ws.data.client = client;
+        let client: PocstarsLiveClient;
+        try {
+          client = await openLeasedClient(ws, message.companyId ? Number(message.companyId) : null);
+        } catch (error) {
+          send(ws, {
+            type: "error", code: "radio_console_busy",
+            message: error instanceof Error ? error.message : "No radio console is free.",
+          });
+          return;
+        }
         ws.data.mode = "monitor";
-        attachClientEvents(ws, client);
         try {
           send(ws, { type: "monitor.state", state: "connecting", groupId });
           await client.connect();
@@ -424,7 +509,7 @@ const server = Bun.serve<BridgeSession>({
       }
     },
     pong(ws) {
-      if (activeSocket === ws) lastClientMessageAt = Date.now();
+      ws.data.lastSeenAt = Date.now();
     },
     close(ws) {
       void closeSession(ws);

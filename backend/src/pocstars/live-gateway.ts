@@ -17,27 +17,58 @@ type ActiveSession = {
   microphoneGranted: boolean;
   pttTimer: ReturnType<typeof setTimeout> | null;
   closed: boolean;
+  organizationId: number | null;
+  isPlatformOperator: boolean;
 };
 
-let activeSession: ActiveSession | null = null;
+// Live sessions across the whole platform. Each holds one dispatcher seat on
+// the radio network; how many an organization may hold at once is its seat
+// quota. Platform operators draw on a separate reserve so our monitoring can
+// never consume a tenant's own capacity.
+const liveSessions = new Set<ActiveSession>();
 
-// A browser socket that dies behind the Java gateway may never deliver a close
-// event, which would otherwise leave the console permanently "busy". Treat a
-// session whose socket is no longer open as finished.
-function sessionIsBusy() {
-  if (!activeSession || activeSession.closed) return false;
-  if (activeSession.ws.readyState === 1) return true;
-  void cleanup(activeSession, "socket_dead");
-  return false;
+function reapDeadSessions() {
+  for (const session of [...liveSessions]) {
+    if (session.closed || session.ws.readyState !== 1) {
+      void cleanup(session, "socket_dead");
+    }
+  }
 }
 
-function busyBy() {
-  if (!activeSession || activeSession.closed) return null;
-  return {
-    operator: activeSession.user?.name || activeSession.user?.email || "another operator",
-    mode: activeSession.mode,
-    division: activeSession.divisionName,
-  };
+// Kept for the inventory sync, which needs the bridge to itself only in the
+// legacy single-seat case; with seats provisioned it can run alongside audio.
+function sessionIsBusy() {
+  reapDeadSessions();
+  return liveSessions.size > 0;
+}
+
+function sessionsFor(organizationId: number | null, isPlatform: boolean) {
+  return [...liveSessions].filter((session) =>
+    Number(session.organizationId) === Number(organizationId)
+    && session.isPlatformOperator === isPlatform);
+}
+
+async function claimSeatSlot(user: any, organizationId: number | null) {
+  reapDeadSessions();
+  const isPlatform = user?.platform_role === "admin";
+  const organization = organizationId ? await db.getOrganization(organizationId) : null;
+  const limit = isPlatform
+    ? Number(organization?.platform_radio_seats ?? 1)
+    : Number(organization?.radio_seats ?? 2);
+  const inUse = sessionsFor(organizationId, isPlatform);
+  if (inUse.length >= Math.max(0, limit)) {
+    const who = isPlatform ? "platform" : "organization";
+    return {
+      ok: false as const,
+      message: `All ${limit} ${who} radio consoles for this organization are in use.`,
+      busyBy: {
+        operator: inUse[0]?.user?.name || inUse[0]?.user?.email || "another operator",
+        mode: inUse[0]?.mode || null,
+        division: inUse[0]?.divisionName || null,
+      },
+    };
+  }
+  return { ok: true as const, isPlatform };
 }
 
 async function speakerName(session: ActiveSession, uid: unknown) {
@@ -161,7 +192,7 @@ async function cleanup(session: ActiveSession, reason = "operator") {
   session.pttTimer = null;
   await session.client.close().catch(() => {});
   await audit(session, session.mode === "monitor" ? "radio.monitor.end" : "radio.live.end", { reason });
-  if (activeSession === session) activeSession = null;
+  liveSessions.delete(session);
 }
 
 async function startCall(ws: WSContext, user: any, deviceId: string) {
@@ -170,15 +201,6 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
       type: "error",
       code: "live_radio_not_configured",
       message: "Live radio is not configured on this MOMAS server.",
-    });
-    return;
-  }
-  if (sessionIsBusy()) {
-    send(ws, {
-      type: "error",
-      code: "radio_console_busy",
-      message: "Another operator is using the live radio console.",
-      busyBy: busyBy(),
     });
     return;
   }
@@ -201,12 +223,23 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
     return;
   }
 
+  const slot = await claimSeatSlot(user, device.organization_id ? Number(device.organization_id) : null);
+  if (!slot.ok) {
+    send(ws, { type: "error", code: "radio_console_busy", message: slot.message, busyBy: slot.busyBy });
+    return;
+  }
+  const companyId = device.organization_id
+    ? await db.getOrganizationCompanyId(Number(device.organization_id))
+    : null;
+
   const client = createLiveClient();
   const session: ActiveSession = {
     ws,
     client,
     device,
     user,
+    organizationId: device.organization_id ? Number(device.organization_id) : null,
+    isPlatformOperator: slot.isPlatform,
     mode: "private",
     divisionName: device.name ? `call with ${device.name}` : null,
     speakerNames: new Map(),
@@ -215,7 +248,7 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
     pttTimer: null,
     closed: false,
   };
-  activeSession = session;
+  liveSessions.add(session);
   attachSpeakerEvents(session);
   client.on("mic", (state: any) => {
     session.microphoneGranted = Boolean(state.speaking);
@@ -228,7 +261,7 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
   try {
     send(ws, { type: "call.state", state: "connecting", deviceId });
     await client.connect();
-    const group = await client.startSingleCall(targetUid);
+    const group = await client.startSingleCall(targetUid, companyId);
     await audit(session, "radio.live.start", { pocstars_group_id: group.gid });
     send(ws, {
       type: "call.state",
@@ -265,16 +298,6 @@ async function startMonitor(ws: WSContext, user: any, message: any) {
     });
     return;
   }
-  if (sessionIsBusy()) {
-    send(ws, {
-      type: "error",
-      code: "radio_console_busy",
-      message: "Another operator is using the live radio console.",
-      busyBy: busyBy(),
-    });
-    return;
-  }
-
   const channel = message.channelId !== undefined
     ? await monitorableChannel(user, Number(message.channelId))
     : null;
@@ -296,6 +319,13 @@ async function startMonitor(ws: WSContext, user: any, message: any) {
     return;
   }
 
+  const slot = await claimSeatSlot(user, Number(channel.organization_id));
+  if (!slot.ok) {
+    send(ws, { type: "error", code: "radio_console_busy", message: slot.message, busyBy: slot.busyBy });
+    return;
+  }
+  const companyId = await db.getOrganizationCompanyId(Number(channel.organization_id));
+
   const client = createLiveClient();
   const session: ActiveSession = {
     ws,
@@ -307,6 +337,8 @@ async function startMonitor(ws: WSContext, user: any, message: any) {
       unit_name: channel.name,
     },
     user,
+    organizationId: Number(channel.organization_id),
+    isPlatformOperator: slot.isPlatform,
     mode: "monitor",
     divisionName: channel.name,
     speakerNames: new Map(),
@@ -315,7 +347,7 @@ async function startMonitor(ws: WSContext, user: any, message: any) {
     pttTimer: null,
     closed: false,
   };
-  activeSession = session;
+  liveSessions.add(session);
   attachSpeakerEvents(session);
   client.on("error", (error: Error) => {
     if (!session.closed) send(ws, { type: "error", code: "pocstars_voice_error", message: error.message });
@@ -328,7 +360,7 @@ async function startMonitor(ws: WSContext, user: any, message: any) {
       channel: { id: channel.id, name: channel.name },
     });
     await client.connect();
-    const group = await client.startWatchGroup(groupId);
+    const group = await client.startWatchGroup(groupId, companyId);
     await audit(session, "radio.monitor.start", {
       channel_id: channel.id,
       pocstars_group_id: group.gid,
@@ -395,11 +427,11 @@ export function liveRadioWebSocket(c: Context): WSEvents {
   let session: ActiveSession | null = null;
   return {
     onOpen: (_event, ws) => {
+      // Capacity is per organization now, so it is reported when a session is
+      // actually requested rather than guessed at connect time.
       send(ws, {
         type: "ready",
         configured: liveRadioConfigured(),
-        busy: sessionIsBusy(),
-        busyBy: busyBy(),
       });
     },
     onMessage: async (event, ws) => {
@@ -428,11 +460,11 @@ export function liveRadioWebSocket(c: Context): WSEvents {
       if (message.type === "call.start") {
         if (session) return;
         await startCall(ws, user, String(message.deviceId || ""));
-        if (activeSession?.ws === ws) session = activeSession;
+        session = [...liveSessions].find((entry) => entry.ws === ws) || null;
       } else if (message.type === "monitor.start") {
         if (session) return;
         await startMonitor(ws, user, message);
-        if (activeSession?.ws === ws) session = activeSession;
+        session = [...liveSessions].find((entry) => entry.ws === ws) || null;
       } else if (message.type === "ptt.start" && session?.mode === "private" && !session.closed) {
         await beginPtt(session);
       } else if (message.type === "ptt.stop" && session?.mode === "private" && !session.closed) {

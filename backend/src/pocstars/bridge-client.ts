@@ -57,9 +57,9 @@ export class PocstarsBridgeClient extends EventEmitter {
     }, 25_000);
   }
 
-  async startSingleCall(targetUid: number) {
+  async startSingleCall(targetUid: number, companyId?: number | null) {
     const response = await this.request(
-      { type: "call.start", deviceId: targetUid },
+      { type: "call.start", deviceId: targetUid, companyId: companyId ?? null },
       (message) => message.type === "call.state" && message.state === "connected",
     );
     this.group = {
@@ -70,9 +70,9 @@ export class PocstarsBridgeClient extends EventEmitter {
     return this.group;
   }
 
-  async startWatchGroup(groupId: number) {
+  async startWatchGroup(groupId: number, companyId?: number | null) {
     const response = await this.request(
-      { type: "monitor.start", groupId },
+      { type: "monitor.start", groupId, companyId: companyId ?? null },
       (message) => message.type === "monitor.state" && message.state === "connected",
     );
     this.group = {

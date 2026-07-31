@@ -61,6 +61,10 @@ export class PocstarsProvisioning {
           AND User_Type = 3
           AND User_Enable = 1
           AND IsActive = 1
+          -- echat refuses a banned account with 账号被禁用 regardless of the
+          -- other flags, so leasing one wastes the lease and hands the operator
+          -- a confusing error.
+          AND COALESCE(User_Banned, 0) = 0
           AND User_ServiceEndTime IS NOT NULL
           AND User_ServiceEndTime > NOW()
         ORDER BY User_ID`,
@@ -156,6 +160,36 @@ export class PocstarsProvisioning {
       [groupId],
     );
     return rows.length ? Number(rows[0].companyId) : null;
+  }
+
+  // Radios straight from the database. The voice protocol can only enumerate
+  // radios via group membership on this install (QueryContacts is rejected), so
+  // handsets that belong to the company but sit in no group are invisible to
+  // it - 15 of EPAIL's 90 at the time of writing. This sees all of them.
+  async listRadios(companyId: number) {
+    const [rows]: any = await this.pool.query(
+      `SELECT u.User_ID AS uid, u.User_Account AS account, u.User_Name AS name,
+              u.User_Enable AS enabled, u.User_ServiceEndTime AS serviceEndsAt,
+              COALESCE(
+                (SELECT GROUP_CONCAT(m.UOG_Cgid)
+                   FROM tb_UserOfGroup m
+                   JOIN tb_ChatGroup g ON g.Cg_ID = m.UOG_Cgid
+                  WHERE m.UOG_UserId = u.User_ID AND m.IsActive = 1 AND g.IsActive = 1),
+                ''
+              ) AS groupIds
+         FROM tb_User u
+        WHERE u.User_CompanyID = ? AND u.User_Type = 0 AND u.IsActive = 1
+        ORDER BY u.User_ID`,
+      [companyId],
+    );
+    return rows.map((row: any) => ({
+      uid: Number(row.uid),
+      account: row.account,
+      name: row.name || row.account,
+      enabled: Number(row.enabled) === 1,
+      serviceEndsAt: row.serviceEndsAt,
+      groupIds: String(row.groupIds || "").split(",").filter(Boolean).map(Number),
+    }));
   }
 
   async listGroups(companyId: number) {
