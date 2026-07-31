@@ -20,6 +20,7 @@ export class PocstarsBridgeClient extends EventEmitter {
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   private closing = false;
   private speakerUid = 0;
+  private provisionSequence = 0;
   private mode: "private" | "monitor" | null = null;
 
   group: { gid: number; name: string } | null = null;
@@ -129,6 +130,22 @@ export class PocstarsBridgeClient extends EventEmitter {
     this.socket?.close();
     this.socket = null;
     this.rejectWaiters(new Error("The radio link client closed."));
+  }
+
+  // Provisioning is request/response over the same authenticated socket. Each
+  // call carries an id so concurrent commands cannot be confused for one
+  // another, and errors come back as a result rather than as a socket-level
+  // failure - a rejected provisioning command must not tear down the link.
+  async provision(command: string, payload: Record<string, unknown> = {}) {
+    const requestId = ++this.provisionSequence;
+    const response = await this.request(
+      { type: command, requestId, ...payload },
+      (message: any) => message.type === "provision.result" && message.requestId === requestId,
+    );
+    if (!response.ok) {
+      throw new Error(response.error || `The radio network rejected ${command}.`);
+    }
+    return response.result;
   }
 
   private request(value: Record<string, unknown>, accept: (message: any) => boolean) {

@@ -191,9 +191,14 @@ function ChannelsSection({ devices, units, canManage }) {
   const channelsQuery = useQuery({ queryKey: ["org-channels"], queryFn: listOrgChannels });
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["org-channels"] });
 
+  const [warning, setWarning] = useState("");
   const createMutation = useMutation({
     mutationFn: createOrgChannel,
-    onSuccess: () => { setForm({ name: "", unit_id: "" }); refresh(); },
+    onSuccess: (result) => {
+      setForm({ name: "", unit_id: "" });
+      setWarning(result?.warning || "");
+      refresh();
+    },
   });
   const renameMutation = useMutation({
     mutationFn: ({ id, name }) => updateOrgChannel(id, { name }),
@@ -231,6 +236,7 @@ function ChannelsSection({ devices, units, canManage }) {
             </Field>
           </div>
           {createMutation.error ? <p className="mt-2 text-xs text-ops-red">{createMutation.error.message}</p> : null}
+          {warning ? <p className="mt-2 text-xs text-amber-300/90">{warning}</p> : null}
           <button className="mt-4 inline-flex items-center gap-2 rounded bg-ops-red px-4 py-2 text-xs font-bold text-black disabled:opacity-50" disabled={createMutation.isPending || !form.name.trim()}>
             <Plus size={14} /> {createMutation.isPending ? "Creating…" : "Create channel"}
           </button>

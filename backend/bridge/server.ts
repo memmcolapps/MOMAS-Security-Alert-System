@@ -154,6 +154,12 @@ async function handleProvisioning(ws: ServerWebSocket<BridgeSession>, message: a
           result: seats.map((seat) => ({ uid: seat.uid, account: seat.account, serviceEndsAt: seat.serviceEndsAt })),
         });
       }
+      case "provision.company.forGroup": {
+        return send(ws, {
+          type: "provision.result", requestId, ok: true,
+          result: { companyId: await provisioning.companyForGroup(Number(message.groupId)) },
+        });
+      }
       case "provision.groups": {
         return send(ws, { type: "provision.result", requestId, ok: true, result: await provisioning.listGroups(companyId) });
       }

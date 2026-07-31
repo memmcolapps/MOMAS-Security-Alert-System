@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { canManageOrganization, canManageUnit, primaryOrganization, requireOrgManager } from "../auth";
 import * as db from "../db";
+import { provisionOnNetwork } from "../pocstars/live-gateway";
 
 const router = new Hono();
 
@@ -120,6 +121,47 @@ router.delete("/users/:user_id", async (c) => {
 // Channels are arranged by the organization itself. Every handler re-checks
 // that the channel belongs to the caller's organization, so a tenant can never
 // touch another tenant's channel even by guessing an id.
+// Resolve (and cache) the organization's vendor company id. Without it we
+// cannot create anything on the radio network for that tenant.
+async function companyIdFor(organizationId: number) {
+  const cached = await db.getOrganizationCompanyId(organizationId);
+  if (cached) return cached;
+  const groupId = await db.anyClaimedGroupId(organizationId);
+  if (!groupId) return null;
+  const resolved = await provisionOnNetwork("provision.company.forGroup", { groupId });
+  const companyId = Number(resolved?.companyId || 0);
+  if (!companyId) return null;
+  // Refuse to provision into a vendor company another tenant already owns:
+  // seats are shared per company, so that tenant's dispatchers would see
+  // everything created here.
+  const shared = await db.organizationsSharingCompanyId(companyId, organizationId);
+  if (shared.length) {
+    throw new Error(
+      `This organization shares a radio-network company with ${shared[0].name}. `
+      + "A platform admin must give it its own company before channels can be created.",
+    );
+  }
+  await db.setOrganizationCompanyId(organizationId, companyId);
+  return companyId;
+}
+
+// Membership only means anything once it exists on the radio network: without
+// this the radio would appear on the channel in MOMAS and hear nothing.
+async function mirrorMembership(c: any, channelId: number, deviceId: string, member: boolean) {
+  const channel = await db.getChannel(channelId);
+  if (!channel?.pocstars_group_id) return;
+  const radioUid = Number(deviceId);
+  if (!Number.isSafeInteger(radioUid) || radioUid <= 0) return;
+  const companyId = await companyIdFor(Number(channel.organization_id));
+  if (!companyId) return;
+  await provisionOnNetwork("provision.radio.channel", {
+    companyId,
+    groupId: Number(channel.pocstars_group_id),
+    radioUid,
+    member,
+  });
+}
+
 async function ownedChannel(c: any, channelId: number) {
   const organizationId = organizationIdFor(c);
   const channel = await db.getChannel(channelId);
@@ -152,6 +194,25 @@ router.post("/channels", async (c) => {
       name: String(body.name).trim(),
       unit_id: body.unit_id ? Number(body.unit_id) : null,
     });
+    // Create the matching talk group on the radio network. The channel stays
+    // 'pending' if this fails, so it is visibly not live rather than silently
+    // broken, and the operator can retry.
+    const companyId = await companyIdFor(organizationId);
+    if (companyId) {
+      try {
+        const created = await provisionOnNetwork("provision.channel.create", {
+          companyId,
+          name: channel.name,
+        });
+        const groupId = Number(created?.groupId || 0);
+        if (groupId) Object.assign(channel, await db.markChannelProvisioned(channel.id, groupId));
+      } catch (error) {
+        return c.json({
+          channel,
+          warning: error instanceof Error ? error.message : "The channel is not live on the radio network yet.",
+        }, 201);
+      }
+    }
     await db.createAuditLog({
       organization_id: organizationId,
       actor_user_id: actor(c),
@@ -175,6 +236,15 @@ router.put("/channels/:channel_id", async (c) => {
   }
   if (!(await ownedChannel(c, channelId))) {
     return c.json({ error: "That channel could not be found." }, 404);
+  }
+  const existing = await db.getChannel(channelId);
+  if (existing?.pocstars_group_id && body.name?.trim()) {
+    const companyId = await companyIdFor(organizationIdFor(c));
+    if (companyId) {
+      await provisionOnNetwork("provision.channel.rename", {
+        companyId, groupId: Number(existing.pocstars_group_id), name: body.name.trim(),
+      }).catch(() => {});
+    }
   }
   const channel = await db.updateChannel(channelId, {
     name: body.name?.trim() || null,
@@ -234,7 +304,9 @@ router.post("/channels/:channel_id/devices/:device_id", async (c) => {
     return c.json({ error: "That channel could not be found." }, 404);
   }
   try {
-    await db.setChannelDevice(channelId, c.req.param("device_id"), true);
+    const deviceId = c.req.param("device_id");
+    await db.setChannelDevice(channelId, deviceId, true);
+    await mirrorMembership(c, channelId, deviceId, true);
     return c.json({ ok: true });
   } catch (error) {
     return c.json(jsonError(error), 400);
@@ -250,7 +322,9 @@ router.delete("/channels/:channel_id/devices/:device_id", async (c) => {
     return c.json({ error: "That channel could not be found." }, 404);
   }
   try {
-    await db.setChannelDevice(channelId, c.req.param("device_id"), false);
+    const deviceId = c.req.param("device_id");
+    await db.setChannelDevice(channelId, deviceId, false);
+    await mirrorMembership(c, channelId, deviceId, false);
     return c.json({ ok: true });
   } catch (error) {
     return c.json(jsonError(error), 400);

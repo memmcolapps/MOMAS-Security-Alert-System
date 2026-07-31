@@ -94,6 +94,26 @@ export async function queryPocstarsInventory() {
   }
 }
 
+// Provisioning opens its own short-lived bridge connection. The bridge still
+// permits one session at a time, so this has to wait for a live console rather
+// than kick it - losing audio mid-incident to rename a channel would be a poor
+// trade. Callers surface the busy message to the operator.
+export async function provisionOnNetwork(command: string, payload: Record<string, unknown> = {}) {
+  if (!liveRadioConfigured()) {
+    throw new Error("The radio network link is not configured on this MOMAS server.");
+  }
+  if (sessionIsBusy()) {
+    throw new Error("The radio console is in use. Try again in a moment.");
+  }
+  const client = createLiveClient();
+  try {
+    await client.connect();
+    return await client.provision(command, payload);
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+
 function createLiveClient() {
   return new PocstarsBridgeClient({
     url: env.POCSTARS_BRIDGE_URL,

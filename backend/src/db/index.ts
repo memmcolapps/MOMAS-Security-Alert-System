@@ -2175,6 +2175,57 @@ async function listMonitorableChannels(scope: any = {}) {
   return rows;
 }
 
+// The vendor company id is not carried by the voice protocol, so it is
+// recovered once from a claimed channel and cached on the organization.
+async function getOrganizationCompanyId(organizationId: number) {
+  const { rows } = await pool.query(
+    "SELECT pocstars_company_id FROM organizations WHERE id = $1",
+    [organizationId],
+  );
+  const stored = rows[0]?.pocstars_company_id;
+  return stored ? Number(stored) : null;
+}
+
+// Which other MOMAS organization already claims this vendor company. Two
+// tenants sharing one company would share its dispatcher seats, so anything
+// one created would be visible to the other.
+async function organizationsSharingCompanyId(companyId: number, exceptOrganizationId: number) {
+  const { rows } = await pool.query(
+    `SELECT id, name FROM organizations
+      WHERE pocstars_company_id = $1 AND id <> $2`,
+    [String(companyId), exceptOrganizationId],
+  );
+  return rows;
+}
+
+async function setOrganizationCompanyId(organizationId: number, companyId: number) {
+  await pool.query(
+    "UPDATE organizations SET pocstars_company_id = $2, updated_at = NOW() WHERE id = $1",
+    [organizationId, String(companyId)],
+  );
+}
+
+async function anyClaimedGroupId(organizationId: number) {
+  const { rows } = await pool.query(
+    `SELECT pocstars_group_id FROM channels
+      WHERE organization_id = $1 AND pocstars_group_id IS NOT NULL
+      ORDER BY id LIMIT 1`,
+    [organizationId],
+  );
+  return rows[0]?.pocstars_group_id ? Number(rows[0].pocstars_group_id) : null;
+}
+
+async function markChannelProvisioned(channelId: number, groupId: number) {
+  const { rows } = await pool.query(
+    `UPDATE channels
+        SET pocstars_group_id = $2, provision_state = 'ready', updated_at = NOW()
+      WHERE id = $1
+      RETURNING *`,
+    [channelId, String(groupId)],
+  );
+  return rows[0] ?? null;
+}
+
 async function listChannels(organizationId: number) {
   const { rows } = await pool.query(
     `SELECT c.*, ou.name AS unit_name,
@@ -3371,6 +3422,11 @@ export {
   listMonitorableChannels,
   listChannels,
   getChannel,
+  getOrganizationCompanyId,
+  organizationsSharingCompanyId,
+  setOrganizationCompanyId,
+  anyClaimedGroupId,
+  markChannelProvisioned,
   createChannel,
   updateChannel,
   deleteChannel,

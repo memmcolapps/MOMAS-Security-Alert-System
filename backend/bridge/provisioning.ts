@@ -69,6 +69,16 @@ export class PocstarsProvisioning {
     return rows as Array<{ uid: number; account: string; password: string; serviceEndsAt: Date }>;
   }
 
+  // An organization's vendor company id is not carried by the voice protocol,
+  // so it is recovered from any group already claimed by that organization.
+  async companyForGroup(groupId: number) {
+    const [rows]: any = await this.pool.query(
+      "SELECT Cg_ComID AS companyId FROM tb_ChatGroup WHERE Cg_ID = ?",
+      [groupId],
+    );
+    return rows.length ? Number(rows[0].companyId) : null;
+  }
+
   async listGroups(companyId: number) {
     const [rows]: any = await this.pool.query(
       `SELECT Cg_ID AS id, Cg_Name AS name, Cg_Type AS type
