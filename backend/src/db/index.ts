@@ -2386,6 +2386,37 @@ async function hasPocstarsDispatchers() {
   return Boolean(rows[0]);
 }
 
+// Vendor companies an organization already records. Every organization created
+// since per-tenant provisioning has one; the platform's original company
+// predates that and is recovered from a registry group instead.
+async function listOrganizationCompanyIds() {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT pocstars_company_id AS company_id
+       FROM organizations
+      WHERE pocstars_company_id ~ '^[0-9]+$'`,
+  );
+  return rows.map((row: any) => Number(row.company_id));
+}
+
+// Group ids the registry has seen. Their vendor company is the only handle we
+// have on a company no organization records.
+async function listRegistryGroupIds() {
+  const { rows } = await pool.query(
+    "SELECT group_id FROM pocstars_groups WHERE active ORDER BY group_id",
+  );
+  return rows
+    .map((row: any) => Number(row.group_id))
+    .filter((groupId: number) => Number.isSafeInteger(groupId) && groupId > 0);
+}
+
+async function getPocstarsDispatcherName(dispatcherUid: string) {
+  const { rows } = await pool.query(
+    "SELECT name FROM pocstars_dispatchers WHERE dispatcher_uid = $1",
+    [String(dispatcherUid)],
+  );
+  return rows[0]?.name ? String(rows[0].name) : null;
+}
+
 // Platform-pool inventory sync. POCSTARS has no tenant concept, so the whole
 // visible network lands in a platform-level registry: groups go to
 // pocstars_groups, radios become pool devices (organization_id NULL) until a
@@ -2396,6 +2427,11 @@ async function syncPocstarsPlatformInventory(inventory: any) {
   if (!dispatcherUid || !Array.isArray(inventory?.groups) || !Array.isArray(inventory?.radios)) {
     throw new Error("The radio network returned an invalid inventory snapshot.");
   }
+  // Who is online is a property of the voice plane. A snapshot taken from the
+  // vendor database knows which handsets exist and which channels they sit on
+  // but nothing about presence, so it must leave the presence columns as it
+  // found them rather than reporting the whole fleet offline.
+  const presenceKnown = inventory.presenceKnown !== false;
 
   const client = await pool.connect();
   try {
@@ -2537,7 +2573,12 @@ async function syncPocstarsPlatformInventory(inventory: any) {
            device_type, active, pocstars_managed, pocstars_online,
            pocstars_last_seen_at, pocstars_source_dispatcher_uid
          )
-         VALUES ($1,$2,$3,$4,NULL,NULL,'handheld',true,true,$5,NOW(),$6)
+         VALUES (
+           $1,$2,$3,$4,NULL,NULL,'handheld',true,true,
+           CASE WHEN $7::boolean THEN $5::boolean ELSE NULL END,
+           CASE WHEN $7::boolean THEN NOW() ELSE NULL END,
+           $6
+         )
          ON CONFLICT (device_id) DO UPDATE SET
            organization_id = EXCLUDED.organization_id,
            unit_id = EXCLUDED.unit_id,
@@ -2546,8 +2587,8 @@ async function syncPocstarsPlatformInventory(inventory: any) {
            device_type = COALESCE(devices.device_type, EXCLUDED.device_type),
            active = true,
            pocstars_managed = true,
-           pocstars_online = EXCLUDED.pocstars_online,
-           pocstars_last_seen_at = NOW(),
+           pocstars_online = CASE WHEN $7::boolean THEN EXCLUDED.pocstars_online ELSE devices.pocstars_online END,
+           pocstars_last_seen_at = CASE WHEN $7::boolean THEN NOW() ELSE devices.pocstars_last_seen_at END,
            pocstars_source_dispatcher_uid = EXCLUDED.pocstars_source_dispatcher_uid`,
         [
           radioId,
@@ -2556,6 +2597,7 @@ async function syncPocstarsPlatformInventory(inventory: any) {
           String(radio.name || `Radio ${radioId}`),
           Boolean(radio.online),
           dispatcherUid,
+          presenceKnown,
         ],
       );
       seenRadioIds.push(radioId);
@@ -2623,6 +2665,8 @@ async function syncPocstarsPlatformInventory(inventory: any) {
       radiosMarkedInactive: staleResult.rowCount,
       dispatchersSkipped,
       pooled,
+      source: String(inventory.source || "voice"),
+      presenceKnown,
       observedAt: inventory.observedAt || new Date().toISOString(),
     };
     await client.query(
@@ -3446,6 +3490,9 @@ export {
   assignDeviceToOrganization,
   assignDeviceToUnit,
   hasPocstarsDispatchers,
+  listOrganizationCompanyIds,
+  listRegistryGroupIds,
+  getPocstarsDispatcherName,
   listMonitorableChannels,
   listChannels,
   getChannel,

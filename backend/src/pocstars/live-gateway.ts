@@ -4,6 +4,7 @@ import { canManageOrganization, primaryOrganization } from "../auth";
 import { env } from "../config";
 import * as db from "../db";
 import { PocstarsBridgeClient } from "./bridge-client";
+import { type CompanySnapshot, shapeDatabaseInventory } from "./inventory-snapshot";
 
 type ActiveSession = {
   ws: WSContext;
@@ -35,8 +36,9 @@ function reapDeadSessions() {
   }
 }
 
-// Kept for the inventory sync, which needs the bridge to itself only in the
-// legacy single-seat case; with seats provisioned it can run alongside audio.
+// Only the voice-plane inventory fallback still asks this. That query leases a
+// seat, and on a bridge old enough to lack provisioning there is only one, so it
+// has to wait for live audio rather than evict it.
 function sessionIsBusy() {
   reapDeadSessions();
   return liveSessions.size > 0;
@@ -109,10 +111,22 @@ export function liveRadioConfigured() {
   );
 }
 
+// Inventory has two possible sources and they see different things. The
+// database plane lists every handset a company owns and needs no dispatcher
+// seat. The voice plane can only enumerate radios through group membership on
+// this install - QueryContacts is refused - so handsets in no group are
+// invisible to it, and it holds a seat for the length of the query. Prefer the
+// database; keep the voice path for a bridge built without provisioning.
 export async function queryPocstarsInventory() {
   if (!liveRadioConfigured()) {
     throw new Error("The radio network link is not configured on this MOMAS server.");
   }
+  const fromDatabase = await queryInventoryFromDatabase();
+  if (fromDatabase) return fromDatabase;
+  return await queryInventoryOverVoice();
+}
+
+async function queryInventoryOverVoice() {
   if (sessionIsBusy()) {
     throw new Error("The live radio console is currently in use. Try the inventory sync again shortly.");
   }
@@ -125,16 +139,103 @@ export async function queryPocstarsInventory() {
   }
 }
 
-// Provisioning opens its own short-lived bridge connection. The bridge still
-// permits one session at a time, so this has to wait for a live console rather
-// than kick it - losing audio mid-incident to rename a channel would be a poor
-// trade. Callers surface the busy message to the operator.
+// A vendor group belongs to one company for life, so this mapping is resolved
+// once per process rather than on every five-minute sync.
+const companyIdByGroupId = new Map<number, number>();
+
+// Every vendor company MOMAS should enumerate: the ones organizations record
+// for themselves, plus whichever company owns a group already in the registry.
+// The second half is what finds the platform's original company, which predates
+// per-tenant provisioning and is recorded nowhere else.
+async function resolveCompanyIds(client: PocstarsBridgeClient) {
+  const companyIds = new Set<number>(await db.listOrganizationCompanyIds());
+  for (const groupId of await db.listRegistryGroupIds()) {
+    if (!companyIdByGroupId.has(groupId)) {
+      // Only a successful lookup is remembered. Caching a failure would strand
+      // a whole company's radios until the next restart.
+      const result = await client.provision("provision.company.forGroup", { groupId })
+        .catch(() => null);
+      const companyId = Number(result?.companyId);
+      if (Number.isSafeInteger(companyId) && companyId > 0) {
+        companyIdByGroupId.set(groupId, companyId);
+      }
+    }
+    const cached = companyIdByGroupId.get(groupId);
+    if (cached) companyIds.add(cached);
+  }
+  return [...companyIds];
+}
+
+// Returns null - rather than throwing - when the database plane cannot serve
+// this request at all, so the caller can fall back to the voice plane. Once the
+// plane is known to be usable, failures are real and propagate.
+async function queryInventoryFromDatabase() {
+  const client = createLiveClient();
+  try {
+    // A failure to reach the bridge at all is not a reason to fall back: the
+    // voice plane runs over the same link and would fail the same way.
+    await client.connect();
+
+    // Provisioning is optional in the bridge, and a bridge built without it
+    // refuses every provisioning command. That is the one condition the voice
+    // plane can still serve, so probe for it before committing to this plane.
+    try {
+      await client.provision("provision.ping");
+    } catch (error) {
+      console.warn(
+        "The bridge has no database plane, falling back to the voice inventory:",
+        error instanceof Error ? error.message : error,
+      );
+      return null;
+    }
+
+    const companyIds = await resolveCompanyIds(client);
+    // Nothing to enumerate yet: a first-ever sync, before any group or
+    // organization has given us a company to ask about. The voice plane can
+    // still bootstrap the registry from group membership.
+    if (!companyIds.length) return null;
+
+    // Past this point the database plane is known to work, so a failure is a
+    // real one and belongs to the caller rather than to a silent fallback.
+    return await buildDatabaseInventory(client, companyIds);
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+
+async function buildDatabaseInventory(client: PocstarsBridgeClient, companyIds: number[]) {
+  const companySnapshots: CompanySnapshot[] = [];
+  for (const companyId of companyIds) {
+    const [groups, radios] = await Promise.all([
+      client.provision("provision.groups", { companyId }),
+      client.provision("provision.radios", { companyId }),
+    ]);
+    companySnapshots.push({ groups, radios });
+  }
+
+  // Keep reporting the configured dispatcher as the source. It is what the
+  // registry rows are already tagged with, so switching planes does not orphan
+  // them or split the fleet across two scopes.
+  const dispatcherUid = String(env.POCSTARS_DISPATCHER_UID);
+  return {
+    ...shapeDatabaseInventory(companySnapshots),
+    dispatcher: {
+      id: dispatcherUid,
+      name: (await db.getPocstarsDispatcherName(dispatcherUid)) || `Dispatcher ${dispatcherUid}`,
+    },
+    source: "database",
+    presenceKnown: false,
+    observedAt: new Date().toISOString(),
+  };
+}
+
+// Provisioning opens its own short-lived bridge connection. It never leases a
+// dispatcher seat - the bridge answers provisioning commands straight from the
+// vendor database, without touching the voice session - so it runs alongside
+// live audio instead of waiting for it.
 export async function provisionOnNetwork(command: string, payload: Record<string, unknown> = {}) {
   if (!liveRadioConfigured()) {
     throw new Error("The radio network link is not configured on this MOMAS server.");
-  }
-  if (sessionIsBusy()) {
-    throw new Error("The radio console is in use. Try again in a moment.");
   }
   const client = createLiveClient();
   try {
