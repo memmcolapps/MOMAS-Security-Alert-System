@@ -126,6 +126,17 @@ export async function queryPocstarsInventory() {
   return await queryInventoryOverVoice();
 }
 
+// Presence is the one thing the database plane cannot answer, so it is fetched
+// separately and slowly. This leases a dispatcher seat, which is exactly why it
+// must not run on the five-minute cycle: it waits for a live session rather than
+// competing with one, and the caller retries later.
+export async function refreshPresenceOverVoice() {
+  if (!liveRadioConfigured()) {
+    throw new Error("The radio network link is not configured on this MOMAS server.");
+  }
+  return await db.refreshPocstarsPresence(await queryInventoryOverVoice());
+}
+
 async function queryInventoryOverVoice() {
   if (sessionIsBusy()) {
     throw new Error("The live radio console is currently in use. Try the inventory sync again shortly.");

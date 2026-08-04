@@ -1,7 +1,12 @@
 import { Hono } from "hono";
 import { requirePlatformAdmin } from "../auth";
 import * as db from "../db";
-import { liveRadioConfigured, provisionOnNetwork, queryPocstarsInventory } from "../pocstars/live-gateway";
+import {
+  liveRadioConfigured,
+  provisionOnNetwork,
+  queryPocstarsInventory,
+  refreshPresenceOverVoice,
+} from "../pocstars/live-gateway";
 
 const router = new Hono();
 
@@ -195,3 +200,31 @@ setInterval(() => {
     }
   })();
 }, 5 * 60 * 1000);
+
+// Presence has to come from the voice plane - the vendor database records no
+// online state anywhere - and reading it costs a dispatcher seat. So it runs on
+// its own slow cycle: often enough that the console reflects reality, rarely
+// enough that it stays out of the way of live audio.
+let presenceRefreshRunning = false;
+setInterval(() => {
+  if (!liveRadioConfigured() || presenceRefreshRunning) return;
+  presenceRefreshRunning = true;
+  void (async () => {
+    try {
+      if (!(await db.hasPocstarsDispatchers())) return;
+      const summary = await refreshPresenceOverVoice();
+      await db.createAuditLog({
+        organization_id: null,
+        actor_user_id: null,
+        action: "pocstars.presence.refresh",
+        target_type: "pocstars_dispatcher",
+        target_id: null,
+        metadata: summary,
+      });
+    } catch {
+      // Usually a live session holding the only free seat. Retry next cycle.
+    } finally {
+      presenceRefreshRunning = false;
+    }
+  })();
+}, 30 * 60 * 1000);

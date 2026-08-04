@@ -2409,6 +2409,52 @@ async function listRegistryGroupIds() {
     .filter((groupId: number) => Number.isSafeInteger(groupId) && groupId > 0);
 }
 
+// Presence-only refresh from a voice-plane snapshot. The database plane cannot
+// see who is online, so this exists to fill that one gap and does nothing else:
+// no allocation, no membership, no stale-marking. That restraint matters - the
+// voice plane enumerates fewer radios than the database plane does, so running
+// a full sync from it would deactivate any radio it cannot see.
+async function refreshPocstarsPresence(inventory: any) {
+  if (!Array.isArray(inventory?.radios)) {
+    throw new Error("The radio network returned an invalid presence snapshot.");
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    let devicesUpdated = 0;
+    let online = 0;
+    for (const radio of inventory.radios) {
+      const radioId = String(radio.id || "");
+      if (!/^\d+$/.test(radioId)) continue;
+      // Other dispatcher consoles appear in group membership but are not
+      // devices, exactly as in the full sync.
+      if (Number(radio.role) === 3) continue;
+      const isOnline = Boolean(radio.online);
+      if (isOnline) online += 1;
+      const result = await client.query(
+        `UPDATE devices
+            SET pocstars_online = $2,
+                pocstars_last_seen_at = CASE WHEN $2 THEN NOW() ELSE pocstars_last_seen_at END
+          WHERE device_id = $1 AND pocstars_managed = true`,
+        [radioId, isOnline],
+      );
+      devicesUpdated += result.rowCount || 0;
+    }
+    await client.query("COMMIT");
+    return {
+      radiosSeen: inventory.radios.length,
+      devicesUpdated,
+      online,
+      observedAt: inventory.observedAt || new Date().toISOString(),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function getPocstarsDispatcherName(dispatcherUid: string) {
   const { rows } = await pool.query(
     "SELECT name FROM pocstars_dispatchers WHERE dispatcher_uid = $1",
@@ -3493,6 +3539,7 @@ export {
   listOrganizationCompanyIds,
   listRegistryGroupIds,
   getPocstarsDispatcherName,
+  refreshPocstarsPresence,
   listMonitorableChannels,
   listChannels,
   getChannel,
