@@ -192,6 +192,14 @@ export class PocstarsProvisioning {
     }));
   }
 
+  async uidForAccount(account: string) {
+    const [rows]: any = await this.pool.query(
+      "SELECT User_ID AS uid FROM tb_User WHERE User_Account = ? LIMIT 1",
+      [account],
+    );
+    return rows.length ? Number(rows[0].uid) : null;
+  }
+
   async listGroups(companyId: number) {
     const [rows]: any = await this.pool.query(
       `SELECT Cg_ID AS id, Cg_Name AS name, Cg_Type AS type

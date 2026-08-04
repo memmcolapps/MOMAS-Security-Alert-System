@@ -27,6 +27,9 @@ type PendingRequest = {
 
 type VoiceGroup = { gid: number; name: string; host: string; port: number };
 
+// Comfortably inside the observed ~95s idle close on the control socket.
+const CONTROL_KEEPALIVE_MS = 30_000;
+
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
 }
@@ -53,6 +56,7 @@ export class PocstarsLiveClient extends EventEmitter {
   private input = Buffer.alloc(0);
   private pending = new Map<string, PendingRequest[]>();
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private controlKeepaliveTimer: ReturnType<typeof setInterval> | null = null;
   private groupGeneration = 0;
   private connected = false;
   private closing = false;
@@ -120,6 +124,7 @@ export class PocstarsLiveClient extends EventEmitter {
     this.uid = Number(ack.self?.uid || 0);
     this.name = String(ack.self?.name || this.options.account);
     this.connected = true;
+    this.startControlKeepalive();
     this.emit("ready", { uid: this.uid, name: this.name });
   }
 
@@ -317,6 +322,7 @@ export class PocstarsLiveClient extends EventEmitter {
 
   async close() {
     this.closing = true;
+    this.stopControlKeepalive();
     await this.endCall().catch(() => {});
     this.rejectPending(new Error("The radio voice client closed."));
     this.control?.destroy();
@@ -422,6 +428,33 @@ export class PocstarsLiveClient extends EventEmitter {
     this.groupGeneration += 1;
     this.startAudio();
     this.emit("group", group);
+  }
+
+  // The audio heartbeat goes over UDP, which leaves the TCP control socket
+  // completely silent while monitoring. POCSTARS closes an idle control link
+  // after roughly 95 seconds, which ended a listening session mid-use with no
+  // Kickout and no error - it simply went quiet. Keep the control link busy.
+  private startControlKeepalive() {
+    this.stopControlKeepalive();
+    this.controlKeepaliveTimer = setInterval(() => {
+      if (!this.control || this.control.destroyed || this.closing) return;
+      try {
+        this.control.write(packControlFrame("ptt.net.HeartBeat", {
+          timestamp: nowSeconds(),
+          gid: this.group?.gid || 0,
+          uid: this.uid,
+          seq: this.heartbeatSequence++,
+        }));
+      } catch {
+        // A failed write means the socket is already gone; the close handler
+        // reports it.
+      }
+    }, CONTROL_KEEPALIVE_MS);
+  }
+
+  private stopControlKeepalive() {
+    if (this.controlKeepaliveTimer) clearInterval(this.controlKeepaliveTimer);
+    this.controlKeepaliveTimer = null;
   }
 
   private sendHeartbeat() {

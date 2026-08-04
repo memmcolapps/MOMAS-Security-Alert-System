@@ -59,13 +59,26 @@ const leasedSeatUids = new Set<number>();
 // keeps a plain voice-only bridge working exactly as before.
 const FALLBACK_SEAT_UID = -1;
 
+// The configured account is usually also a leasable seat of its company. If the
+// fallback path keyed it as -1 while a leased session keyed it by its real uid,
+// both could hold the SAME vendor account at once - and the radio network kicks
+// the older session. Resolve the real uid so the two paths contend properly.
+let fallbackSeatUid: number | null = null;
+async function fallbackSeatKey() {
+  if (!provisioning) return FALLBACK_SEAT_UID;
+  if (fallbackSeatUid !== null) return fallbackSeatUid;
+  fallbackSeatUid = (await provisioning.uidForAccount(account).catch(() => null)) ?? FALLBACK_SEAT_UID;
+  return fallbackSeatUid;
+}
+
 async function leaseSeat(companyId: number | null) {
   if (!companyId || !provisioning) {
-    if (leasedSeatUids.has(FALLBACK_SEAT_UID)) {
+    const key = await fallbackSeatKey();
+    if (leasedSeatUids.has(key)) {
       throw new Error("The radio console is already in use.");
     }
-    leasedSeatUids.add(FALLBACK_SEAT_UID);
-    return { uid: FALLBACK_SEAT_UID, account, password };
+    leasedSeatUids.add(key);
+    return { uid: key, account, password };
   }
   const seats = await provisioning.listSeats(companyId);
   if (!seats.length) {
