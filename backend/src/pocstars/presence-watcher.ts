@@ -124,11 +124,13 @@ async function applyDelta(watcher: Watcher, users: any[]) {
   if (!entries.length) return;
   try {
     const updated = await db.applyPocstarsPresence(entries);
-    if (updated) {
-      console.log(
-        `[Radio] presence: ${entries.map((e) => `${e.uid}=${e.online ? "on" : "off"}`).join(" ")}`,
-      );
-    }
+    // Logged whether or not a row moved. A delta that changes nothing is not
+    // the same event as no delta at all, and only logging the former makes a
+    // dead watcher indistinguishable from a quiet network.
+    console.log(
+      `[Radio] presence: ${entries.map((e) => `${e.uid}=${e.online ? "on" : "off"}`).join(" ")}`
+      + ` (${updated} row${updated === 1 ? "" : "s"} changed)`,
+    );
   } catch (error) {
     console.warn(
       "[Radio] could not apply a presence change:",
