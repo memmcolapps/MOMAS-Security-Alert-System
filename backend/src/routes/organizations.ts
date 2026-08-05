@@ -206,25 +206,36 @@ setInterval(() => {
 // its own slow cycle: often enough that the console reflects reality, rarely
 // enough that it stays out of the way of live audio.
 let presenceRefreshRunning = false;
-setInterval(() => {
+async function refreshPresence(reason: string) {
   if (!liveRadioConfigured() || presenceRefreshRunning) return;
   presenceRefreshRunning = true;
-  void (async () => {
-    try {
-      if (!(await db.hasPocstarsDispatchers())) return;
-      const summary = await refreshPresenceOverVoice();
-      await db.createAuditLog({
-        organization_id: null,
-        actor_user_id: null,
-        action: "pocstars.presence.refresh",
-        target_type: "pocstars_dispatcher",
-        target_id: null,
-        metadata: summary,
-      });
-    } catch {
-      // Usually a live session holding the only free seat. Retry next cycle.
-    } finally {
-      presenceRefreshRunning = false;
-    }
-  })();
-}, 30 * 60 * 1000);
+  try {
+    if (!(await db.hasPocstarsDispatchers())) return;
+    const summary = await refreshPresenceOverVoice();
+    await db.createAuditLog({
+      organization_id: null,
+      actor_user_id: null,
+      action: "pocstars.presence.refresh",
+      target_type: "pocstars_dispatcher",
+      target_id: null,
+      metadata: { ...summary, reason },
+    });
+  } catch (error) {
+    // Usually a live session holding the only free seat, and the next cycle
+    // retries safely - but a silent catch here once hid a console showing the
+    // whole fleet offline for a day, so say so.
+    console.warn(
+      `[Radio] presence refresh (${reason}) failed, retrying next cycle:`,
+      error instanceof Error ? error.message : error,
+    );
+  } finally {
+    presenceRefreshRunning = false;
+  }
+}
+
+// Presence has to be re-read after a restart. The interval alone would leave the
+// console reporting whatever was true before the process died - for a full cycle
+// after a deploy, and permanently if restarts come closer together than the
+// cycle. Wait a little first so it does not contend with startup.
+setTimeout(() => void refreshPresence("startup"), 60 * 1000).unref?.();
+setInterval(() => void refreshPresence("cycle"), 30 * 60 * 1000);
