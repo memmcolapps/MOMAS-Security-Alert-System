@@ -110,6 +110,22 @@ function primaryOrganization(user: any) {
 const ORG_MANAGE_ROLES = new Set(["org_owner", "org_admin", "admin"]);
 const UNIT_MANAGE_ROLES = new Set(["org_owner", "org_admin", "unit_admin", "admin"]);
 
+// Roles a membership may be created with. "admin" is deliberately absent: it is
+// still honoured on existing rows above, but the two admin consoles used to
+// offer different vocabularies for the same permissions, so new memberships
+// come from one list. Anything unrecognised would silently become a member with
+// no access at all, which reads as a broken login rather than a wrong role.
+const ASSIGNABLE_ORG_ROLES = new Set(["org_owner", "org_admin", "unit_admin", "operator", "viewer"]);
+
+function normalizeOrgRole(role: unknown, fallback: string) {
+  const value = String(role || "").trim();
+  if (!value) return fallback;
+  if (!ASSIGNABLE_ORG_ROLES.has(value)) {
+    throw new Error(`${value} is not a role. Choose one of: ${[...ASSIGNABLE_ORG_ROLES].join(", ")}.`);
+  }
+  return value;
+}
+
 function canManageOrganization(membership: any) {
   return Boolean(membership && ORG_MANAGE_ROLES.has(membership.role));
 }
@@ -174,5 +190,6 @@ export {
   primaryOrganization,
   canManageOrganization,
   canManageUnit,
+  normalizeOrgRole,
   scopeForUser,
 };

@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, ChevronRight, Plus, Radio, Search, X } from "lucide-react";
+import { AlertTriangle, Building2, ChevronRight, Plus, Radio, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   assignPocstarsGroup,
@@ -10,6 +10,17 @@ import {
   runPocstarsPlatformSync,
 } from "../lib/api";
 import { NIGERIAN_STATES } from "../lib/domain";
+
+// What makes a company incomplete rather than merely suspended. These are the
+// three states an admin scans this list for, and none of them were visible:
+// every row rendered identically whether it was ready to use or half-built.
+function companyIssues(org) {
+  const issues = [];
+  if (!org.pocstars_company_id) issues.push("not on the radio network");
+  if (!org.channel_count) issues.push("no channels");
+  if (!org.user_count) issues.push("no admins");
+  return issues;
+}
 
 const emptyOrg = {
   name: "",
@@ -31,13 +42,13 @@ export function AdminOrganizationsRoute() {
     queryFn: listOrganizations,
   });
 
-  const [createWarning, setCreateWarning] = useState("");
+  const [createResult, setCreateResult] = useState(null);
   const createMutation = useMutation({
     mutationFn: createOrganization,
     onSuccess: (result) => {
       setOrgForm(emptyOrg);
       setCreating(false);
-      setCreateWarning(result?.warning || "");
+      setCreateResult(result || null);
       queryClient.invalidateQueries({ queryKey: ["organizations"] });
     },
   });
@@ -68,6 +79,45 @@ export function AdminOrganizationsRoute() {
           {creating ? "Cancel" : "New company"}
         </button>
       </header>
+
+      {/* The outcome of a create belongs next to the button that caused it. This
+          used to render below the radio panel at the foot of the page, where a
+          failed radio setup was easy to scroll past entirely. */}
+      {createResult ? (
+        <div
+          className={`mb-6 flex flex-wrap items-start justify-between gap-3 rounded border px-3 py-3 text-xs ${
+            createResult.warning
+              ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+              : "border-green-500/30 bg-green-500/10 text-ops-green"
+          }`}
+        >
+          <div className="min-w-0">
+            <p className="font-bold">
+              {createResult.organization?.name} created
+              {createResult.warning ? " — but it has no radio yet" : " and set up on the radio network"}
+            </p>
+            {createResult.warning ? (
+              <p className="mt-1 text-[11px] opacity-90">
+                {createResult.warning} You can retry this from the company's Radio tab.
+              </p>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 gap-2">
+            {createResult.organization ? (
+              <Link
+                to="/admin/organizations/$id"
+                params={{ id: String(createResult.organization.id) }}
+                className="rounded border border-current px-3 py-1 text-[11px] font-bold"
+              >
+                Open company
+              </Link>
+            ) : null}
+            <button className="rounded px-2 py-1 text-[11px] opacity-70 hover:opacity-100" onClick={() => setCreateResult(null)}>
+              Dismiss
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {creating ? (
         <form
@@ -118,25 +168,47 @@ export function AdminOrganizationsRoute() {
           {orgsQuery.isLoading ? "Loading..." : `${filtered.length} of ${organizations.length} compan${organizations.length === 1 ? "y" : "ies"}`}
         </div>
         <div className="divide-y divide-white/5">
-          {filtered.map((org) => (
-            <Link
-              key={org.id}
-              to="/admin/organizations/$id"
-              params={{ id: String(org.id) }}
-              className="flex items-center justify-between gap-3 px-4 py-3 transition hover:bg-white/[0.04]"
-            >
-              <div className="min-w-0">
-                <h3 className="text-sm font-bold text-neutral-100">{org.name}</h3>
-                <p className="mt-1 truncate text-[11px] text-neutral-500">
-                  {org.slug} · {org.status} · {org.device_count || 0} device{org.device_count === 1 ? "" : "s"} · {org.user_count || 0} user{org.user_count === 1 ? "" : "s"}
-                </p>
-                <p className="mt-1 truncate text-[11px] text-neutral-600">
-                  {org.all_states ? "All states" : (org.states || []).join(", ") || "No states assigned"}
-                </p>
-              </div>
-              <ChevronRight size={16} className="shrink-0 text-neutral-500" />
-            </Link>
-          ))}
+          {filtered.map((org) => {
+            const issues = companyIssues(org);
+            const suspended = org.status !== "active";
+            return (
+              <Link
+                key={org.id}
+                to="/admin/organizations/$id"
+                params={{ id: String(org.id) }}
+                className="flex items-center justify-between gap-3 px-4 py-3 transition hover:bg-white/[0.04]"
+              >
+                <span
+                  className={`mt-1.5 h-2 w-2 shrink-0 self-start rounded-full ${
+                    issues.length ? "bg-amber-400" : suspended ? "bg-neutral-600" : "bg-ops-green"
+                  }`}
+                  title={issues.length ? `Needs setup: ${issues.join(", ")}` : suspended ? "Suspended" : "Ready"}
+                />
+                <div className="min-w-0 flex-1">
+                  <h3 className="flex items-center gap-2 text-sm font-bold text-neutral-100">
+                    {org.name}
+                    {suspended ? (
+                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[9px] font-bold uppercase text-neutral-400">
+                        Suspended
+                      </span>
+                    ) : null}
+                  </h3>
+                  <p className="mt-1 truncate text-[11px] text-neutral-500">
+                    {org.slug} · {org.device_count || 0} radio{org.device_count === 1 ? "" : "s"} · {org.channel_count || 0} channel{org.channel_count === 1 ? "" : "s"} · {org.user_count || 0} admin{org.user_count === 1 ? "" : "s"}
+                  </p>
+                  <p className="mt-1 truncate text-[11px] text-neutral-600">
+                    {org.all_states ? "All states" : (org.states || []).join(", ") || "No states assigned"}
+                  </p>
+                  {issues.length ? (
+                    <p className="mt-1 flex items-center gap-1 truncate text-[11px] text-amber-400/90">
+                      <AlertTriangle size={11} className="shrink-0" /> Needs setup: {issues.join(", ")}
+                    </p>
+                  ) : null}
+                </div>
+                <ChevronRight size={16} className="shrink-0 text-neutral-500" />
+              </Link>
+            );
+          })}
           {!orgsQuery.isLoading && !filtered.length ? (
             <div className="px-4 py-12 text-center text-[12px] text-neutral-500">
               <Building2 className="mx-auto mb-2" size={28} />
@@ -145,10 +217,6 @@ export function AdminOrganizationsRoute() {
           ) : null}
         </div>
       </section>
-
-      {createWarning ? (
-        <p className="mt-4 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">{createWarning}</p>
-      ) : null}
 
       <RadioNetworkPanel organizations={organizations} />
     </main>
@@ -174,6 +242,8 @@ function RadioNetworkPanel({ organizations }) {
     onSuccess: refresh,
   });
 
+  // A null organization releases the channel. Assignment used to be one-way, so
+  // a channel handed to the wrong company stayed there.
   const assignMutation = useMutation({
     mutationFn: ({ groupId, organizationId }) =>
       assignPocstarsGroup(groupId, { organization_id: organizationId }),
@@ -194,7 +264,7 @@ function RadioNetworkPanel({ organizations }) {
             <Radio size={15} /> Radio network
           </h2>
           <p className="mt-1 text-[11px] text-neutral-500">
-            The whole radio network imports here first. Assign each channel to a company and its radios follow automatically. Unassigned radios stay platform-only until you place them.
+            The whole radio network imports here first. Assign each channel to a company and its radios follow automatically. Release it to send them back to the pool. Unassigned radios stay platform-only until you place them.
           </p>
           <p className="mt-1 text-[11px] text-neutral-500">
             {dispatcher
@@ -214,6 +284,13 @@ function RadioNetworkPanel({ organizations }) {
 
       {syncMutation.error ? <p className="mt-3 text-xs text-ops-red">{syncMutation.error.message}</p> : null}
       {assignMutation.error ? <p className="mt-3 text-xs text-ops-red">{assignMutation.error.message}</p> : null}
+      {assignMutation.data?.result ? (
+        <p className="mt-3 text-[11px] text-ops-green">
+          {assignMutation.data.result.radiosReleased !== undefined
+            ? `Released ${assignMutation.data.result.channel_name} from ${assignMutation.data.result.organization_name} · ${assignMutation.data.result.radiosReleased} radio${assignMutation.data.result.radiosReleased === 1 ? "" : "s"} returned to the pool.`
+            : `Assigned ${assignMutation.data.result.group_name} · ${assignMutation.data.result.radiosMoved} radio${assignMutation.data.result.radiosMoved === 1 ? "" : "s"} moved in.`}
+        </p>
+      ) : null}
       {summary ? (
         <p className="mt-3 text-[11px] text-neutral-400">
           {summary.groupsFound} groups · {summary.radiosFound} radios seen · {summary.radiosCreated} added · {summary.radiosUpdated} refreshed · {summary.pooled ?? 0} awaiting assignment
@@ -243,7 +320,12 @@ function RadioNetworkPanel({ organizations }) {
                   <td className="py-2 pr-3 font-mono text-neutral-400">{group.group_id}</td>
                   <td className="py-2 pr-3 text-neutral-400">{group.radio_count}</td>
                   <td className="py-2 pr-3 text-neutral-300">
-                    {group.organization_id ? `${group.organization_name} · ${group.unit_name}` : (
+                    {group.organization_id ? (
+                      <>
+                        {group.organization_name}
+                        {group.unit_name ? ` · ${group.unit_name}` : ""}
+                      </>
+                    ) : (
                       <select
                         className="field-input py-1 text-[11px]"
                         value={assignTargets[group.group_id] || ""}
@@ -257,7 +339,21 @@ function RadioNetworkPanel({ organizations }) {
                     )}
                   </td>
                   <td className="py-2 text-right">
-                    {!group.organization_id ? (
+                    {group.organization_id ? (
+                      <button
+                        className="rounded border border-white/10 px-3 py-1 text-[11px] text-neutral-400 hover:border-ops-red hover:text-ops-red disabled:opacity-40"
+                        disabled={assignMutation.isPending}
+                        onClick={() => {
+                          if (window.confirm(
+                            `Release ${group.name} from ${group.organization_name}? Its radios return to the unallocated pool. The talk group stays on the radio network.`,
+                          )) {
+                            assignMutation.mutate({ groupId: group.group_id, organizationId: null });
+                          }
+                        }}
+                      >
+                        Release
+                      </button>
+                    ) : (
                       <button
                         className="rounded bg-ops-green px-3 py-1 text-[11px] font-bold text-black disabled:opacity-40"
                         disabled={!assignTargets[group.group_id] || assignMutation.isPending}
@@ -268,7 +364,7 @@ function RadioNetworkPanel({ organizations }) {
                       >
                         Assign
                       </button>
-                    ) : null}
+                    )}
                   </td>
                 </tr>
               ))}

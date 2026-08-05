@@ -17,7 +17,7 @@ import {
   updateOrgChannel,
   updateOrgUnit,
 } from "../lib/api";
-import { NIGERIAN_STATES, deviceTypeLabel } from "../lib/domain";
+import { NIGERIAN_STATES, ORG_ROLES, deviceTypeLabel, orgRoleLabel } from "../lib/domain";
 
 const TABS = [
   { id: "channels", label: "Channels", icon: RadioTower },
@@ -25,14 +25,6 @@ const TABS = [
   { id: "users", label: "Users", icon: UsersRound },
   { id: "devices", label: "Devices", icon: Radio },
   { id: "audit", label: "Audit", icon: ClipboardList },
-];
-
-const ROLES = [
-  ["org_owner", "Org owner"],
-  ["org_admin", "Org admin"],
-  ["unit_admin", "Unit admin"],
-  ["operator", "Operator"],
-  ["viewer", "Viewer"],
 ];
 
 export function OrgAdminRoute() {
@@ -146,9 +138,12 @@ function UnitsSection({ units, canCreateUnits, onChanged }) {
           </Field>
         </div>
         {createMutation.error ? <p className="mt-2 text-xs text-ops-red">{createMutation.error.message}</p> : null}
-        <button className="mt-4 inline-flex items-center gap-2 rounded bg-ops-red px-4 py-2 text-xs font-bold text-black disabled:opacity-50" disabled={createMutation.isPending}>
-          <Save size={14} /> {createMutation.isPending ? "Saving..." : "Create unit"}
-        </button>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <button className="inline-flex items-center gap-2 rounded bg-ops-red px-4 py-2 text-xs font-bold text-black disabled:opacity-50" disabled={createMutation.isPending}>
+            <Save size={14} /> {createMutation.isPending ? "Saving..." : "Create unit"}
+          </button>
+          {createMutation.isSuccess ? <span className="text-xs text-ops-green">Unit created</span> : null}
+        </div>
       </form>
       ) : null}
 
@@ -237,9 +232,12 @@ function ChannelsSection({ devices, units, canManage }) {
           </div>
           {createMutation.error ? <p className="mt-2 text-xs text-ops-red">{createMutation.error.message}</p> : null}
           {warning ? <p className="mt-2 text-xs text-amber-300/90">{warning}</p> : null}
-          <button className="mt-4 inline-flex items-center gap-2 rounded bg-ops-red px-4 py-2 text-xs font-bold text-black disabled:opacity-50" disabled={createMutation.isPending || !form.name.trim()}>
-            <Plus size={14} /> {createMutation.isPending ? "Creating…" : "Create channel"}
-          </button>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button className="inline-flex items-center gap-2 rounded bg-ops-red px-4 py-2 text-xs font-bold text-black disabled:opacity-50" disabled={createMutation.isPending || !form.name.trim()}>
+              <Plus size={14} /> {createMutation.isPending ? "Creating…" : "Create channel"}
+            </button>
+            {createMutation.isSuccess && !warning ? <span className="text-xs text-ops-green">Channel created and live</span> : null}
+          </div>
         </form>
       ) : null}
 
@@ -377,7 +375,7 @@ function UsersSection({ users, units, onChanged }) {
           <Field label="Temporary password"><input className="field-input" type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></Field>
           <Field label="Role">
             <select className="field-input" value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>
-              {ROLES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+              {ORG_ROLES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
             </select>
           </Field>
           <Field label="Unit">
@@ -394,9 +392,12 @@ function UsersSection({ users, units, onChanged }) {
           </Field>
         </div>
         {addMutation.error ? <p className="mt-2 text-xs text-ops-red">{addMutation.error.message}</p> : null}
-        <button className="mt-4 inline-flex items-center gap-2 rounded bg-ops-red px-4 py-2 text-xs font-bold text-black disabled:opacity-50" disabled={addMutation.isPending}>
-          <UserPlus size={14} /> {addMutation.isPending ? "Saving..." : "Add user"}
-        </button>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <button className="inline-flex items-center gap-2 rounded bg-ops-red px-4 py-2 text-xs font-bold text-black disabled:opacity-50" disabled={addMutation.isPending}>
+            <UserPlus size={14} /> {addMutation.isPending ? "Saving..." : "Add user"}
+          </button>
+          {addMutation.isSuccess ? <span className="text-xs text-ops-green">User added</span> : null}
+        </div>
       </form>
 
       <List title={`${users.length} user${users.length === 1 ? "" : "s"}`}>
@@ -404,7 +405,7 @@ function UsersSection({ users, units, onChanged }) {
           <article className="flex flex-wrap items-center justify-between gap-3 px-4 py-3" key={user.id}>
             <div className="min-w-0">
               <h3 className="text-sm text-neutral-100">{user.name || user.email}</h3>
-              <p className="text-[11px] text-neutral-500">{user.email} · {roleLabel(user.role)} · {user.unit_name || "whole organization"}</p>
+              <p className="text-[11px] text-neutral-500">{user.email} · {orgRoleLabel(user.role)} · {user.unit_name || "whole organization"}</p>
             </div>
             <button className="inline-flex items-center gap-1 rounded border border-red-500/20 px-2 py-1 text-[10px] text-red-400/70 hover:border-ops-red hover:text-ops-red" onClick={() => {
               if (window.confirm(`Remove ${user.email}?`)) removeMutation.mutate(user.id);
@@ -485,10 +486,6 @@ function Field({ label, children }) {
 
 function Empty({ children }) {
   return <div className="px-4 py-10 text-center text-[12px] text-neutral-500">{children}</div>;
-}
-
-function roleLabel(value) {
-  return ROLES.find(([key]) => key === value)?.[1] || value;
 }
 
 function unitOptionLabel(unit) {

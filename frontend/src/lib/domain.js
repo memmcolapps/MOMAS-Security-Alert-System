@@ -117,3 +117,31 @@ export function deviceTypeLabel(type) {
     }[type] || "Other"
   );
 }
+
+// One role vocabulary for both admin surfaces. The platform page used to offer
+// "admin" and "viewer" while the organization page offered five other values,
+// so the same person ended up with a different role string depending on which
+// page created them - all resolving to the same permissions, and all displayed
+// differently. New assignments come from this list only.
+export const ORG_ROLES = [
+  ["org_owner", "Org owner"],
+  ["org_admin", "Org admin"],
+  ["unit_admin", "Unit admin"],
+  ["operator", "Operator"],
+  ["viewer", "Viewer"],
+];
+
+// Values that exist on old rows and are still accepted by the API. They are
+// labelled so the users list reads sensibly, but never offered for new users.
+const LEGACY_ORG_ROLE_LABELS = {
+  admin: "Org admin",
+};
+
+export function orgRoleLabel(value) {
+  return (
+    ORG_ROLES.find(([key]) => key === value)?.[1]
+    || LEGACY_ORG_ROLE_LABELS[value]
+    || value
+    || "-"
+  );
+}

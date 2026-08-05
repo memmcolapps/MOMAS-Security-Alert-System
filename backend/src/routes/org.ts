@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { canManageOrganization, canManageUnit, primaryOrganization, requireOrgManager } from "../auth";
+import { canManageOrganization, canManageUnit, normalizeOrgRole, primaryOrganization, requireOrgManager } from "../auth";
 import * as db from "../db";
 import { provisionOnNetwork } from "../pocstars/live-gateway";
 
@@ -16,7 +16,8 @@ function clientError(error: unknown) {
   if (
     message.includes("platform admin") ||
     message.includes("temporary password") ||
-    message.includes("duplicate key")
+    message.includes("duplicate key") ||
+    message.includes("is not a role")
   ) {
     return { status: 400 as const, body: { error: message.includes("duplicate key") ? "A record with these details already exists." : message } };
   }
@@ -78,12 +79,13 @@ router.post("/users", async (c) => {
     return c.json({ error: "You can only add users to units you are allowed to manage." }, 403);
   }
   try {
+    const role = normalizeOrgRole(body.role, "viewer");
     const user = await db.upsertOrganizationUser({
       organization_id: organizationId,
       email: body.email,
       name: body.name,
       password: body.password,
-      role: body.role || "viewer",
+      role,
       unit_id: body.unit_id || null,
       scope_level: body.scope_level || (body.unit_id ? "unit" : "organization"),
       allowCrossOrganization: isPlatformAdmin(c),
@@ -94,7 +96,7 @@ router.post("/users", async (c) => {
       action: "user.upsert",
       target_type: "user",
       target_id: user.id,
-      metadata: { email: body.email, role: body.role || "viewer", unit_id: body.unit_id || null },
+      metadata: { email: body.email, role, unit_id: body.unit_id || null },
     });
     return c.json({ user }, 201);
   } catch (error) {
@@ -246,16 +248,34 @@ router.put("/channels/:channel_id", async (c) => {
     return c.json({ error: "That channel could not be found." }, 404);
   }
   const existing = await db.getChannel(channelId);
-  if (existing?.pocstars_group_id && body.name?.trim()) {
-    const companyId = await companyIdFor(organizationIdFor(c));
-    if (companyId) {
-      await provisionOnNetwork("provision.channel.rename", {
-        companyId, groupId: Number(existing.pocstars_group_id), name: body.name.trim(),
-      }).catch(() => {});
+  // A channel's identity is its vendor group id, not its name - renaming only
+  // changes the label, and the group survives it. But the radio network owns
+  // that label: the inventory sync copies the vendor's name back onto the
+  // channel every cycle. So a rename that fails there has to fail here too.
+  // Swallowing it wrote a local name that reverted itself minutes later, with
+  // nothing shown to the person who typed it.
+  let renamed: string | null = null;
+  if (body.name?.trim() && body.name.trim() !== existing?.name) {
+    if (existing?.pocstars_group_id) {
+      const companyId = await companyIdFor(organizationIdFor(c));
+      if (companyId) {
+        try {
+          await provisionOnNetwork("provision.channel.rename", {
+            companyId, groupId: Number(existing.pocstars_group_id), name: body.name.trim(),
+          });
+        } catch (error) {
+          return c.json({
+            error: error instanceof Error
+              ? `The channel could not be renamed on the radio network: ${error.message}`
+              : "The channel could not be renamed on the radio network.",
+          }, 502);
+        }
+      }
     }
+    renamed = body.name.trim();
   }
   const channel = await db.updateChannel(channelId, {
-    name: body.name?.trim() || null,
+    name: renamed,
     unit_id: body.unit_id === undefined ? undefined : (body.unit_id ? Number(body.unit_id) : null),
     active: body.active === undefined ? null : Boolean(body.active),
   });

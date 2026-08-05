@@ -92,6 +92,20 @@ export function updateOrganizationAccess(id, payload) {
   });
 }
 
+export function provisionOrganizationRadio(id) {
+  return request(`/api/organizations/${id}/radio/provision`, { method: "POST" });
+}
+
+export function getOrganizationDeletionImpact(id) {
+  return request(`/api/organizations/${id}/deletion-impact`);
+}
+
+export function deleteOrganization(id, confirmName) {
+  return request(`/api/organizations/${id}?confirm=${encodeURIComponent(confirmName)}`, {
+    method: "DELETE",
+  });
+}
+
 export function getRadioChannels() {
   return request("/api/pocstars/radio/channels");
 }

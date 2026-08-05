@@ -67,6 +67,26 @@ router.post("/devices/:device_id/allocate", async (c) => {
 router.post("/groups/:group_id/assign", async (c) => {
   const user = (c as any).get("user");
   const body = await c.req.json().catch(() => ({}));
+
+  // A null organization releases the channel. Assignment used to be one-way,
+  // which made a mis-assigned channel a database repair job.
+  if (body.organization_id === null) {
+    try {
+      const result = await db.unassignPocstarsGroup(c.req.param("group_id"));
+      await db.createAuditLog({
+        organization_id: result.organization_id,
+        actor_user_id: user?.id || null,
+        action: "pocstars.group.unassign",
+        target_type: "pocstars_group",
+        target_id: result.group_id,
+        metadata: result,
+      });
+      return c.json({ result });
+    } catch (error) {
+      return c.json(jsonError(error), 409);
+    }
+  }
+
   const organizationId = Number(body.organization_id);
   if (!Number.isSafeInteger(organizationId) || organizationId <= 0) {
     return c.json({ error: "Choose the organization this channel belongs to." }, 400);
@@ -75,7 +95,6 @@ router.post("/groups/:group_id/assign", async (c) => {
     const result = await db.assignPocstarsGroupToOrganization({
       group_id: c.req.param("group_id"),
       organization_id: organizationId,
-      unit_name: body.unit_name ? String(body.unit_name) : undefined,
     });
     await db.createAuditLog({
       organization_id: organizationId,

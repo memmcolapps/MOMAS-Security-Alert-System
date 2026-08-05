@@ -2755,10 +2755,14 @@ async function syncPocstarsPlatformInventory(inventory: any) {
 
 // Platform-admin choice: attach a POCSTARS group to an organization as a unit
 // and pull that group's pool radios into it.
-async function assignPocstarsGroupToOrganization({ group_id, organization_id, unit_name }: {
+// Claiming a group for an organization. The channel takes the vendor group's
+// name and nothing else: the group id is the identity, and the inventory sync
+// copies the vendor's name back over this row every cycle, so a local label
+// chosen here would quietly revert within minutes. Renaming is done through
+// PUT /api/org/channels/:id, which renames on the network first.
+async function assignPocstarsGroupToOrganization({ group_id, organization_id }: {
   group_id: string;
   organization_id: number;
-  unit_name?: string;
 }) {
   const groupId = String(group_id);
   const client = await pool.connect();
@@ -2795,7 +2799,7 @@ async function assignPocstarsGroupToOrganization({ group_id, organization_id, un
         `INSERT INTO channels (organization_id, name, pocstars_group_id, provision_state)
          VALUES ($1,$2,$3,'ready')
          RETURNING id`,
-        [organization_id, unit_name || group.name || `Channel ${groupId}`, groupId],
+        [organization_id, group.name || `Channel ${groupId}`, groupId],
       );
       channelId = Number(rows[0].id);
     }
@@ -2838,19 +2842,86 @@ async function assignPocstarsGroupToOrganization({ group_id, organization_id, un
   }
 }
 
+// Release a channel back to the registry. Assignment was one-way, so a channel
+// pointed at the wrong company could only be corrected in the database. This is
+// the inverse of assignPocstarsGroupToOrganization: the claim record goes, and
+// the radios it pulled in go back to the unallocated pool. The talk group on
+// the radio network is untouched - releasing a claim is not retiring a channel.
+async function unassignPocstarsGroup(group_id: string) {
+  const groupId = String(group_id);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: channels } = await client.query(
+      `SELECT c.id, c.name, c.organization_id, o.name AS organization_name
+         FROM channels c
+         JOIN organizations o ON o.id = c.organization_id
+        WHERE c.pocstars_group_id = $1
+        FOR UPDATE OF c`,
+      [groupId],
+    );
+    const channel = channels[0];
+    if (!channel) throw new Error("That channel is not assigned to any company.");
+
+    // Only radios this group brought in. A handset that also sits on another
+    // channel the company still holds stays where it is.
+    const { rows: released } = await client.query(
+      `UPDATE devices d
+          SET organization_id = NULL, unit_id = NULL
+        WHERE d.organization_id = $2
+          AND EXISTS (
+            SELECT 1 FROM pocstars_radio_group_memberships m
+             WHERE m.device_id = d.device_id AND m.group_id = $1)
+          AND NOT EXISTS (
+            SELECT 1 FROM pocstars_radio_group_memberships m2
+              JOIN channels c2 ON c2.pocstars_group_id = m2.group_id
+             WHERE m2.device_id = d.device_id
+               AND c2.organization_id = $2
+               AND c2.pocstars_group_id <> $1)
+        RETURNING d.device_id`,
+      [groupId, channel.organization_id],
+    );
+    for (const device of released) {
+      await client.query("DELETE FROM channel_devices WHERE device_id = $1", [device.device_id]);
+    }
+    await client.query("DELETE FROM channels WHERE id = $1", [channel.id]);
+    await client.query("COMMIT");
+    return {
+      group_id: groupId,
+      channel_id: Number(channel.id),
+      channel_name: channel.name,
+      organization_id: Number(channel.organization_id),
+      organization_name: channel.organization_name,
+      radiosReleased: released.length,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function listPocstarsRegistry() {
   const [{ rows: dispatchers }, { rows: groups }, { rows: pool_radios }] = await Promise.all([
     pool.query("SELECT * FROM pocstars_dispatchers ORDER BY dispatcher_uid"),
     pool.query(
+      // Assignment lives on channels - units carried it before channels
+      // existed, and the migration above moved every mapping across. Reading
+      // units here meant a successful assignment still displayed as
+      // unassigned, so the button looked broken and got pressed again.
       `SELECT g.*,
-              ou.id AS unit_id,
+              c.id AS channel_id,
+              c.name AS channel_name,
+              c.unit_id,
               ou.name AS unit_name,
-              ou.organization_id,
+              c.organization_id,
               o.name AS organization_name,
               (SELECT COUNT(*)::int FROM pocstars_radio_group_memberships m WHERE m.group_id = g.group_id) AS radio_count
          FROM pocstars_groups g
-         LEFT JOIN organization_units ou ON ou.pocstars_group_id = g.group_id
-         LEFT JOIN organizations o ON o.id = ou.organization_id
+         LEFT JOIN channels c ON c.pocstars_group_id = g.group_id
+         LEFT JOIN organizations o ON o.id = c.organization_id
+         LEFT JOIN organization_units ou ON ou.id = c.unit_id
         ORDER BY g.active DESC, g.name`,
     ),
     pool.query(
@@ -3130,11 +3201,13 @@ async function listOrganizations() {
     SELECT o.*,
       COALESCE(json_agg(DISTINCT os.state) FILTER (WHERE os.state IS NOT NULL), '[]') AS states,
       COUNT(DISTINCT d.device_id)::int AS device_count,
-      COUNT(DISTINCT m.user_id)::int AS user_count
+      COUNT(DISTINCT m.user_id)::int AS user_count,
+      COUNT(DISTINCT c.id)::int AS channel_count
     FROM organizations o
     LEFT JOIN organization_states os ON os.organization_id = o.id
     LEFT JOIN devices d ON d.organization_id = o.id
     LEFT JOIN organization_memberships m ON m.organization_id = o.id
+    LEFT JOIN channels c ON c.organization_id = o.id
     GROUP BY o.id
     ORDER BY o.created_at DESC
   `);
@@ -3161,6 +3234,8 @@ async function updateOrganizationAccess(id, {
   name,
   pocstars_company_id,
   pocstars_company_name,
+  radio_seats,
+  platform_radio_seats,
 }) {
   const { rows } = await pool.query(
     `UPDATE organizations
@@ -3169,6 +3244,8 @@ async function updateOrganizationAccess(id, {
             name = COALESCE($4, name),
             pocstars_company_id = CASE WHEN $5::boolean THEN $6 ELSE pocstars_company_id END,
             pocstars_company_name = CASE WHEN $7::boolean THEN $8 ELSE pocstars_company_name END,
+            radio_seats = COALESCE($9, radio_seats),
+            platform_radio_seats = COALESCE($10, platform_radio_seats),
             updated_at = NOW()
       WHERE id = $1
       RETURNING *`,
@@ -3181,11 +3258,92 @@ async function updateOrganizationAccess(id, {
       pocstars_company_id ? String(pocstars_company_id) : null,
       pocstars_company_name !== undefined,
       pocstars_company_name || null,
+      // Seats were set once at creation and then unreachable, so a company that
+      // outgrew its allowance had no path that did not go through the database.
+      radio_seats === undefined ? null : Math.max(1, Number(radio_seats) || 1),
+      platform_radio_seats === undefined ? null : Math.max(0, Number(platform_radio_seats) || 0),
     ],
   );
   if (!rows[0]) return null;
   if (states !== undefined) await setOrganizationStates(id, states);
   return getOrganization(id);
+}
+
+// Everything a deletion would take with it, counted before anything is taken.
+// Deleting a company is the one irreversible act on this page, so the console
+// shows this first and the delete itself acts on exactly these rows.
+async function getOrganizationDeletionImpact(id) {
+  const organization = await getOrganization(id);
+  if (!organization) return null;
+  const { rows } = await pool.query(
+    `SELECT
+       (SELECT COUNT(*)::int FROM organization_memberships WHERE organization_id = $1) AS members,
+       (SELECT COUNT(*)::int FROM devices WHERE organization_id = $1) AS radios,
+       (SELECT COUNT(*)::int FROM channels WHERE organization_id = $1) AS channels,
+       (SELECT COUNT(*)::int FROM organization_units WHERE organization_id = $1) AS units,
+       (SELECT COUNT(*)::int FROM channels
+         WHERE organization_id = $1 AND pocstars_group_id IS NOT NULL) AS claimed_groups,
+       (SELECT COUNT(*)::int FROM geofences WHERE organization_id = $1) AS geofences,
+       (SELECT COUNT(*)::int FROM operational_alerts WHERE organization_id = $1) AS alerts,
+       (SELECT COUNT(*)::int FROM audit_logs WHERE organization_id = $1) AS audit_entries,
+       (SELECT COUNT(*)::int FROM users u
+         WHERE u.platform_role = 'none'
+           AND EXISTS (SELECT 1 FROM organization_memberships m
+                        WHERE m.user_id = u.id AND m.organization_id = $1)
+           AND NOT EXISTS (SELECT 1 FROM organization_memberships m
+                            WHERE m.user_id = u.id AND m.organization_id <> $1)) AS accounts_deleted`,
+    [id],
+  );
+  const companyId = organization.pocstars_company_id ? Number(organization.pocstars_company_id) : null;
+  return {
+    organization,
+    counts: rows[0],
+    radio: {
+      company_id: companyId,
+      // The vendor install is shared with other operators and keeps recordings
+      // against its own ids, so the radio-network company is never deleted from
+      // here. Saying which one is left behind is the honest version.
+      shared_with: companyId ? await organizationsSharingCompanyId(companyId, id) : [],
+    },
+  };
+}
+
+// Deleting the organization row is enough for most of its data: memberships,
+// states, units, channels, geofences, alerts and audit entries all cascade, and
+// its radios fall back to organization_id NULL - the unallocated pool, which is
+// where a returned handset belongs. The vendor company is deliberately left
+// alone; see getOrganizationDeletionImpact.
+async function deleteOrganization(id) {
+  const impact = await getOrganizationDeletionImpact(id);
+  if (!impact) return null;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // An account with no memberships still authenticates - it just sees an
+    // empty console - so accounts that existed only for this company would
+    // otherwise survive it as working logins.
+    await client.query(
+      `DELETE FROM users u
+        WHERE u.platform_role = 'none'
+          AND EXISTS (SELECT 1 FROM organization_memberships m
+                       WHERE m.user_id = u.id AND m.organization_id = $1)
+          AND NOT EXISTS (SELECT 1 FROM organization_memberships m
+                           WHERE m.user_id = u.id AND m.organization_id <> $1)`,
+      [id],
+    );
+    const { rowCount } = await client.query("DELETE FROM organizations WHERE id = $1", [id]);
+    if (!rowCount) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    await client.query("COMMIT");
+    return impact;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function setOrganizationStates(organizationId, states = []) {
@@ -3552,6 +3710,8 @@ export {
   listOrganizations,
   getOrganization,
   updateOrganizationAccess,
+  getOrganizationDeletionImpact,
+  deleteOrganization,
   createUser,
   addOrganizationUser,
   upsertOrganizationUser,
@@ -3579,6 +3739,7 @@ export {
   allocateDeviceToOrganization,
   syncPocstarsPlatformInventory,
   assignPocstarsGroupToOrganization,
+  unassignPocstarsGroup,
   listPocstarsRegistry,
   listOrganizationUsers,
   removeOrganizationUser,

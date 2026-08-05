@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { requirePlatformAdmin } from "../auth";
+import { normalizeOrgRole, requirePlatformAdmin } from "../auth";
 import * as db from "../db";
 import {
   knownCompanyIds,
@@ -18,7 +18,7 @@ function jsonError(error: unknown) {
 
 function clientError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  if (message.includes("platform admin") || message.includes("duplicate key")) {
+  if (message.includes("platform admin") || message.includes("duplicate key") || message.includes("is not a role")) {
     return {
       status: 400 as const,
       body: { error: message.includes("duplicate key") ? "A record with these details already exists." : message },
@@ -55,34 +55,67 @@ router.post("/", async (c) => {
       platform_radio_seats: platformSeats,
     });
 
-    // Give the organization its own company on the radio network, so its
-    // dispatcher seats and channels are never shared with another tenant.
-    // A failure here leaves a usable MOMAS organization that simply has no
-    // radio yet, rather than rolling back the whole creation.
-    let radio: any = null;
-    let warning: string | undefined;
-    if (!organization.pocstars_company_id) {
-      try {
-        radio = await provisionOnNetwork("provision.company.create", {
-          name: organization.name,
-          slug: organization.slug,
-          seats: tenantSeats + platformSeats,
-        });
-        if (radio?.companyId) {
-          await db.setOrganizationCompanyId(organization.id, Number(radio.companyId));
-          organization.pocstars_company_id = String(radio.companyId);
-        }
-      } catch (error) {
-        warning = error instanceof Error
-          ? `The organization was created, but the radio network setup failed: ${error.message}`
-          : "The organization was created, but the radio network setup failed.";
-      }
-    }
+    const { radio, warning } = await provisionCompanyOnNetwork(organization);
     return c.json({ organization, radio, warning }, 201);
   } catch (error) {
     const next = clientError(error);
     return c.json(next.body, next.status);
   }
+});
+
+// Give the organization its own company on the radio network, so its dispatcher
+// seats and channels are never shared with another tenant. A failure leaves a
+// usable MOMAS organization that simply has no radio yet, rather than rolling
+// back the whole creation - which is only tolerable because this is retryable;
+// see POST /:id/radio/provision.
+async function provisionCompanyOnNetwork(organization: any) {
+  if (organization.pocstars_company_id) return { radio: null, warning: undefined };
+  try {
+    const radio = await provisionOnNetwork("provision.company.create", {
+      name: organization.name,
+      slug: organization.slug,
+      seats: Math.max(1, Number(organization.radio_seats) || 2)
+        + Math.max(0, Number(organization.platform_radio_seats) || 0),
+    });
+    if (radio?.companyId) {
+      await db.setOrganizationCompanyId(organization.id, Number(radio.companyId));
+      organization.pocstars_company_id = String(radio.companyId);
+    }
+    return { radio, warning: undefined };
+  } catch (error) {
+    return {
+      radio: null,
+      warning: error instanceof Error
+        ? `The radio network setup failed: ${error.message}`
+        : "The radio network setup failed.",
+    };
+  }
+}
+
+// Retry for a company whose radio provisioning failed at creation. Without this
+// the only record of the failure was a warning line that disappeared on the
+// next create, and the company was stuck with no radio forever.
+router.post("/:id/radio/provision", async (c) => {
+  const id = Number(c.req.param("id"));
+  const user = (c as any).get("user");
+  const organization = await db.getOrganization(id);
+  if (!organization) return c.json({ error: "That organization could not be found." }, 404);
+  if (organization.pocstars_company_id) {
+    return c.json({
+      error: `This company is already on the radio network as company ${organization.pocstars_company_id}.`,
+    }, 409);
+  }
+  const { radio, warning } = await provisionCompanyOnNetwork(organization);
+  if (warning) return c.json({ error: warning }, 502);
+  await db.createAuditLog({
+    organization_id: id,
+    actor_user_id: user?.id,
+    action: "organization.radio.provision",
+    target_type: "organization",
+    target_id: id,
+    metadata: { pocstars_company_id: organization.pocstars_company_id },
+  });
+  return c.json({ organization: await db.getOrganization(id), radio });
 });
 
 router.get("/:id", async (c) => {
@@ -93,11 +126,12 @@ router.get("/:id", async (c) => {
     db.listDevices({ organizationId: id }),
     db.listOrganizationUsers(id),
   ]);
-  const [units, audit] = await Promise.all([
+  const [units, audit, channels] = await Promise.all([
     db.listOrganizationUnits(id),
     db.listAuditLogs(id, 50),
+    db.listChannels(id),
   ]);
-  return c.json({ organization, devices, users, units, audit });
+  return c.json({ organization, devices, users, units, audit, channels });
 });
 
 router.put("/:id/access", async (c) => {
@@ -111,9 +145,70 @@ router.put("/:id/access", async (c) => {
       states: Array.isArray(body.states) ? body.states : undefined,
       pocstars_company_id: body.pocstars_company_id,
       pocstars_company_name: body.pocstars_company_name,
+      radio_seats: body.radio_seats,
+      platform_radio_seats: body.platform_radio_seats,
     });
     if (!organization) return c.json({ error: "That organization could not be found." }, 404);
     return c.json({ organization });
+  } catch (error) {
+    const next = clientError(error);
+    return c.json(next.body, next.status);
+  }
+});
+
+// What a deletion would take with it. The console shows this before offering
+// the button, so the decision is made against real numbers rather than a guess.
+router.get("/:id/deletion-impact", async (c) => {
+  const id = Number(c.req.param("id"));
+  try {
+    const impact = await db.getOrganizationDeletionImpact(id);
+    if (!impact) return c.json({ error: "That organization could not be found." }, 404);
+    return c.json(impact);
+  } catch (error) {
+    return c.json(jsonError(error), 500);
+  }
+});
+
+router.delete("/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  const user = (c as any).get("user");
+  const organization = await db.getOrganization(id);
+  if (!organization) return c.json({ error: "That organization could not be found." }, 404);
+
+  // Typing the name is the whole safety net: nothing here is recoverable, and
+  // a company is an easy thing to open the wrong one of.
+  const confirm = String(c.req.query("confirm") ?? "").trim();
+  if (confirm !== String(organization.name).trim()) {
+    return c.json({ error: `Type the company name exactly - ${organization.name} - to delete it.` }, 400);
+  }
+
+  try {
+    const deleted = await db.deleteOrganization(id);
+    if (!deleted) return c.json({ error: "That organization could not be found." }, 404);
+    // Logged against the platform, not the organization: an audit entry filed
+    // under a deleted company would cascade away with it.
+    await db.createAuditLog({
+      organization_id: null,
+      actor_user_id: user?.id,
+      action: "organization.delete",
+      target_type: "organization",
+      target_id: id,
+      metadata: {
+        name: organization.name,
+        slug: organization.slug,
+        pocstars_company_id: organization.pocstars_company_id,
+        ...deleted.counts,
+      },
+    });
+    return c.json({
+      ok: true,
+      deleted: { id, name: organization.name },
+      counts: deleted.counts,
+      // The radio-network company outlives the tenant on purpose - the vendor
+      // install is shared and holds recordings against its own ids - so the
+      // admin is told what is still out there rather than left to assume.
+      radio: deleted.radio,
+    });
   } catch (error) {
     const next = clientError(error);
     return c.json(next.body, next.status);
@@ -131,12 +226,13 @@ router.post("/:id/users", async (c) => {
     return c.json({ error: "Enter the user's email address and a temporary password." }, 400);
   }
   try {
+    const role = normalizeOrgRole(body.role, "org_admin");
     const user = await db.addOrganizationUser({
       organization_id,
       email: body.email,
       name: body.name,
       password: body.password,
-      role: body.role || "org_admin",
+      role,
     });
     await db.createAuditLog({
       organization_id,
@@ -144,7 +240,7 @@ router.post("/:id/users", async (c) => {
       action: "user.upsert",
       target_type: "user",
       target_id: user.id,
-      metadata: { email: body.email, role: body.role || "org_admin" },
+      metadata: { email: body.email, role },
     });
     return c.json({ user }, 201);
   } catch (error) {
