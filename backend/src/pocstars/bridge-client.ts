@@ -83,6 +83,20 @@ export class PocstarsBridgeClient extends EventEmitter {
     return this.group;
   }
 
+  // Opens the long-lived presence session and returns the baseline. Deltas
+  // arrive afterwards as "presence.delta" messages, which callers pick up from
+  // the message event rather than by asking.
+  async watchPresence(companyId: number) {
+    const response = await this.request(
+      { type: "presence.watch", companyId },
+      (message) => message.type === "presence.baseline",
+    );
+    return {
+      seat: String(response.seat || ""),
+      radios: Array.isArray(response.radios) ? response.radios : [],
+    };
+  }
+
   async queryInventory() {
     return this.request(
       { type: "inventory.query" },
@@ -211,6 +225,8 @@ export class PocstarsBridgeClient extends EventEmitter {
         speaking: this.speaking,
         reason: message.reason,
       });
+    } else if (message.type === "presence.delta") {
+      this.emit("presence", Array.isArray(message.users) ? message.users : []);
     }
   }
 

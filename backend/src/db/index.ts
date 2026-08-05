@@ -2414,6 +2414,28 @@ async function listRegistryGroupIds() {
 // no allocation, no membership, no stale-marking. That restraint matters - the
 // voice plane enumerates fewer radios than the database plane does, so running
 // a full sync from it would deactivate any radio it cannot see.
+// A presence delta pushed by the radio network, applied as it arrives. Unknown
+// radios are ignored rather than created: the five-minute inventory sync owns
+// which devices exist, and a handset that appears here but not there is one
+// belonging to another tenant of this shared install.
+async function applyPocstarsPresence(entries: Array<{ uid: number; online: boolean }>) {
+  let devicesUpdated = 0;
+  for (const entry of entries) {
+    const radioId = String(entry.uid);
+    if (!/^\d+$/.test(radioId)) continue;
+    const result = await pool.query(
+      `UPDATE devices
+          SET pocstars_online = $2,
+              pocstars_last_seen_at = CASE WHEN $2 THEN NOW() ELSE pocstars_last_seen_at END
+        WHERE device_id = $1 AND pocstars_managed = true
+          AND pocstars_online IS DISTINCT FROM $2`,
+      [radioId, entry.online],
+    );
+    devicesUpdated += result.rowCount || 0;
+  }
+  return devicesUpdated;
+}
+
 async function refreshPocstarsPresence(inventory: any) {
   if (!Array.isArray(inventory?.radios)) {
     throw new Error("The radio network returned an invalid presence snapshot.");
@@ -3540,6 +3562,7 @@ export {
   listRegistryGroupIds,
   getPocstarsDispatcherName,
   refreshPocstarsPresence,
+  applyPocstarsPresence,
   listMonitorableChannels,
   listChannels,
   getChannel,

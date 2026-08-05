@@ -13,6 +13,9 @@ type BridgeSession = {
   companyId: number | null;
   openedAt: number;
   lastSeenAt: number;
+  // A presence watcher signs in on a reserved seat that is never leased for
+  // audio, so it is deliberately not counted as console capacity.
+  presenceWatch: boolean;
 };
 
 const host = process.env.BRIDGE_HOST || "127.0.0.1";
@@ -321,7 +324,8 @@ const server = Bun.serve<BridgeSession>({
         // connection and must not be reported as a leased console.
         active: leasedSeatUids.size > 0,
         seatsInUse: leasedSeatUids.size,
-        idleConnections: [...sessions].filter((ws) => ws.data.seatUid === null).length,
+        presenceWatchers: [...sessions].filter((ws) => ws.data.presenceWatch).length,
+        idleConnections: [...sessions].filter((ws) => ws.data.seatUid === null && !ws.data.presenceWatch).length,
         sessions: [...sessions]
           .filter((ws) => ws.data.seatUid !== null)
           .map((ws) => ({
@@ -346,7 +350,7 @@ const server = Bun.serve<BridgeSession>({
       data: {
         client: null, mode: null, closing: false, pttTimer: null,
         seatUid: null, seatAccount: null, companyId: null,
-        openedAt: Date.now(), lastSeenAt: Date.now(),
+        openedAt: Date.now(), lastSeenAt: Date.now(), presenceWatch: false,
       },
     });
     return upgraded ? undefined : new Response("WebSocket upgrade required", { status: 426 });
@@ -388,6 +392,63 @@ const server = Bun.serve<BridgeSession>({
 
       if (typeof message.type === "string" && message.type.startsWith("provision.")) {
         await handleProvisioning(ws, message);
+        return;
+      }
+
+      // A long-lived session that reports who is on the network as it changes.
+      // It signs in on a reserved seat rather than leasing one, so it neither
+      // consumes console capacity nor risks being evicted by an operator taking
+      // the same account.
+      if (message.type === "presence.watch") {
+        if (ws.data.client) return;
+        if (!provisioning) {
+          send(ws, {
+            type: "error", code: "provisioning_disabled",
+            message: "This bridge has no database plane, so it cannot reserve a presence seat.",
+          });
+          return;
+        }
+        const watchCompanyId = Number(message.companyId);
+        if (!Number.isSafeInteger(watchCompanyId) || watchCompanyId <= 0) {
+          send(ws, { type: "error", code: "invalid_company_id", message: "Invalid company ID." });
+          return;
+        }
+        try {
+          const seat = await provisioning.ensurePresenceSeat(watchCompanyId);
+          const client = new PocstarsLiveClient({
+            host: controlHost,
+            port: controlPort,
+            audioHost,
+            account: seat.account,
+            password: seat.password,
+            timeoutMs,
+          });
+          ws.data.client = client;
+          ws.data.presenceWatch = true;
+          ws.data.companyId = watchCompanyId;
+          client.on("presence", (users: any) => send(ws, { type: "presence.delta", users }));
+          client.on("error", (error: Error) => {
+            send(ws, { type: "error", code: "pocstars_voice_error", message: error.message });
+          });
+          await client.connect();
+          // Deltas are meaningless without a starting point, so the watcher
+          // opens with the full picture and streams changes from there.
+          const inventory = await client.queryInventory();
+          send(ws, {
+            type: "presence.baseline",
+            seat: seat.account,
+            radios: inventory.radios.map((radio: any) => ({
+              uid: Number(radio.id), online: Boolean(radio.online), role: Number(radio.role || 0),
+            })),
+          });
+        } catch (error) {
+          send(ws, {
+            type: "error",
+            code: "presence_watch_failed",
+            message: error instanceof Error ? error.message : "The presence watcher could not start.",
+          });
+          await closeSession(ws);
+        }
         return;
       }
 

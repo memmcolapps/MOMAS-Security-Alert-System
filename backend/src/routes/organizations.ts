@@ -2,11 +2,13 @@ import { Hono } from "hono";
 import { requirePlatformAdmin } from "../auth";
 import * as db from "../db";
 import {
+  knownCompanyIds,
   liveRadioConfigured,
   provisionOnNetwork,
   queryPocstarsInventory,
   refreshPresenceOverVoice,
 } from "../pocstars/live-gateway";
+import { startPresenceWatcher } from "../pocstars/presence-watcher";
 
 const router = new Hono();
 
@@ -193,6 +195,9 @@ setInterval(() => {
         target_id: inventory?.dispatcher?.id ?? null,
         metadata: summary,
       });
+      // Presence is watched per vendor company, and the sync is what discovers
+      // which companies exist. Starting a watcher twice is a no-op.
+      for (const companyId of knownCompanyIds()) startPresenceWatcher(companyId);
     } catch {
       // Live calls take priority. The next five-minute cycle retries safely.
     } finally {

@@ -49,6 +49,14 @@ export class PocstarsProvisioning {
     return rows?.[0]?.ok === 1;
   }
 
+  // Seats MOMAS holds for itself rather than for an operator. echat allows one
+  // login per account and evicts the older session, so a seat that a background
+  // watcher keeps signed in must never also be handed out for audio - the lease
+  // would kill the watcher and the watcher's reconnect would kill the call.
+  // The marker is the account name, because it is the one field the bridge can
+  // read without another column the vendor schema does not have.
+  static readonly RESERVED_ACCOUNT_PREFIX = "momas-";
+
   // Seats available to an organization, most recently renewed first. The
   // password column holds the value echat expects verbatim, so the bridge can
   // authenticate as any seat without a credential store.
@@ -61,6 +69,7 @@ export class PocstarsProvisioning {
           AND User_Type = 3
           AND User_Enable = 1
           AND IsActive = 1
+          AND User_Account NOT LIKE CONCAT(?, '%')
           -- echat refuses a banned account with 账号被禁用 regardless of the
           -- other flags, so leasing one wastes the lease and hands the operator
           -- a confusing error.
@@ -68,9 +77,78 @@ export class PocstarsProvisioning {
           AND User_ServiceEndTime IS NOT NULL
           AND User_ServiceEndTime > NOW()
         ORDER BY User_ID`,
-      [companyId],
+      [companyId, PocstarsProvisioning.RESERVED_ACCOUNT_PREFIX],
     );
     return rows as Array<{ uid: number; account: string; password: string; serviceEndsAt: Date }>;
+  }
+
+  // The seat the presence watcher signs in on, created on first use. It is a
+  // normal dispatcher account in every respect except its name, which keeps it
+  // out of listSeats and therefore out of every audio lease.
+  async ensurePresenceSeat(companyId: number) {
+    const account = `${PocstarsProvisioning.RESERVED_ACCOUNT_PREFIX}presence@${companyId}`;
+    const [existing]: any = await this.pool.query(
+      `SELECT User_ID AS uid, User_Account AS account, User_Password AS password
+         FROM tb_User
+        WHERE User_CompanyID = ? AND User_Account = ? AND IsActive = 1
+        LIMIT 1`,
+      [companyId, account],
+    );
+    if (existing.length) {
+      // Keep it alive: an expired service window is refused at login, and this
+      // seat has no operator to notice.
+      await this.pool.query(
+        `UPDATE tb_User
+            SET User_ServiceEndTime = ?, User_Enable = 1, User_Banned = 0,
+                User_UpdateTime = NOW(), Last_Update_Time = NOW()
+          WHERE User_ID = ?`,
+        ["2035-01-01 00:00:00", existing[0].uid],
+      );
+      return existing[0] as { uid: number; account: string; password: string };
+    }
+
+    const password = this.newSeatPasswordHash();
+    const [result]: any = await this.pool.query(
+      `INSERT INTO tb_User
+         (User_Account, User_Password, User_Name, User_CompanyID, User_Type,
+          User_Enable, User_Banned, IsActive, User_AudioStatus,
+          User_CreateTime, User_UpdateTime, User_ServiceBeginTime,
+          User_ServiceEndTime, Creation_Time, Last_Update_Time, sort)
+       VALUES (?, ?, 'MOMAS presence watcher', ?, 3, 1, 0, 1, 1,
+               NOW(), NOW(), NOW(), ?, NOW(), NOW(), 99)`,
+      [account, password, companyId, "2035-01-01 00:00:00"],
+    );
+    const uid = Number(result.insertId);
+    if (!uid) throw new Error("The radio network did not return a seat id.");
+
+    // A seat only hears a channel it belongs to, and presence is reported for
+    // the members of the channels the account can see.
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [groups]: any = await connection.query(
+        "SELECT Cg_ID FROM tb_ChatGroup WHERE Cg_ComID = ? AND IsActive = 1",
+        [companyId],
+      );
+      for (const group of groups) {
+        await connection.query(
+          `INSERT INTO tb_UserOfGroup
+             (UOG_Cgid, UOG_UserId, UOG_Priority, createTime, IsActive,
+              Creation_Time, Last_Update_Time, isDefault)
+           VALUES (?, ?, 0, NOW(), 1, NOW(), NOW(), 0)`,
+          [group.Cg_ID, uid],
+        );
+      }
+      await this.touchUsers(connection, [uid]);
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback().catch(() => {});
+      throw error;
+    } finally {
+      connection.release();
+    }
+
+    return { uid, account, password };
   }
 
   // Create a company on the radio network plus its dispatcher seats, mirroring

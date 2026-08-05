@@ -395,6 +395,21 @@ export class PocstarsLiveClient extends EventEmitter {
       ));
       return;
     }
+    // Presence, pushed as it changes rather than polled. Observed on the live
+    // network as one user per frame, sent on transition - so these are deltas
+    // against a baseline, never a full picture of the fleet.
+    if (name === "ptt.push.UsersChanged") {
+      const users = Array.isArray(value?.users) ? value.users : [];
+      const presence = users
+        .map((user: any) => ({
+          uid: Number(user?.uid || 0),
+          name: user?.name ? String(user.name) : null,
+          online: Boolean(user?.online),
+        }))
+        .filter((user: any) => Number.isSafeInteger(user.uid) && user.uid > 0);
+      if (presence.length) this.emit("presence", presence);
+      return;
+    }
     if (name === "ptt.push.MemberGetMic") {
       this.emit("speaker", { uid: Number(value.uid), speaking: true });
     } else if (name === "ptt.push.MemberLostMic") {

@@ -154,6 +154,13 @@ async function queryInventoryOverVoice() {
 // once per process rather than on every five-minute sync.
 const companyIdByGroupId = new Map<number, number>();
 
+// The companies the last database sync actually enumerated. The presence
+// watchers follow these rather than resolving the set a second time.
+let lastCompanyIds: number[] = [];
+export function knownCompanyIds() {
+  return [...lastCompanyIds];
+}
+
 // Every vendor company MOMAS should enumerate: the ones organizations record
 // for themselves, plus whichever company owns a group already in the registry.
 // The second half is what finds the platform's original company, which predates
@@ -205,6 +212,7 @@ async function queryInventoryFromDatabase() {
     // organization has given us a company to ask about. The voice plane can
     // still bootstrap the registry from group membership.
     if (!companyIds.length) return null;
+    lastCompanyIds = companyIds;
 
     // Past this point the database plane is known to work, so a failure is a
     // real one and belongs to the caller rather than to a silent fallback.
