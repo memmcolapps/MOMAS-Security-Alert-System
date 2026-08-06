@@ -263,8 +263,15 @@ textarea {
   opacity: 0.7;
 }
 
+/* Measured by the app shell, because the chrome is two stacked bars and the
+   radio bar grows and wraps with its contents. Overlays that hardcoded 3rem
+   ended up underneath it. */
+:root {
+  --ops-chrome: 3rem;
+}
+
 .leaflet-top {
-  top: 3rem;
+  top: calc(var(--ops-chrome) + 0.5rem);
 }
 
 .leaflet-popup-content-wrapper {

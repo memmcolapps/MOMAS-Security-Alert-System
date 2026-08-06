@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 import {
   Link,
   Outlet,
@@ -41,11 +42,36 @@ const queryClient = new QueryClient({
 function RootLayout() {
   const router = useRouterState();
   const showHeader = !["/login", "/change-password"].includes(router.location.pathname);
+  const chromeRef = useRef(null);
+
+  // The app chrome is two stacked fixed bars, and the radio bar's height
+  // changes with its contents and wraps on narrow screens. Anything that has to
+  // sit below the chrome - every overlay on the operations map - needs its real
+  // height, not a guess. Publishing it as a variable is what stops those
+  // overlays sliding underneath it.
+  useEffect(() => {
+    const node = chromeRef.current;
+    const root = window.document.documentElement;
+    if (!node) {
+      root.style.setProperty("--ops-chrome", "0px");
+      return undefined;
+    }
+    const observer = new window.ResizeObserver(([entry]) => {
+      root.style.setProperty("--ops-chrome", `${Math.round(entry.contentRect.height)}px`);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [showHeader]);
+
   return (
     <LiveRadioProvider>
       <FollowProvider>
-        {showHeader ? <AppHeader /> : null}
-        {showHeader ? <LiveRadioBar /> : null}
+        {showHeader ? (
+          <div ref={chromeRef} className="fixed left-0 right-0 top-0 z-[1100]">
+            <AppHeader />
+            <LiveRadioBar />
+          </div>
+        ) : null}
         <Outlet />
         {/* Outlives any one page: a response runs while the operator moves
             between the map, the alarm and the radio console. */}

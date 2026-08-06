@@ -314,10 +314,21 @@ export function FloatingRadioCard({ device, location, position, zIndex, onFocus,
   const cardRef = useRef(null);
   const dragRef = useRef(null);
 
-  const clamp = useCallback((x, y) => ({
-    x: Math.min(Math.max(8, x), Math.max(8, window.innerWidth - CARD_WIDTH - 8)),
-    y: Math.min(Math.max(64, y), Math.max(64, window.innerHeight - 120)),
-  }), []);
+  const clamp = useCallback((x, y) => {
+    // Cards sit above the chrome in stacking order, so they have to be kept
+    // below it by position instead - and the chrome's height is measured, not
+    // assumed, because the radio bar wraps on narrow screens.
+    const chrome =
+      Number.parseInt(
+        window.getComputedStyle(window.document.documentElement).getPropertyValue("--ops-chrome"),
+        10,
+      ) || 48;
+    const top = chrome + 8;
+    return {
+      x: Math.min(Math.max(8, x), Math.max(8, window.innerWidth - CARD_WIDTH - 8)),
+      y: Math.min(Math.max(top, y), Math.max(top, window.innerHeight - 120)),
+    };
+  }, []);
 
   // Dragging is bound to the header alone. Making the whole card a drag surface
   // would fight the push-to-talk button, which holds a pointer capture of its

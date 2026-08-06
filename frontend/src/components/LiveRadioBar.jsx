@@ -78,7 +78,7 @@ export function LiveRadioBar() {
   };
 
   return (
-    <div className="fixed left-0 right-0 top-12 z-[1090] border-b border-white/10 bg-black/60 backdrop-blur">
+    <div className="border-b border-white/10 bg-black/60 backdrop-blur">
       <div className="flex h-8 items-center gap-3 px-4 text-[11px]">
         <span className="flex items-center gap-1.5 font-bold uppercase tracking-wide text-neutral-500">
           <Headphones size={12} className={listening ? "text-ops-green" : ""} /> Channel

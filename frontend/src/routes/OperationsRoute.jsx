@@ -94,6 +94,34 @@ async function downloadIncidentReport(incidentId) {
   URL.revokeObjectURL(url);
 }
 
+// Panel open/closed is a preference, not session state: it belongs to the
+// operator and their screen, so it survives leaving the map and coming back.
+function usePersistentFlag(key, fallback) {
+  const [value, setValue] = useState(() => {
+    try {
+      const stored = window.localStorage.getItem(key);
+      return stored === null ? fallback : stored === "true";
+    } catch {
+      return fallback;
+    }
+  });
+  const update = useCallback(
+    (next) => {
+      setValue((current) => {
+        const resolved = typeof next === "function" ? next(current) : next;
+        try {
+          window.localStorage.setItem(key, resolved ? "true" : "false");
+        } catch {
+          // A browser refusing storage still honours the change this session.
+        }
+        return resolved;
+      });
+    },
+    [key],
+  );
+  return [value, update];
+}
+
 export function OperationsRoute() {
   const queryClient = useQueryClient();
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
@@ -103,8 +131,11 @@ export function OperationsRoute() {
   const [[from, to], setRange] = useState(() => rangeForMode("today", today));
   const [activeMode, setActiveMode] = useState("today");
   const [filters, setFilters] = useState({ severity: "", type: "", state: "" });
-  const [panelOpen, setPanelOpen] = useState(true);
-  const [statsMinimized, setStatsMinimized] = useState(false);
+  // The map opens clear. Both of these are chrome over the picture, and both
+  // were resetting to open on every visit, so anyone who closed them closed
+  // them again all shift.
+  const [panelOpen, setPanelOpen] = usePersistentFlag("momas_ops_feed_open", false);
+  const [statsMinimized, setStatsMinimized] = usePersistentFlag("momas_ops_stats_min", true);
   const [basemap, setBasemap] = useState("dark");
   const [activeLayers, setActiveLayers] = useState({ live: true, heat: false, devices: true, drones: true, fences: true });
   const [openRadios, setOpenRadios] = useState([]);
@@ -461,7 +492,7 @@ export function OperationsRoute() {
           fallback: device,
           position: {
             x: Math.max(8, window.innerWidth - 348 - offset * 26),
-            y: 88 + offset * 26,
+            y: 104 + offset * 26,
           },
         },
       ];
@@ -541,7 +572,7 @@ export function OperationsRoute() {
       })}
 
       {liveMode ? (
-        <section className="glass-panel absolute left-1/2 top-16 z-[1000] flex -translate-x-1/2 items-center gap-3 rounded-md border border-ops-red/40 px-3 py-2 text-[11px] text-neutral-200">
+        <section className="glass-panel absolute left-1/2 top-[calc(var(--ops-chrome)+0.75rem)] z-[1000] flex -translate-x-1/2 items-center gap-3 rounded-md border border-ops-red/40 px-3 py-2 text-[11px] text-neutral-200">
           <span className="inline-flex items-center gap-1.5 font-bold text-ops-red">
             <span className="live-dot" /> LIVE
           </span>
@@ -603,7 +634,7 @@ export function OperationsRoute() {
       </section>
 
       <aside
-        className={`glass-panel absolute right-0 top-12 z-[1000] flex h-[calc(100vh-3rem)] w-[380px] max-w-[calc(100vw-32px)] flex-col border-r-0 transition-transform ${
+        className={`glass-panel absolute right-0 top-[var(--ops-chrome)] z-[1000] flex h-[calc(100vh-var(--ops-chrome))] w-[380px] max-w-[calc(100vw-32px)] flex-col border-r-0 transition-transform ${
           panelOpen ? "translate-x-0" : "translate-x-full"
         }`}
       >
@@ -726,7 +757,7 @@ export function OperationsRoute() {
       </button>
 
       {activeAlerts.length ? (
-        <section className={`glass-panel absolute left-1/2 z-[1001] flex w-[min(440px,calc(100vw-32px))] -translate-x-1/2 items-center gap-3 rounded-lg border-red-500/50 px-3 py-2.5 ${liveMode ? "top-28" : "top-16"}`}>
+        <section className={`glass-panel absolute left-1/2 z-[1001] flex w-[min(440px,calc(100vw-32px))] -translate-x-1/2 items-center gap-3 rounded-lg border-red-500/50 px-3 py-2.5 ${liveMode ? "top-[calc(var(--ops-chrome)+3.5rem)]" : "top-[calc(var(--ops-chrome)+0.75rem)]"}`}>
           <span className="relative grid h-8 w-8 shrink-0 place-items-center rounded-full bg-red-500/15 text-red-300">
             <span className="absolute inset-0 animate-ping rounded-full border border-red-400/30" />
             <Siren size={15} />
@@ -746,7 +777,7 @@ export function OperationsRoute() {
       ) : null}
 
       <section
-        className={`glass-panel absolute bottom-3 z-[1000] min-w-[560px] rounded-lg px-3.5 py-2 transition-transform ${
+        className={`glass-panel absolute z-[1000] min-w-[560px] rounded-lg px-3.5 py-2 transition-transform ${followTarget ? "bottom-[4.5rem]" : "bottom-3"} ${
           panelOpen ? "left-1/2 -translate-x-[calc(50%+190px)]" : "left-1/2 -translate-x-1/2"
         }`}
       >

@@ -51,7 +51,7 @@ export function AppHeader() {
   }
 
   return (
-    <header className="fixed left-0 right-0 top-0 z-[1100] border-b border-white/10 bg-black/70 backdrop-blur">
+    <header className="border-b border-white/10 bg-black/70 backdrop-blur">
       <div className="flex h-12 items-center gap-4 px-4 text-neutral-200">
         <Link to="/" className="flex items-center gap-2 text-[12px] font-bold tracking-wide text-ops-red">
           <ShieldAlert size={16} />
