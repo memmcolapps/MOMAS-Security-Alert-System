@@ -337,33 +337,94 @@ function extractState(text) {
   return null;
 }
 
+// PLACES answers "does this sentence mention somewhere?" and is deliberately
+// small - 61,000 names would match fragments of ordinary prose. Turning
+// coordinates into a label is the opposite problem, and there the curated list
+// was hopeless: two entries for the whole of Lagos meant every position in the
+// state came back "Near Ikeja". This dataset is the dense one.
+// GeoNames, CC BY 4.0. Rebuild with scripts/build-gazetteer.ts.
+import gazetteer from "./nigeria-places.json" with { type: "json" };
+
+const DENSE_PLACES: Array<[string, number, number, string, string, number]> = gazetteer.entries as any;
+
+// 0.25° cells, roughly 27 km. A lookup reads its own cell and widens outwards
+// only if that comes up empty, so a scan touches a few dozen candidates rather
+// than sixty thousand.
+const CELL = 0.25;
+const cellKey = (lat: number, lon: number) =>
+  `${Math.floor(lat / CELL)}|${Math.floor(lon / CELL)}`;
+
+const PLACE_GRID = new Map<string, Array<[string, number, number, string, string, number]>>();
+for (const entry of DENSE_PLACES) {
+  const key = cellKey(entry[1], entry[2]);
+  const bucket = PLACE_GRID.get(key);
+  if (bucket) bucket.push(entry);
+  else PLACE_GRID.set(key, [entry]);
+}
+
+const COMPASS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+
+function bearingLabel(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLon = toRad(lon2 - lon1);
+  const y = Math.sin(dLon) * Math.cos(toRad(lat2));
+  const x =
+    Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+    Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
+  const bearing = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+  return COMPASS[Math.round(bearing / 22.5) % 16];
+}
+
 function reverseGeocode(lat, lon) {
   const numLat = Number(lat);
   const numLon = Number(lon);
   if (!Number.isFinite(numLat) || !Number.isFinite(numLon)) return null;
 
   let best = null;
-  for (const place of PLACES) {
-    const distanceKm = haversineKm(numLat, numLon, place.lat, place.lon);
-    if (!best || distanceKm < best.distance_km) {
-      best = {
-        name: toTitleCase(place.name),
-        state: place.state,
-        lat: place.lat,
-        lon: place.lon,
-        distance_km: distanceKm,
-      };
+  let bestScore = Infinity;
+  const baseLat = Math.floor(numLat / CELL);
+  const baseLon = Math.floor(numLon / CELL);
+
+  for (let ring = 0; ring <= 8 && !best; ring += 1) {
+    for (let dLat = -ring; dLat <= ring; dLat += 1) {
+      for (let dLon = -ring; dLon <= ring; dLon += 1) {
+        // Only the newly added edge of the ring; the interior was covered.
+        if (ring > 0 && Math.abs(dLat) !== ring && Math.abs(dLon) !== ring) continue;
+        for (const entry of PLACE_GRID.get(`${baseLat + dLat}|${baseLon + dLon}`) || []) {
+          const distanceKm = haversineKm(numLat, numLon, entry[1], entry[2]);
+          // A settlement someone has heard of beats an equally close hamlet,
+          // but the discount is capped so a distant city never wins outright.
+          const score = distanceKm - Math.min(entry[5] * 0.3, 1.8);
+          if (score < bestScore) {
+            bestScore = score;
+            best = {
+              name: entry[0],
+              state: entry[3],
+              lga: entry[4] || null,
+              lat: entry[1],
+              lon: entry[2],
+              distance_km: distanceKm,
+            };
+          }
+        }
+      }
     }
   }
   if (!best) return null;
-  return {
-    ...best,
-    distance_km: Number(best.distance_km.toFixed(1)),
-    label:
-      best.distance_km <= 5
-        ? `${best.name}, ${best.state}`
-        : `Near ${best.name}, ${best.state}`,
-  };
+
+  const where = [best.name, best.lga && best.lga !== best.name ? best.lga : null, best.state]
+    .filter(Boolean)
+    .join(", ");
+  // Past a couple of kilometres a bare place name is misleading, so the label
+  // carries how far and which way instead of pretending you are there.
+  const label =
+    best.distance_km <= 0.8
+      ? where
+      : best.distance_km <= 2.5
+        ? `Near ${where}`
+        : `${best.distance_km.toFixed(1)} km ${bearingLabel(best.lat, best.lon, numLat, numLon)} of ${where}`;
+
+  return { ...best, distance_km: Number(best.distance_km.toFixed(1)), label };
 }
 
 /**

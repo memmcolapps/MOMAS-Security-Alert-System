@@ -114,13 +114,13 @@ export function RadioConsole({ device, location, onShowOnMap }) {
               <>
                 <p className="flex items-start gap-2 text-[11px] text-neutral-200">
                   <MapPin size={12} className="mt-0.5 shrink-0 text-ops-green" />
+                  {/* The label carries its own distance and bearing once the
+                      position is more than a couple of kilometres from the
+                      nearest named place, so nothing is appended here. */}
                   <span>
                     {placeQuery.isLoading
                       ? "Locating…"
                       : placeQuery.data?.label || "Location outside the gazetteer"}
-                    {placeQuery.data?.distance_km != null ? (
-                      <span className="text-neutral-500"> · {placeQuery.data.distance_km} km</span>
-                    ) : null}
                   </span>
                 </p>
                 <p className="mt-1 pl-5 font-mono text-[10px] text-neutral-500">
