@@ -96,6 +96,41 @@ export function dronePopup(drone) {
   `;
 }
 
+const RADIO_GLYPH = '<i class="fas fa-walkie-talkie"></i>';
+
+// Radios and drones cluster in their own groups, so a cluster always means "n
+// of one kind" and never mixes fleets that are read differently. Two separate
+// markerClusterGroups never merge with each other, which is the whole trick.
+function assetClusterIcon(kind, glyph) {
+  return (cluster) => {
+    const count = cluster.getChildCount();
+    const size = count < 10 ? 34 : count < 50 ? 40 : 46;
+    const offline = cluster.getAllChildMarkers().every((marker) => marker.options.assetOffline);
+    return L.divIcon({
+      className: "",
+      html: `<div class="asset-cluster ${kind}${offline ? " offline" : ""}" style="width:${size}px;height:${size}px">
+               <span class="asset-cluster-glyph">${glyph}</span>
+               <span class="asset-cluster-count">${count}</span>
+             </div>`,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+    });
+  };
+}
+
+function assetClusterGroup(kind, glyph) {
+  return L.markerClusterGroup({
+    maxClusterRadius: 44,
+    showCoverageOnHover: false,
+    spiderfyOnMaxZoom: true,
+    // Individual assets from here in. Operators zoom in to work a specific
+    // area, and at that point they need the pins and their labels, not a count.
+    disableClusteringAtZoom: 16,
+    chunkedLoading: true,
+    iconCreateFunction: assetClusterIcon(kind, glyph),
+  });
+}
+
 export function OperationsMap({
   incidents,
   devices,
@@ -146,9 +181,13 @@ export function OperationsMap({
       maxZoom: 10,
       gradient: { 0.2: "#3399ff", 0.45: "#00bbaa", 0.7: "#ff6600", 1: "#ffb300" },
     });
-    const deviceLayer = L.layerGroup();
+    const deviceClusterLayer = assetClusterGroup("radio", RADIO_GLYPH);
+    // A radio in alarm never clusters - it would disappear into a count at the
+    // exact moment someone needs to see where it is.
+    const deviceAlertLayer = L.layerGroup();
+    const deviceLayer = L.layerGroup([deviceClusterLayer, deviceAlertLayer]);
     const sosLayer = L.layerGroup();
-    const droneLayer = L.layerGroup();
+    const droneLayer = assetClusterGroup("drone", DRONE_SVG);
     const geofenceLayer = L.layerGroup();
 
     baseLayers.dark.addTo(map);
@@ -177,7 +216,18 @@ export function OperationsMap({
     });
     map.addControl(new recenter());
 
-    layersRef.current = { baseLayers, activeBase: baseLayers.dark, incidentLayer, heatLayer, deviceLayer, sosLayer, droneLayer, geofenceLayer };
+    layersRef.current = {
+      baseLayers,
+      activeBase: baseLayers.dark,
+      incidentLayer,
+      heatLayer,
+      deviceLayer,
+      deviceClusterLayer,
+      deviceAlertLayer,
+      sosLayer,
+      droneLayer,
+      geofenceLayer,
+    };
     mapRef.current = map;
 
     return () => {
@@ -263,10 +313,12 @@ export function OperationsMap({
 
   useEffect(() => {
     const map = mapRef.current;
-    const { deviceLayer } = layersRef.current;
-    if (!map || !deviceLayer) return;
-    deviceLayer.clearLayers();
+    const { deviceClusterLayer, deviceAlertLayer } = layersRef.current;
+    if (!map || !deviceClusterLayer || !deviceAlertLayer) return;
+    deviceClusterLayer.clearLayers();
+    deviceAlertLayer.clearLayers();
     const registry = new Map(devices.map((device) => [String(device.device_id), device]));
+    const clustered = [];
 
     for (const location of locations) {
       const lat = Number(location.Lat);
@@ -281,8 +333,12 @@ export function OperationsMap({
         iconSize: [26, 42],
         iconAnchor: [13, 13],
       });
-      L.marker([lat, lon], { icon }).bindPopup(devicePopup(location, registry)).addTo(deviceLayer);
+      const marker = L.marker([lat, lon], { icon }).bindPopup(devicePopup(location, registry));
+      if (sos) marker.addTo(deviceAlertLayer);
+      else clustered.push(marker);
     }
+    // One bulk insert rather than one reflow per radio.
+    deviceClusterLayer.addLayers(clustered);
   }, [devices, locations]);
 
   useEffect(() => {
@@ -312,6 +368,7 @@ export function OperationsMap({
     const { droneLayer } = layersRef.current;
     if (!map || !droneLayer) return;
     droneLayer.clearLayers();
+    const clustered = [];
 
     for (const drone of drones) {
       const lat = Number(drone.lat);
@@ -327,8 +384,13 @@ export function OperationsMap({
         iconSize: [28, 44],
         iconAnchor: [14, 14],
       });
-      L.marker([lat, lon], { icon, zIndexOffset: 500 }).bindPopup(dronePopup(drone)).addTo(droneLayer);
+      // assetOffline lets a cluster of entirely offline drones dim itself.
+      clustered.push(
+        L.marker([lat, lon], { icon, zIndexOffset: 500, assetOffline: offline })
+          .bindPopup(dronePopup(drone)),
+      );
     }
+    droneLayer.addLayers(clustered);
   }, [drones]);
 
   useEffect(() => {
