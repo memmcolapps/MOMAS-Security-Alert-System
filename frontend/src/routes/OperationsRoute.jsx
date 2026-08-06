@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OperationsMap, devicePopup, dronePopup, incidentPopup, sosPopup } from "../components/OperationsMap";
+import { FloatingRadioCard } from "../components/RadioConsole";
 import {
   getDronePositions,
   getIncidentEvidence,
@@ -105,6 +106,7 @@ export function OperationsRoute() {
   const [statsMinimized, setStatsMinimized] = useState(false);
   const [basemap, setBasemap] = useState("dark");
   const [activeLayers, setActiveLayers] = useState({ live: true, heat: false, devices: true, drones: true, fences: true });
+  const [openRadios, setOpenRadios] = useState([]);
   const [sosSoundMuted, setSosSoundMuted] = useState(false);
   const [focusTarget, setFocusTarget] = useState(null);
   const [selectedIncidentId, setSelectedIncidentId] = useState(null);
@@ -181,6 +183,10 @@ export function OperationsRoute() {
   const latestDeviceLocations = useMemo(
     () => new Map(locations.map((location) => [String(location.Uid), location])),
     [locations],
+  );
+  const deviceRegistry = useMemo(
+    () => new Map(devices.map((device) => [String(device.device_id), device])),
+    [devices],
   );
   const activeAlerts = useMemo(
     () =>
@@ -435,6 +441,49 @@ export function OperationsRoute() {
     if (liveMode && tourIndex >= tourStops.length) setTourIndex(0);
   }, [liveMode, tourStops.length, tourIndex]);
 
+  // Radio consoles float over the map and several can be open at once, so each
+  // carries its own position. New cards cascade instead of stacking exactly on
+  // top of one another, and re-opening one that is already up just raises it.
+  const openRadioCard = useCallback((device) => {
+    const deviceId = String(device.device_id);
+    setOpenRadios((current) => {
+      const existing = current.find((card) => card.deviceId === deviceId);
+      if (existing) return [...current.filter((card) => card.deviceId !== deviceId), existing];
+      const offset = current.length % 5;
+      return [
+        ...current,
+        {
+          deviceId,
+          // A radio reporting a position that is not in the registry yet still
+          // opens, rather than clicking into nothing.
+          fallback: device,
+          position: {
+            x: Math.max(8, window.innerWidth - 348 - offset * 26),
+            y: 88 + offset * 26,
+          },
+        },
+      ];
+    });
+  }, []);
+
+  const focusRadioCard = useCallback((deviceId) => {
+    setOpenRadios((current) => {
+      const card = current.find((entry) => entry.deviceId === deviceId);
+      if (!card || current[current.length - 1]?.deviceId === deviceId) return current;
+      return [...current.filter((entry) => entry.deviceId !== deviceId), card];
+    });
+  }, []);
+
+  const moveRadioCard = useCallback((deviceId, position) => {
+    setOpenRadios((current) =>
+      current.map((card) => (card.deviceId === deviceId ? { ...card, position } : card)),
+    );
+  }, []);
+
+  const closeRadioCard = useCallback((deviceId) => {
+    setOpenRadios((current) => current.filter((card) => card.deviceId !== deviceId));
+  }, []);
+
   function startLiveMode() {
     setTourIndex(0);
     setTourPaused(false);
@@ -463,7 +512,30 @@ export function OperationsRoute() {
         basemap={basemap}
         focusTarget={focusTarget}
         onIncidentFocus={(incident) => setSelectedIncidentId(incident.id)}
+        onRadioSelect={openRadioCard}
       />
+
+      {openRadios.map((card, index) => {
+        const device = deviceRegistry.get(card.deviceId) || card.fallback;
+        if (!device) return null;
+        return (
+          <FloatingRadioCard
+            key={card.deviceId}
+            device={device}
+            location={latestDeviceLocations.get(card.deviceId)}
+            position={card.position}
+            // Array order is stacking order, so the last card touched is the
+            // one on top.
+            zIndex={1200 + index}
+            onFocus={() => focusRadioCard(card.deviceId)}
+            onMove={(position) => moveRadioCard(card.deviceId, position)}
+            onClose={() => closeRadioCard(card.deviceId)}
+            onShowOnMap={(coords) =>
+              setFocusTarget({ ...coords, zoom: 15, key: `card-${card.deviceId}-${Date.now()}` })
+            }
+          />
+        );
+      })}
 
       {liveMode ? (
         <section className="glass-panel absolute left-1/2 top-16 z-[1000] flex -translate-x-1/2 items-center gap-3 rounded-md border border-ops-red/40 px-3 py-2 text-[11px] text-neutral-200">

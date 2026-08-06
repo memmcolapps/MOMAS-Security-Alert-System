@@ -1,17 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, MessageSquare, Mic, Phone, PhoneOff, Plus, Radio, Save, Search, Send, Trash2, Volume2, X } from "lucide-react";
+import { Check, MessageSquare, Plus, Radio, Save, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   deleteDevice,
+  getLocations,
   getMe,
   getOrgAdmin,
   listDevices,
   listOrganizations,
   saveDevice,
-  sendRadioMessage,
 } from "../lib/api";
+import { RadioConsole } from "../components/RadioConsole";
 import { deviceTypeLabel } from "../lib/domain";
-import { useLiveRadioSession } from "../lib/live-radio-session";
 
 const emptyForm = {
   device_id: "",
@@ -33,17 +33,6 @@ function formatDate(value) {
   });
 }
 
-function formatRadioTime(value) {
-  if (!value) return "Unknown time";
-  return new Date(value).toLocaleString("en-GB", {
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
 
 export function DevicesRoute() {
   const queryClient = useQueryClient();
@@ -52,14 +41,23 @@ export function DevicesRoute() {
   const [form, setForm] = useState(emptyForm);
   const [toast, setToast] = useState(null);
   const [selectedRadio, setSelectedRadio] = useState(null);
-  const [radioMessage, setRadioMessage] = useState("");
-  const [sentMessages, setSentMessages] = useState({});
-  const liveRadio = useLiveRadioSession();
 
   const devicesQuery = useQuery({
     queryKey: ["devices"],
     queryFn: listDevices,
   });
+
+  // Only needed by the open console, which wants the handset's last position.
+  const locationsQuery = useQuery({
+    queryKey: ["locations"],
+    queryFn: getLocations,
+    enabled: Boolean(selectedRadio),
+    staleTime: 15_000,
+  });
+  const latestLocations = useMemo(
+    () => new Map((locationsQuery.data?.data || []).map((row) => [String(row.Uid), row])),
+    [locationsQuery.data?.data],
+  );
 
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
   const isPlatformAdmin = meQuery.data?.user?.platform_role === "admin";
@@ -124,10 +122,6 @@ export function DevicesRoute() {
     ].filter(Boolean).some((value) => String(value).toLowerCase().includes(term)));
   }, [channelFilter, organizationDevices, search]);
   const activeCount = useMemo(() => devices.filter((device) => device.active).length, [devices]);
-  const radioMessageBytes = useMemo(
-    () => new window.TextEncoder().encode(radioMessage.trim()).length,
-    [radioMessage],
-  );
 
 
   useEffect(() => {
@@ -155,26 +149,6 @@ export function DevicesRoute() {
     onSuccess: async () => {
       setToast("Device removed");
       await queryClient.invalidateQueries({ queryKey: ["devices"] });
-    },
-    onError: (error) => setToast(error.message),
-  });
-
-  const messageMutation = useMutation({
-    mutationFn: sendRadioMessage,
-    onSuccess: (result, variables) => {
-      setSentMessages((current) => ({
-        ...current,
-        [variables.device_id]: [
-          ...(current[variables.device_id] || []),
-          {
-            id: result.deliveryId || `${Date.now()}`,
-            message: variables.message,
-            sentAt: result.acceptedAt || new Date().toISOString(),
-          },
-        ],
-      }));
-      setRadioMessage("");
-      setToast(`Message sent to ${selectedRadio?.name || selectedRadio?.device_id || "radio"}`);
     },
     onError: (error) => setToast(error.message),
   });
@@ -226,16 +200,6 @@ export function DevicesRoute() {
       device_type: form.device_type || null,
       notes: form.notes.trim() || null,
       active: form.active === "true",
-    });
-  }
-
-  function sendMessage(event) {
-    event.preventDefault();
-    const message = radioMessage.trim();
-    if (!selectedRadio || !message || radioMessageBytes > 200) return;
-    messageMutation.mutate({
-      device_id: selectedRadio.device_id,
-      message,
     });
   }
 
@@ -503,151 +467,7 @@ export function DevicesRoute() {
               </button>
             </header>
 
-            <div className="flex-1 space-y-4 overflow-y-auto p-4">
-              <section className="rounded-lg border border-green-500/25 bg-green-500/[0.04] p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h3 className="flex items-center gap-2 text-xs font-bold text-neutral-100">
-                      <Radio size={14} className="text-ops-green" /> Private call
-                    </h3>
-                    <p className="mt-1 text-[10px] text-neutral-500">
-                      Open a private call to this handset. To listen to a whole channel, use the channel bar at the top.
-                    </p>
-                  </div>
-                  <span className={`rounded-full border px-2 py-1 text-[9px] font-bold uppercase ${
-                    liveRadio.mode === "private" && liveRadio.callState === "connected"
-                      ? "border-green-500/30 bg-green-500/10 text-ops-green"
-                      : "border-white/10 text-neutral-500"
-                  }`}>
-                    {liveRadio.mode === "private" ? liveRadio.callState : "idle"}
-                  </span>
-                </div>
-
-                {liveRadio.error && liveRadio.mode !== "monitor" ? (
-                  <p className="mt-3 rounded bg-red-500/10 px-3 py-2 text-[11px] text-red-300">{liveRadio.error}</p>
-                ) : null}
-                {liveRadio.mode === "private" && liveRadio.speaker ? (
-                  <p className="mt-3 flex items-center gap-2 text-[11px] text-ops-green">
-                    <Volume2 size={13} className="animate-pulse" /> {liveRadio.speaker.name || `Radio ${liveRadio.speaker.uid}`} is speaking
-                  </p>
-                ) : null}
-
-                <div className="mt-4">
-                  {liveRadio.configured === false ? (
-                    <button
-                      className="w-full rounded-md border border-red-500/20 px-4 py-3 text-xs text-red-300/70"
-                      disabled
-                    >
-                      Live radio unavailable
-                    </button>
-                  ) : liveRadio.mode !== "private" ? (
-                    <div className="space-y-2">
-                      <button
-                        className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-ops-green px-4 py-2.5 text-xs font-bold text-black hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40"
-                        disabled={liveRadio.callState === "connecting"}
-                        onClick={() => liveRadio.callRadio(selectedRadio)}
-                      >
-                        <Phone size={16} /> Call this radio
-                      </button>
-                      {liveRadio.mode === "monitor" ? (
-                        <p className="text-[10px] text-neutral-500">
-                          Channel listening pauses during the call and resumes when it ends.
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : liveRadio.callDevice && String(liveRadio.callDevice.device_id) !== String(selectedRadio.device_id) ? (
-                    <div className="space-y-3">
-                      <p className="rounded border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
-                        In a call with {liveRadio.callDevice.name || liveRadio.callDevice.device_id}. End it before calling this radio.
-                      </p>
-                      <button
-                        className="inline-flex w-full items-center justify-center gap-2 rounded border border-red-500/25 px-3 py-2 text-[11px] text-red-300 hover:bg-red-500/10"
-                        onClick={liveRadio.endCall}
-                      >
-                        <PhoneOff size={13} /> End that call
-                      </button>
-                    </div>
-                  ) : liveRadio.callState === "connected" ? (
-                    <div className="space-y-3">
-                      <button
-                        className={`flex min-h-24 w-full touch-none select-none flex-col items-center justify-center gap-2 rounded-lg border text-sm font-black uppercase tracking-wider transition ${
-                          liveRadio.pttState === "granted"
-                            ? "border-red-400 bg-red-500/25 text-red-200 shadow-[0_0_28px_rgba(239,68,68,0.18)]"
-                            : "border-green-500/40 bg-green-500/10 text-ops-green hover:bg-green-500/15"
-                        }`}
-                        onPointerDown={(event) => {
-                          event.currentTarget.setPointerCapture(event.pointerId);
-                          liveRadio.startPtt();
-                        }}
-                        onPointerUp={liveRadio.stopPtt}
-                        onPointerCancel={liveRadio.stopPtt}
-                        onKeyDown={(event) => {
-                          if ((event.key === " " || event.key === "Enter") && !event.repeat) {
-                            event.preventDefault();
-                            liveRadio.startPtt();
-                          }
-                        }}
-                        onKeyUp={(event) => {
-                          if (event.key === " " || event.key === "Enter") liveRadio.stopPtt();
-                        }}
-                      >
-                        <Mic size={24} />
-                        {liveRadio.pttState === "granted" ? "Speaking · release to stop" : liveRadio.pttState === "requesting" ? "Requesting microphone…" : "Hold to talk"}
-                      </button>
-                      <button
-                        className="inline-flex w-full items-center justify-center gap-2 rounded border border-red-500/25 px-3 py-2 text-[11px] text-red-300 hover:bg-red-500/10"
-                        onClick={liveRadio.endCall}
-                      >
-                        <PhoneOff size={13} /> End call
-                      </button>
-                    </div>
-                  ) : (
-                    <button className="w-full rounded-md border border-white/10 px-4 py-3 text-xs text-neutral-500" disabled>
-                      Connecting the call…
-                    </button>
-                  )}
-                </div>
-              </section>
-
-
-              {(sentMessages[selectedRadio.device_id] || []).length ? (
-                <section>
-                  <h3 className="mb-2 text-[10px] font-bold uppercase tracking-wide text-neutral-500">Sent this session</h3>
-                  <div className="space-y-2">
-                    {(sentMessages[selectedRadio.device_id] || []).map((item) => (
-                      <article className="ml-10 rounded-lg border border-green-500/20 bg-green-500/[0.07] px-3 py-2" key={item.id}>
-                        <p className="text-xs text-neutral-200">{item.message}</p>
-                        <p className="mt-1 text-right text-[9px] text-neutral-600">{formatRadioTime(item.sentAt)} · MOMAS Command</p>
-                      </article>
-                    ))}
-                  </div>
-                </section>
-              ) : null}
-            </div>
-
-            <form className="border-t border-white/10 bg-black/25 p-4" onSubmit={sendMessage}>
-              <label className="mb-2 block text-[10px] font-bold uppercase tracking-wide text-neutral-500">
-                Send text command
-              </label>
-              <textarea
-                className="field-input min-h-[82px] resize-none"
-                value={radioMessage}
-                onChange={(event) => setRadioMessage(event.target.value)}
-                placeholder={`Message ${selectedRadio.name || selectedRadio.device_id}`}
-              />
-              <div className="mt-2 flex items-center justify-between gap-3">
-                <span className={`text-[9px] ${radioMessageBytes > 200 ? "text-red-400" : "text-neutral-600"}`}>
-                  {radioMessageBytes}/200 bytes · delivered over the radio network
-                </span>
-                <button
-                  type="submit"
-                  disabled={!radioMessage.trim() || radioMessageBytes > 200 || messageMutation.isPending}
-                  className="inline-flex items-center gap-2 rounded bg-ops-green px-4 py-2 text-xs font-bold text-black disabled:opacity-40"
-                >
-                  <Send size={13} /> {messageMutation.isPending ? "Sending..." : "Send"}
-                </button>
-              </div>
-            </form>
+            <RadioConsole device={selectedRadio} location={latestLocations.get(String(selectedRadio.device_id))} />
           </aside>
         </>
       ) : null}

@@ -141,6 +141,7 @@ export function OperationsMap({
   activeLayers,
   basemap,
   onIncidentFocus,
+  onRadioSelect,
   focusTarget,
 }) {
   const mapNode = useRef(null);
@@ -333,13 +334,21 @@ export function OperationsMap({
         iconSize: [26, 42],
         iconAnchor: [13, 13],
       });
-      const marker = L.marker([lat, lon], { icon }).bindPopup(devicePopup(location, registry));
+      // Hover identifies the pin; clicking opens the radio console, which can
+      // do what a popup built from an HTML string never could - call the
+      // handset, talk to it, message it - and leaves the map visible while it
+      // is open.
+      const marker = L.marker([lat, lon], { icon }).bindTooltip(
+        `${escapeHtml(label)}${row?.pocstars_online ? "" : " · offline"}`,
+        { direction: "top", offset: [0, -14], opacity: 0.95 },
+      );
+      marker.on("click", () => onRadioSelect?.(row || { device_id: String(location.Uid) }));
       if (sos) marker.addTo(deviceAlertLayer);
       else clustered.push(marker);
     }
     // One bulk insert rather than one reflow per radio.
     deviceClusterLayer.addLayers(clustered);
-  }, [devices, locations]);
+  }, [devices, locations, onRadioSelect]);
 
   useEffect(() => {
     const map = mapRef.current;
