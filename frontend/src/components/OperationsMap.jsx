@@ -142,6 +142,7 @@ export function OperationsMap({
   basemap,
   onIncidentFocus,
   onRadioSelect,
+  followLine,
   focusTarget,
 }) {
   const mapNode = useRef(null);
@@ -190,10 +191,12 @@ export function OperationsMap({
     const sosLayer = L.layerGroup();
     const droneLayer = assetClusterGroup("drone", DRONE_SVG);
     const geofenceLayer = L.layerGroup();
+    const followLayer = L.layerGroup();
 
     baseLayers.dark.addTo(map);
     incidentLayer.addTo(map);
     geofenceLayer.addTo(map);
+    followLayer.addTo(map);
     deviceLayer.addTo(map);
     droneLayer.addTo(map);
     sosLayer.addTo(map);
@@ -228,6 +231,7 @@ export function OperationsMap({
       sosLayer,
       droneLayer,
       geofenceLayer,
+      followLayer,
     };
     mapRef.current = map;
 
@@ -417,6 +421,33 @@ export function OperationsMap({
     syncLayer(geofenceLayer, activeLayers.fences);
     syncLayer(sosLayer, true);
   }, [activeLayers]);
+
+  // The responding vehicle and where it is going. A straight line on purpose -
+  // there is no routing engine behind this, and drawing a road route we cannot
+  // actually compute would be a confident lie about the last few kilometres.
+  useEffect(() => {
+    const { followLayer } = layersRef.current;
+    if (!followLayer) return;
+    followLayer.clearLayers();
+    if (!followLine?.from || !followLine?.to) return;
+    const from = [followLine.from.lat, followLine.from.lon];
+    const to = [followLine.to.lat, followLine.to.lon];
+    L.polyline([from, to], {
+      color: "#ff4444",
+      weight: 2.5,
+      opacity: 0.9,
+      dashArray: "9 7",
+    }).addTo(followLayer);
+    L.circleMarker(from, {
+      radius: 6,
+      color: "#ff4444",
+      weight: 2,
+      fillColor: "#ff4444",
+      fillOpacity: 0.55,
+    })
+      .bindTooltip("You", { direction: "top", offset: [0, -8] })
+      .addTo(followLayer);
+  }, [followLine]);
 
   useEffect(() => {
     const map = mapRef.current;

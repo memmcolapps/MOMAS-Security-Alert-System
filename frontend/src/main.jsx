@@ -11,7 +11,9 @@ import {
 } from "@tanstack/react-router";
 import { createRoot } from "react-dom/client";
 import { AppHeader } from "./components/AppHeader";
+import { FollowBar } from "./components/FollowBar";
 import { LiveRadioBar } from "./components/LiveRadioBar";
+import { FollowProvider } from "./lib/follow-session";
 import { LiveRadioProvider } from "./lib/live-radio-session";
 import { getAuthToken, getMe } from "./lib/api";
 import { AlarmsRoute } from "./routes/AlarmsRoute";
@@ -41,9 +43,14 @@ function RootLayout() {
   const showHeader = !["/login", "/change-password"].includes(router.location.pathname);
   return (
     <LiveRadioProvider>
-      {showHeader ? <AppHeader /> : null}
-      {showHeader ? <LiveRadioBar /> : null}
-      <Outlet />
+      <FollowProvider>
+        {showHeader ? <AppHeader /> : null}
+        {showHeader ? <LiveRadioBar /> : null}
+        <Outlet />
+        {/* Outlives any one page: a response runs while the operator moves
+            between the map, the alarm and the radio console. */}
+        {showHeader ? <FollowBar /> : null}
+      </FollowProvider>
     </LiveRadioProvider>
   );
 }

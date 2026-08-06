@@ -7,6 +7,7 @@ import {
   Clock3,
   Map as MapIcon,
   MapPin,
+  Navigation,
   RadioTower,
   RefreshCw,
   RotateCcw,
@@ -20,6 +21,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlarmMiniMap } from "../components/AlarmMiniMap";
+import { useFollow } from "../lib/follow-session";
 import {
   alertsEventsUrl,
   getAlarm,
@@ -213,6 +215,7 @@ function useNow(active) {
 
 export function AlarmsRoute() {
   const queryClient = useQueryClient();
+  const { follow } = useFollow();
   const [filter, setFilter] = useState("open");
   const [sort, setSort] = useState("newest");
   const [search, setSearch] = useState("");
@@ -403,6 +406,23 @@ export function AlarmsRoute() {
     if (!selected) return;
     startMutation.mutate({ alertKey: selected.alert_key, note: responseNote.trim() });
   }
+
+  function followAlarm() {
+    if (!selected || !position) return;
+    follow({
+      lat: position.lat,
+      lon: position.lon,
+      label: displayName(selected),
+      alertKey: selected.alert_key,
+    });
+    // Only open the response if it is still unacknowledged; following an alarm
+    // someone else already took should not reopen or re-log it.
+    if (Number(selected.status) === 0 && !actionsBlocked) startResponse();
+  }
+
+  // Navigating to an alarm already in progress does not touch its state, so it
+  // is not held up by whatever blocks the lifecycle actions.
+  const followDisabled = Number(selected?.status) === 0 && actionsBlocked;
 
   function submitResolution(event) {
     event.preventDefault();
@@ -786,6 +806,21 @@ export function AlarmsRoute() {
                   Start response
                 </button>
               </section>
+            ) : null}
+
+            {/* Available while the alarm is open, not only before someone takes
+                it: a unit sent as backup, or one that acknowledged first and
+                then wanted navigation, needs this just as much. Opening the
+                response is the part that stays conditional. */}
+            {position && Number(selected.status) < 2 ? (
+              <button
+                className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md border border-ops-red/50 px-4 py-2.5 text-xs font-bold text-ops-red hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={followDisabled}
+                onClick={followAlarm}
+              >
+                <Navigation size={14} />
+                {Number(selected.status) === 0 ? "Follow — I am responding" : "Follow this alarm"}
+              </button>
             ) : null}
 
             {Number(selected.status) === 1 ? (

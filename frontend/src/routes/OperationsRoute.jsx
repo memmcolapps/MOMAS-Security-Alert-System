@@ -20,6 +20,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OperationsMap, devicePopup, dronePopup, incidentPopup, sosPopup } from "../components/OperationsMap";
 import { FloatingRadioCard } from "../components/RadioConsole";
+import { useFollow } from "../lib/follow-session";
 import {
   getDronePositions,
   getIncidentEvidence,
@@ -107,6 +108,7 @@ export function OperationsRoute() {
   const [basemap, setBasemap] = useState("dark");
   const [activeLayers, setActiveLayers] = useState({ live: true, heat: false, devices: true, drones: true, fences: true });
   const [openRadios, setOpenRadios] = useState([]);
+  const { target: followTarget, position: followPosition } = useFollow();
   const [sosSoundMuted, setSosSoundMuted] = useState(false);
   const [focusTarget, setFocusTarget] = useState(null);
   const [selectedIncidentId, setSelectedIncidentId] = useState(null);
@@ -513,6 +515,7 @@ export function OperationsRoute() {
         focusTarget={focusTarget}
         onIncidentFocus={(incident) => setSelectedIncidentId(incident.id)}
         onRadioSelect={openRadioCard}
+        followLine={followTarget && followPosition ? { from: followPosition, to: followTarget } : null}
       />
 
       {openRadios.map((card, index) => {

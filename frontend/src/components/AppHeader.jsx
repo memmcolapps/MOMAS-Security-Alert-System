@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Building2, ChevronDown, FileSearch, LogOut, Map, MapPinned, Plane, Radio, ShieldAlert, Siren, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getActiveOrganizationId, getMe, setActiveOrganizationId, setAuthToken } from "../lib/api";
+import { LocationStatus } from "./LocationStatus";
 
 export function AppHeader() {
   const navigate = useNavigate();
@@ -83,7 +84,11 @@ export function AppHeader() {
           ) : null}
         </nav>
 
-        <div className="ml-auto" ref={menuRef}>
+        <div className="ml-auto flex items-center gap-2">
+          <LocationStatus />
+        </div>
+
+        <div ref={menuRef}>
           {user ? (
             <button
               onClick={() => setMenuOpen((value) => !value)}
