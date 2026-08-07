@@ -2,7 +2,7 @@ import L from "leaflet";
 import "leaflet.heat";
 import "leaflet.markercluster";
 import { useEffect, useRef } from "react";
-import { escapeHtml, severityColors, severityLabels, typeIcons } from "../lib/domain";
+import { deviceTypeGlyph, escapeHtml, severityColors, severityLabels, typeIcons } from "../lib/domain";
 
 const NIGERIA_BOUNDS = L.latLngBounds([4.3, 2.7], [13.9, 14.7]);
 const NIGERIA_CENTER = [9.0, 8.5];
@@ -334,7 +334,10 @@ export function OperationsMap({
       const label = row?.name || location.Uid;
       const icon = L.divIcon({
         className: "",
-        html: `<div class="device-pin ${sos ? "sos" : ""}"><i class="fas fa-walkie-talkie"></i></div><div class="device-label ${sos ? "sos" : ""}">${escapeHtml(label)}</div>`,
+        // A vehicle tracker and a handheld should not look identical on a map.
+        // An SOS keeps the alarm glyph whatever the device is - what it is
+        // matters less than that it is shouting.
+        html: `<div class="device-pin ${sos ? "sos" : ""}">${sos ? '<i class="fas fa-triangle-exclamation"></i>' : deviceTypeGlyph(row?.device_type)}</div><div class="device-label ${sos ? "sos" : ""}">${escapeHtml(label)}</div>`,
         iconSize: [26, 42],
         iconAnchor: [13, 13],
       });

@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, AlertTriangle, Bell, CheckCircle2, Database, Download, ExternalLink, FileSearch, GitBranch, Link2, Network, Plus, RefreshCw, Search, ShieldCheck, Tags, Trash2, XCircle, Zap } from "lucide-react";
+import { Activity, AlertTriangle, Bell, CheckCircle2, Database, Download, ExternalLink, FileSearch, GitBranch, Link2, Network, Plus, RefreshCw, Search, ShieldCheck, Tags, Trash2, XCircle } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ForceGraph2D from "react-force-graph-2d";
+import { Toast, useToast } from "../components/Toast";
 import {
   deleteOsintSource,
   deleteOsintWatchlist,
@@ -116,15 +117,12 @@ export function OsintRoute() {
   const [note, setNote] = useState("");
   const [incidentId, setIncidentId] = useState("");
   const [watchlistForm, setWatchlistForm] = useState({ name: "", query_text: "", severity: "YELLOW", enabled: true, rule_type: "all_terms", min_confidence: 0, window_hours: 24 });
-  const [toast, setToast] = useState(null);
   const [liveAlerts, setLiveAlerts] = useState(0);
   const [streamLive, setStreamLive] = useState(false);
   const [graphMinEdge, setGraphMinEdge] = useState(2);
   const [graphSources, setGraphSources] = useState(false);
 
-  const notify = useCallback((message, type = "info") => {
-    if (message) setToast({ message: String(message), type });
-  }, []);
+  const { toast, notify, dismiss: dismissToast } = useToast();
 
   const listQuery = useQuery({
     queryKey: ["osint-items", status, sourceType, search, page],
@@ -217,12 +215,6 @@ export function OsintRoute() {
     setNote(detail?.analyst_note || "");
     setIncidentId(detail?.incident_id ? String(detail.incident_id) : "");
   }, [detail?.id, detail?.analyst_note, detail?.incident_id]);
-
-  useEffect(() => {
-    if (!toast) return undefined;
-    const timer = window.setTimeout(() => setToast(null), 2800);
-    return () => window.clearTimeout(timer);
-  }, [toast]);
 
   // Live alert stream. The backend pushes newly matched watchlist alerts over
   // SSE; we surface a count badge + toast and refresh the relevant queries so
@@ -833,22 +825,7 @@ export function OsintRoute() {
       </div>
       )}
 
-      {toast ? (
-        <div
-          className={`fixed bottom-5 right-5 z-[1200] flex items-center gap-2 rounded border px-4 py-2 text-xs font-bold shadow-xl ${
-            toast.type === "error"
-              ? "border-ops-red/50 bg-red-500/15 text-red-200"
-              : toast.type === "success"
-                ? "border-ops-green/40 bg-ops-green/10 text-ops-green"
-                : toast.type === "alert"
-                  ? "border-yellow-500/40 bg-yellow-500/10 text-yellow-200"
-                  : "border-white/10 bg-black/90 text-neutral-200"
-          }`}
-        >
-          {toast.type === "error" ? <XCircle size={13} /> : toast.type === "alert" ? <Zap size={13} /> : toast.type === "success" ? <CheckCircle2 size={13} /> : null}
-          {toast.message}
-        </div>
-      ) : null}
+      <Toast toast={toast} onDismiss={dismissToast} />
     </main>
   );
 }

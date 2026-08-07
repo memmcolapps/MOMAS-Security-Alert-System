@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { BrowserRadioAudio, liveRadioUrl } from "./live-radio";
 
 // One live-radio session for the whole app. The listen bar monitors a division
@@ -40,6 +40,27 @@ export function LiveRadioProvider({ children }) {
   const [busyBy, setBusyBy] = useState(null);
   const [channel, setChannel] = useState(null);
   const [callDevice, setCallDevice] = useState(null);
+  // Set when this machine cannot transmit; the call still connects listen-only.
+  const [micBlocked, setMicBlocked] = useState("");
+  // A standing condition holds until the thing it describes changes; `error` is
+  // a moment and clears itself. Carrying both in one string meant neither could
+  // have the right lifetime.
+  const [condition, setCondition] = useState("");
+
+  // Transient failures announce themselves and go. One still on screen a minute
+  // later cannot be told apart from a live one, and once an operator has been
+  // caught out by a stale message they stop trusting all of them.
+  useEffect(() => {
+    if (!error) return undefined;
+    const timer = window.setTimeout(() => setError(""), 8000);
+    return () => window.clearTimeout(timer);
+  }, [error]);
+
+  // Nothing used to clear an error once a later attempt actually worked, so a
+  // rejected call stayed on screen through the successful one that followed.
+  useEffect(() => {
+    if (callState === "connected") setError("");
+  }, [callState]);
 
   const resetVisibleState = useCallback(() => {
     setMode(null);
@@ -101,7 +122,18 @@ export function LiveRadioProvider({ children }) {
         if (socket?.readyState === window.WebSocket.OPEN) socket.send(data);
       });
       audioRef.current = audio;
-      await audio.prepare({ microphone: nextMode === "private" });
+      // A screen with no microphone can still hear the call. Failing the whole
+      // connection over it left a command screen unable to take a call at all,
+      // when listening is most of the value - so the call goes ahead and only
+      // push-to-talk is withheld.
+      setMicBlocked("");
+      try {
+        await audio.prepare({ microphone: nextMode === "private" });
+      } catch (error) {
+        if (error?.code !== "microphone_unavailable") throw error;
+        setMicBlocked(error.message);
+        await audio.prepare({ microphone: false });
+      }
       socket = new window.WebSocket(liveRadioUrl());
       socket.binaryType = "arraybuffer";
       socketRef.current = socket;
@@ -115,10 +147,11 @@ export function LiveRadioProvider({ children }) {
         if (message.type === "ready") {
           setConfigured(Boolean(message.configured));
           if (!message.configured) {
-            setError("Live radio is not configured on this MOMAS server.");
+            setCondition("Live radio is not configured on this MOMAS server.");
             socket.close();
             return;
           }
+          setCondition("");
           socket.send(JSON.stringify(
             nextMode === "monitor"
               ? { type: "monitor.start", channelId: nextChannel.id }
@@ -226,6 +259,8 @@ export function LiveRadioProvider({ children }) {
     configured,
     error,
     busyBy,
+    micBlocked,
+    condition,
     channel,
     callDevice,
     listenToChannel,
@@ -235,7 +270,7 @@ export function LiveRadioProvider({ children }) {
     startPtt,
     stopPtt,
   }), [
-    mode, callState, pttState, speaker, configured, error, busyBy, channel, callDevice,
+    mode, callState, pttState, speaker, configured, error, busyBy, micBlocked, condition, channel, callDevice,
     listenToChannel, stopListening, callRadio, endCall, startPtt, stopPtt,
   ]);
 

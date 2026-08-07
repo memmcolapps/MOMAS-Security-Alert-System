@@ -55,14 +55,33 @@ export class BrowserRadioAudio {
     if (!window.navigator.mediaDevices?.getUserMedia) {
       throw new Error("This browser cannot use a microphone for live radio.");
     }
-    this.stream = await window.navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
+    // getUserMedia reports all of these as a bare DOMException, and the browser
+    // wording for "this machine has no microphone" is "Requested device not
+    // found" - which reads on a radio console as though the *radio* was not
+    // found. On a wall-mounted command screen with no mic that is exactly the
+    // wrong thing to tell an operator.
+    try {
+      this.stream = await window.navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+    } catch (error) {
+      const failure = new Error(
+        error?.name === "NotFoundError" || error?.name === "OverconstrainedError"
+          ? "This screen has no microphone, so you cannot transmit from it."
+          : error?.name === "NotAllowedError"
+            ? "Microphone access is blocked for this site, so you cannot transmit."
+            : error?.name === "NotReadableError"
+              ? "The microphone is already in use by another application."
+              : `The microphone could not be opened: ${error?.message || error}`,
+      );
+      failure.code = "microphone_unavailable";
+      throw failure;
+    }
     this.source = this.context.createMediaStreamSource(this.stream);
     this.processor = this.context.createScriptProcessor(4096, 1, 1);
     this.silentGain = this.context.createGain();

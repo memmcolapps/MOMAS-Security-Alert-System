@@ -11,6 +11,7 @@ import {
   saveDevice,
 } from "../lib/api";
 import { RadioConsole } from "../components/RadioConsole";
+import { Toast, useToast } from "../components/Toast";
 import { deviceTypeLabel } from "../lib/domain";
 
 const emptyForm = {
@@ -39,8 +40,8 @@ export function DevicesRoute() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(emptyForm);
-  const [toast, setToast] = useState(null);
   const [selectedRadio, setSelectedRadio] = useState(null);
+  const { toast, notify, dismiss: dismissToast } = useToast();
 
   const devicesQuery = useQuery({
     queryKey: ["devices"],
@@ -125,32 +126,26 @@ export function DevicesRoute() {
 
 
   useEffect(() => {
-    if (!toast) return undefined;
-    const timer = window.setTimeout(() => setToast(null), 2600);
-    return () => window.clearTimeout(timer);
-  }, [toast]);
-
-  useEffect(() => {
     setChannelFilter("all");
   }, [orgFilter]);
 
   const saveMutation = useMutation({
     mutationFn: saveDevice,
     onSuccess: async () => {
-      setToast(editingId ? "Device updated" : "Device added");
+      notify(editingId ? "Device updated" : "Device added", "success");
       closeForm();
       await queryClient.invalidateQueries({ queryKey: ["devices"] });
     },
-    onError: (error) => setToast(error.message),
+    onError: (error) => notify(error.message, "error"),
   });
 
   const deleteMutation = useMutation({
     mutationFn: deleteDevice,
     onSuccess: async () => {
-      setToast("Device removed");
+      notify("Device removed", "success");
       await queryClient.invalidateQueries({ queryKey: ["devices"] });
     },
-    onError: (error) => setToast(error.message),
+    onError: (error) => notify(error.message, "error"),
   });
 
   function openAdd() {
@@ -188,7 +183,7 @@ export function DevicesRoute() {
     event.preventDefault();
     const deviceId = form.device_id.trim();
     if (!deviceId) {
-      setToast("Device ID is required");
+      notify("Device ID is required", "error");
       return;
     }
     saveMutation.mutate({
@@ -472,11 +467,7 @@ export function DevicesRoute() {
         </>
       ) : null}
 
-      {toast ? (
-        <div className="fixed bottom-6 left-1/2 z-[999] -translate-x-1/2 rounded-md border border-green-500/40 bg-black px-4 py-2 text-xs text-neutral-100">
-          {toast}
-        </div>
-      ) : null}
+      <Toast toast={toast} onDismiss={dismissToast} />
     </main>
   );
 }

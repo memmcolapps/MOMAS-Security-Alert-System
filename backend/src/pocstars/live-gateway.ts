@@ -288,10 +288,39 @@ function operatorScope(user: any) {
   };
 }
 
-async function visibleDevice(user: any, deviceId: string) {
+// One refusal used to cover three unrelated causes - unregistered, inactive,
+// out of scope - and read as "can't find device" for all of them, which is
+// undiagnosable from the console. Each is now named, because the operator is
+// usually the only person who can tell you which one it was.
+async function resolveCallTarget(user: any, deviceId: string) {
   const devices = await db.listDevices(operatorScope(user));
-  return devices.find((device: any) =>
-    String(device.device_id) === deviceId && Boolean(device.active));
+  const inScope = devices.find((device: any) => String(device.device_id) === deviceId);
+  if (inScope && inScope.active) return { ok: true as const, device: inScope };
+  if (inScope) {
+    return {
+      ok: false as const,
+      code: "device_inactive",
+      message: `${inScope.name || `Radio ${deviceId}`} is marked inactive in the device registry.`,
+    };
+  }
+
+  // Look again without the scope filter, so the message can separate "you may
+  // not call this" from "this radio does not exist here".
+  const known = await db.getDevice(deviceId).catch(() => null);
+  if (!known) {
+    return {
+      ok: false as const,
+      code: "device_unknown",
+      message: `No radio with ID ${deviceId} is in the device registry. It may have been removed, or the console may be showing a stale list - reload and try again.`,
+    };
+  }
+  return {
+    ok: false as const,
+    code: "forbidden",
+    message: known.organization_id
+      ? "That radio belongs to another organization and is outside your operational scope."
+      : "That radio is not allocated to your organization yet.",
+  };
 }
 
 async function audit(session: ActiveSession, action: string, metadata: Record<string, unknown> = {}) {
@@ -324,15 +353,12 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
     });
     return;
   }
-  const device = await visibleDevice(user, deviceId);
-  if (!device) {
-    send(ws, {
-      type: "error",
-      code: "forbidden",
-      message: "That radio is inactive or outside your operational scope.",
-    });
+  const target = await resolveCallTarget(user, deviceId);
+  if (!target.ok) {
+    send(ws, { type: "error", code: target.code, message: target.message });
     return;
   }
+  const { device } = target;
   const targetUid = Number(device.device_id);
   if (!Number.isSafeInteger(targetUid) || targetUid <= 0) {
     send(ws, {

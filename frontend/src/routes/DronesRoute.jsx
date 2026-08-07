@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plane, Plus, Save, Trash2, Wifi, WifiOff, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { Toast, useToast } from "../components/Toast";
 import {
   deleteDrone,
   getDronePositions,
@@ -36,8 +37,8 @@ export function DronesRoute() {
   const queryClient = useQueryClient();
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const { toast, notify, dismiss: dismissToast } = useToast();
   const [form, setForm] = useState(emptyForm);
-  const [toast, setToast] = useState(null);
 
   const registryQuery = useQuery({
     queryKey: ["drone-registry"],
@@ -80,31 +81,25 @@ export function DronesRoute() {
   );
   const onlineCount = useMemo(() => live.filter((d) => d.online).length, [live]);
 
-  useEffect(() => {
-    if (!toast) return undefined;
-    const timer = window.setTimeout(() => setToast(null), 2600);
-    return () => window.clearTimeout(timer);
-  }, [toast]);
-
   const saveMutation = useMutation({
     mutationFn: saveDrone,
     onSuccess: async () => {
-      setToast(editingId ? "Drone updated" : "Drone added");
+      notify(editingId ? "Drone updated" : "Drone added", "success");
       closeForm();
       await queryClient.invalidateQueries({ queryKey: ["drone-registry"] });
       await queryClient.invalidateQueries({ queryKey: ["drone-positions"] });
     },
-    onError: (error) => setToast(error.message),
+    onError: (error) => notify(error.message, "error"),
   });
 
   const deleteMutation = useMutation({
     mutationFn: deleteDrone,
     onSuccess: async () => {
-      setToast("Drone removed");
+      notify("Drone removed", "success");
       await queryClient.invalidateQueries({ queryKey: ["drone-registry"] });
       await queryClient.invalidateQueries({ queryKey: ["drone-positions"] });
     },
-    onError: (error) => setToast(error.message),
+    onError: (error) => notify(error.message, "error"),
   });
 
   function openAdd(prefillSysid = "") {
@@ -143,7 +138,7 @@ export function DronesRoute() {
     event.preventDefault();
     const sysid = parseInt(form.sysid, 10);
     if (!Number.isInteger(sysid) || sysid < 1 || sysid > 255) {
-      setToast("System ID must be a number between 1 and 255");
+      notify("System ID must be a number between 1 and 255", "error");
       return;
     }
     saveMutation.mutate({
@@ -374,11 +369,7 @@ export function DronesRoute() {
         </div>
       </section>
 
-      {toast ? (
-        <div className="fixed bottom-6 left-1/2 z-[999] -translate-x-1/2 rounded-md border border-sky-500/40 bg-black px-4 py-2 text-xs text-neutral-100">
-          {toast}
-        </div>
-      ) : null}
+      <Toast toast={toast} onDismiss={dismissToast} />
     </main>
   );
 }

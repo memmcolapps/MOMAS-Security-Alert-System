@@ -118,6 +118,34 @@ export function deviceTypeLabel(type) {
   );
 }
 
+// Armoured vehicle: sloped nose, hull, roof hatch, three road wheels. Drawn
+// here because Font Awesome free has no armoured vehicle - its nearest is a
+// military supply truck, which reads as logistics rather than a protected
+// patrol unit. No weapon on it: these are escort and cash-in-transit vehicles,
+// not military ones, and a gun barrel would say the wrong thing about the
+// operation. Inherits the pin's colour through currentColor.
+const ARMOURED_VEHICLE_SVG = `<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+  <rect x="8.4" y="5.2" width="5" height="2.6" rx="0.6"/>
+  <path d="M3.4 7.8h11.4l4.3 3.4v4.1H3.4z"/>
+  <circle cx="7" cy="17.6" r="2.3"/>
+  <circle cx="12" cy="17.6" r="2.3"/>
+  <circle cx="17" cy="17.6" r="2.3"/>
+</svg>`;
+
+// Map pins used one walkie-talkie glyph for everything, so a vehicle tracker
+// and a handheld were indistinguishable at a glance - which is most of what a
+// map is for. Returns markup rather than a class name because not every type
+// has a Font Awesome equivalent.
+export function deviceTypeGlyph(type) {
+  if (type === "vehicle") return ARMOURED_VEHICLE_SVG;
+  const icon = {
+    handheld: "fa-walkie-talkie",
+    fixed: "fa-tower-broadcast",
+    other: "fa-circle-dot",
+  }[type] || "fa-walkie-talkie";
+  return `<i class="fas ${icon}"></i>`;
+}
+
 // One role vocabulary for both admin surfaces. The platform page used to offer
 // "admin" and "viewer" while the organization page offered five other values,
 // so the same person ended up with a different role string depending on which

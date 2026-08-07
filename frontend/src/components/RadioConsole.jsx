@@ -215,6 +215,21 @@ export function RadioConsole({ device, location, onShowOnMap }) {
                   </p>
                 ) : null}
               </div>
+            ) : liveRadio.callState === "connected" && liveRadio.micBlocked ? (
+              // Connected, but this machine cannot transmit. The call is worth
+              // keeping - you can still hear the handset - so say why the
+              // talk button is gone rather than showing one that cannot work.
+              <div className="space-y-2">
+                <p className="rounded border border-amber-500/25 bg-amber-500/10 px-2 py-1.5 text-[10px] text-amber-200">
+                  Listening only. {liveRadio.micBlocked}
+                </p>
+                <button
+                  className="inline-flex w-full items-center justify-center gap-2 rounded border border-red-500/25 px-3 py-1.5 text-[10px] text-red-300 hover:bg-red-500/10"
+                  onClick={liveRadio.endCall}
+                >
+                  <PhoneOff size={12} /> End call
+                </button>
+              </div>
             ) : liveRadio.callState === "connected" ? (
               <div className="space-y-2">
                 <button

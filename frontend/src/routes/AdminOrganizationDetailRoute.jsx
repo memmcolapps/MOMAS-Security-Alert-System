@@ -1,7 +1,7 @@
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, Building2, ClipboardList, Globe2, Plus, Radio, RadioTower, Save, Trash2, UserPlus, UsersRound, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   addOrganizationUser,
   attachDeviceToOrganization,
@@ -134,16 +134,30 @@ function OverviewSection({ organization, units, onSaved, onDirtyChange }) {
   }), [organization]);
   const [draft, setDraft] = useState(initial);
 
+  // States are compared as a set. The API returns them alphabetically, the
+  // checkboxes collect them in the order they were clicked, and comparing those
+  // two as JSON left the form claiming unsaved changes after a clean save.
+  const changed = (next) =>
+    next.name !== initial.name ||
+    next.status !== initial.status ||
+    Boolean(next.all_states) !== initial.all_states ||
+    [...(next.states || [])].sort().join("|") !== [...initial.states].sort().join("|");
+
   const edit = (next) => {
     setDraft(next);
-    onDirtyChange(JSON.stringify(next) !== JSON.stringify(initial));
+    onDirtyChange(changed(next));
   };
+
+  useEffect(() => {
+    setDraft(initial);
+    onDirtyChange(false);
+  }, [initial, onDirtyChange]);
 
   const mutation = useMutation({
     mutationFn: (payload) => updateOrganizationAccess(organization.id, payload),
     onSuccess: onSaved,
   });
-  const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
+  const dirty = changed(draft);
 
   return (
     <section className="space-y-5">
@@ -227,25 +241,44 @@ function SaveRow({ mutation, dirty, onSave, label }) {
 // many concurrent sessions it may hold, and which channels it owns.
 function RadioSection({ organization, channels, onSaved, onDirtyChange }) {
   const initial = useMemo(() => ({
-    radio_seats: organization.radio_seats ?? 2,
-    platform_radio_seats: organization.platform_radio_seats ?? 1,
+    radio_seats: Number(organization.radio_seats ?? 2),
+    platform_radio_seats: Number(organization.platform_radio_seats ?? 1),
   }), [organization]);
   const [draft, setDraft] = useState(initial);
 
+  // A number input hands back a string, and the API hands back a number, so
+  // comparing the two as JSON reported "Unsaved changes" forever after any
+  // edit - including a save that had gone through perfectly.
+  const changed = (next) =>
+    Number(next.radio_seats) !== initial.radio_seats ||
+    Number(next.platform_radio_seats) !== initial.platform_radio_seats;
+
   const edit = (next) => {
     setDraft(next);
-    onDirtyChange(JSON.stringify(next) !== JSON.stringify(initial));
+    onDirtyChange(changed(next));
   };
 
+  // The saved record comes back through the query, so the form has to follow it
+  // rather than keep showing what was typed.
+  useEffect(() => {
+    setDraft(initial);
+    onDirtyChange(false);
+  }, [initial, onDirtyChange]);
+
   const seatsMutation = useMutation({
-    mutationFn: (payload) => updateOrganizationAccess(organization.id, payload),
+    mutationFn: (payload) => updateOrganizationAccess(organization.id, {
+      // Sent as numbers: the backend clamps with Math.max, and "5" would work
+      // there by coercion, but nothing downstream should depend on that.
+      radio_seats: Number(payload.radio_seats),
+      platform_radio_seats: Number(payload.platform_radio_seats),
+    }),
     onSuccess: onSaved,
   });
   const provisionMutation = useMutation({
     mutationFn: () => provisionOrganizationRadio(organization.id),
     onSuccess: onSaved,
   });
-  const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
+  const dirty = changed(draft);
 
   return (
     <section className="space-y-5">
