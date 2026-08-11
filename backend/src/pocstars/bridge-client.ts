@@ -92,7 +92,9 @@ export class PocstarsBridgeClient extends EventEmitter {
       (message) => message.type === "presence.baseline",
     );
     return {
-      seat: String(response.seat || ""),
+      seat: response.seat ? String(response.seat) : null,
+      // The company has no channels, so there is nothing to watch yet.
+      idle: Boolean(response.idle),
       radios: Array.isArray(response.radios) ? response.radios : [],
     };
   }

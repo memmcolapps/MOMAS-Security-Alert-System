@@ -56,12 +56,15 @@ export async function stopPresenceWatchers() {
   watchers.clear();
 }
 
-function scheduleReconnect(watcher: Watcher) {
+function scheduleReconnect(watcher: Watcher, reason?: string) {
   if (watcher.stopped || watcher.timer) return;
   const delay = watcher.backoffMs;
   // Presence is only as trustworthy as this session. Losing it silently is the
   // failure mode that showed the whole fleet offline for a day, so say so.
-  console.warn(`[Radio] presence watcher for company ${watcher.companyId} down, retrying in ${Math.round(delay / 1000)}s`);
+  console.warn(
+    `[Radio] presence watcher for company ${watcher.companyId} `
+    + `${reason || "down"}, retrying in ${Math.round(delay / 1000)}s`,
+  );
   watcher.timer = setTimeout(() => {
     watcher.timer = null;
     void connect(watcher);
@@ -93,6 +96,18 @@ async function connect(watcher: Watcher) {
   try {
     await client.connect();
     const baseline = await client.watchPresence(watcher.companyId);
+
+    // An organization that exists but has no channels yet. Nothing to watch,
+    // and nothing wrong - so close quietly and look again later rather than
+    // treating it as a failure and retrying in a tightening loop.
+    if (baseline.idle) {
+      await client.close().catch(() => {});
+      if (watcher.client === client) watcher.client = null;
+      watcher.backoffMs = RECONNECT_MAX_MS;
+      scheduleReconnect(watcher, `company ${watcher.companyId} has no channels yet`);
+      return;
+    }
+
     watcher.client = client;
     watcher.backoffMs = RECONNECT_MIN_MS;
 

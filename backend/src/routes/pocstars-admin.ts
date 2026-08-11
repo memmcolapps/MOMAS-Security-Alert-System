@@ -199,9 +199,17 @@ router.post("/groups/:group_id/assign", async (c) => {
     return c.json({ error: "Choose the organization this channel belongs to." }, 400);
   }
   try {
+    // Which vendor company owns this talk group. Claiming a channel is how an
+    // organization that already has an estate on the network reveals where it
+    // actually lives, so the assignment needs to know.
+    const groupId = c.req.param("group_id");
+    const owner: any = await provisionOnNetwork("provision.company.forGroup", { groupId: Number(groupId) })
+      .catch(() => null);
+
     const result = await db.assignPocstarsGroupToOrganization({
-      group_id: c.req.param("group_id"),
+      group_id: groupId,
       organization_id: organizationId,
+      group_company_id: owner?.companyId ?? null,
     });
     await db.createAuditLog({
       organization_id: organizationId,

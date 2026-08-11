@@ -2760,9 +2760,12 @@ async function syncPocstarsPlatformInventory(inventory: any) {
 // copies the vendor's name back over this row every cycle, so a local label
 // chosen here would quietly revert within minutes. Renaming is done through
 // PUT /api/org/channels/:id, which renames on the network first.
-async function assignPocstarsGroupToOrganization({ group_id, organization_id }: {
+async function assignPocstarsGroupToOrganization({ group_id, organization_id, group_company_id }: {
   group_id: string;
   organization_id: number;
+  // The vendor company that actually owns this talk group. Supplied by the
+  // caller because only the bridge can resolve it.
+  group_company_id?: number | null;
 }) {
   const groupId = String(group_id);
   const client = await pool.connect();
@@ -2789,6 +2792,52 @@ async function assignPocstarsGroupToOrganization({ group_id, organization_id }: 
     const existingChannel = existingChannels[0];
     if (existingChannel && Number(existingChannel.organization_id) !== Number(organization_id)) {
       throw new Error(`Channel ${group.name} is already claimed by ${existingChannel.organization_name}.`);
+    }
+
+    // An organization must own the company its channels live in, or its
+    // dispatcher seats are leased from a company that cannot reach them - the
+    // seat signs in fine and then has no membership of the group it was asked
+    // to monitor. Creating an organization provisions it a company up front,
+    // which is right for a new customer and wrong for one that already has an
+    // estate on the network: the provisioned company is a placeholder, and the
+    // first inherited channel is what reveals where the organization really is.
+    const claimedCompanyId = Number(group_company_id);
+    if (Number.isSafeInteger(claimedCompanyId) && claimedCompanyId > 0) {
+      const { rows: orgRows } = await client.query(
+        "SELECT pocstars_company_id FROM organizations WHERE id = $1",
+        [organization_id],
+      );
+      const ownCompanyId = Number(orgRows[0]?.pocstars_company_id) || null;
+
+      if (ownCompanyId && ownCompanyId !== claimedCompanyId) {
+        // Is the organization's own company still an empty placeholder? Only
+        // then is it safe to correct silently.
+        const { rows: inUse } = await client.query(
+          `SELECT
+             (SELECT COUNT(*) FROM devices d
+               WHERE d.organization_id = $1 AND d.pocstars_managed) AS radios,
+             (SELECT COUNT(*) FROM channels c
+               WHERE c.organization_id = $1 AND c.pocstars_group_id IS NOT NULL
+                 AND c.pocstars_group_id <> $2) AS channels`,
+          [organization_id, groupId],
+        );
+        const holdsSomething = Number(inUse[0]?.radios || 0) > 0 || Number(inUse[0]?.channels || 0) > 0;
+        if (holdsSomething) {
+          throw new Error(
+            `${organizations[0].name} already has radios on company ${ownCompanyId}, but `
+            + `${group.name} belongs to company ${claimedCompanyId}. Move the channel or the radios first.`,
+          );
+        }
+        await client.query(
+          "UPDATE organizations SET pocstars_company_id = $2, updated_at = NOW() WHERE id = $1",
+          [organization_id, String(claimedCompanyId)],
+        );
+      } else if (!ownCompanyId) {
+        await client.query(
+          "UPDATE organizations SET pocstars_company_id = $2, updated_at = NOW() WHERE id = $1",
+          [organization_id, String(claimedCompanyId)],
+        );
+      }
     }
 
     let channelId: number;

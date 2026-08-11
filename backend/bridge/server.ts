@@ -454,6 +454,15 @@ const server = Bun.serve<BridgeSession>({
           return;
         }
         try {
+          // Presence is reported for the members of channels the account can
+          // see, so a company with no channels has nothing to watch - and the
+          // baseline query fails outright rather than returning empty. Say so
+          // plainly instead of creating a seat and retrying forever.
+          const watchGroups = await provisioning.listGroups(watchCompanyId);
+          if (!watchGroups.length) {
+            send(ws, { type: "presence.baseline", seat: null, idle: true, radios: [] });
+            return;
+          }
           const seat = await provisioning.ensurePresenceSeat(watchCompanyId);
           const client = new PocstarsLiveClient({
             host: controlHost,
