@@ -253,6 +253,21 @@ async function handleProvisioning(ws: ServerWebSocket<BridgeSession>, message: a
           result: { companyId: await provisioning.companyForGroup(Number(message.groupId)) },
         });
       }
+      case "provision.radio.create": {
+        return send(ws, {
+          type: "provision.result", requestId, ok: true,
+          result: await provisioning.createRadio({
+            companyId,
+            imei: String(message.imei || "").trim(),
+            name: String(message.name || "").trim(),
+            channelIds: Array.isArray(message.channelIds) ? message.channelIds.map(Number) : [],
+            defaultChannelId: message.defaultChannelId ? Number(message.defaultChannelId) : null,
+            serviceEndsAt: String(message.serviceEndsAt || "2030-01-01 00:00:00"),
+            gpsEnabled: message.gpsEnabled !== false,
+            gpsFrequency: Number(message.gpsFrequency || 30),
+          }),
+        });
+      }
       case "provision.radios": {
         return send(ws, {
           type: "provision.result", requestId, ok: true,

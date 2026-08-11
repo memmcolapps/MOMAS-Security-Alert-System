@@ -8,6 +8,7 @@ import {
   getOrgAdmin,
   listDevices,
   listOrganizations,
+  onboardRadio,
   saveDevice,
 } from "../lib/api";
 import { RadioConsole } from "../components/RadioConsole";
@@ -16,6 +17,10 @@ import { deviceTypeLabel } from "../lib/domain";
 
 const emptyForm = {
   device_id: "",
+  // Onboarding identifies a handset by the IMEI printed on it. The radio
+  // network assigns the uid, so device_id is an outcome of onboarding rather
+  // than something anyone can type in.
+  imei: "",
   name: "",
   organization_id: "",
   unit_id: "",
@@ -23,7 +28,19 @@ const emptyForm = {
   device_type: "",
   active: "true",
   notes: "",
+  channel_id: "",
+  service_ends_at: defaultServiceEnd(),
+  gps_enabled: "true",
+  gps_frequency: "30",
 };
+
+// Radios are sold with a service window and are refused at sign-in once it
+// lapses, so a new handset needs a real date rather than an open-ended one.
+function defaultServiceEnd() {
+  const date = new Date();
+  date.setFullYear(date.getFullYear() + 2);
+  return date.toISOString().slice(0, 10);
+}
 
 function formatDate(value) {
   if (!value) return "-";
@@ -124,6 +141,21 @@ export function DevicesRoute() {
   }, [channelFilter, organizationDevices, search]);
   const activeCount = useMemo(() => devices.filter((device) => device.active).length, [devices]);
 
+  // Channels a new radio can be put on: those of the organization chosen in the
+  // form. Derived from radios already on the network, so a channel nobody is on
+  // yet will not appear - it can be assigned from the channel screen afterwards.
+  const orgChannels = useMemo(() => {
+    if (!form.organization_id) return [];
+    const seen = new Map();
+    for (const device of allDevices) {
+      if (String(device.organization_id) !== String(form.organization_id)) continue;
+      for (const channel of device.channels || []) {
+        if (!seen.has(String(channel.id))) seen.set(String(channel.id), { id: String(channel.id), name: channel.name });
+      }
+    }
+    return [...seen.values()];
+  }, [allDevices, form.organization_id]);
+
 
   useEffect(() => {
     setChannelFilter("all");
@@ -132,7 +164,19 @@ export function DevicesRoute() {
   const saveMutation = useMutation({
     mutationFn: saveDevice,
     onSuccess: async () => {
-      notify(editingId ? "Device updated" : "Device added", "success");
+      notify("Device updated", "success");
+      closeForm();
+      await queryClient.invalidateQueries({ queryKey: ["devices"] });
+    },
+    onError: (error) => notify(error.message, "error"),
+  });
+
+  const onboardMutation = useMutation({
+    mutationFn: onboardRadio,
+    onSuccess: async (result) => {
+      // The uid is worth showing: it is how the radio is identified everywhere
+      // else, and the person holding the handset only knows its IMEI.
+      notify(`Radio onboarded as ${result?.radio?.uid ?? "a new device"}`, "success");
       closeForm();
       await queryClient.invalidateQueries({ queryKey: ["devices"] });
     },
@@ -181,6 +225,40 @@ export function DevicesRoute() {
 
   function submitForm(event) {
     event.preventDefault();
+
+    // A new radio is created on the radio network; an existing one is only
+    // edited here. They are different operations against different systems.
+    if (!editingId) {
+      const imei = form.imei.trim();
+      if (!/^\d{10,20}$/.test(imei)) {
+        notify("Enter the IMEI printed on the handset", "error");
+        return;
+      }
+      if (!form.name.trim()) {
+        notify("Give the radio a name", "error");
+        return;
+      }
+      if (!form.organization_id) {
+        notify("Choose the organization this radio belongs to", "error");
+        return;
+      }
+      onboardMutation.mutate({
+        imei,
+        name: form.name.trim(),
+        organization_id: Number(form.organization_id),
+        unit_id: form.unit_id ? Number(form.unit_id) : null,
+        channel_ids: form.channel_id ? [Number(form.channel_id)] : [],
+        default_channel_id: form.channel_id ? Number(form.channel_id) : null,
+        service_ends_at: `${form.service_ends_at} 00:00:00`,
+        gps_enabled: form.gps_enabled === "true",
+        gps_frequency: Number(form.gps_frequency) || 30,
+        operator: form.operator.trim() || null,
+        device_type: form.device_type || "handheld",
+        notes: form.notes.trim() || null,
+      });
+      return;
+    }
+
     const deviceId = form.device_id.trim();
     if (!deviceId) {
       notify("Device ID is required", "error");
@@ -221,16 +299,22 @@ export function DevicesRoute() {
       {formOpen ? (
         <form className="glass-panel mb-7 rounded-lg border-green-500/30 p-5" onSubmit={submitForm}>
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-[13px] font-bold text-ops-green">{editingId ? "Edit device" : "New device"}</h2>
+            <h2 className="text-[13px] font-bold text-ops-green">{editingId ? "Edit device" : "Onboard a radio"}</h2>
             <button type="button" className="rounded p-1 text-neutral-500 hover:text-neutral-200" onClick={closeForm}>
               <X size={16} />
             </button>
           </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-            <Field label="Device ID" required>
-              <input className="field-input font-mono" value={form.device_id} disabled={Boolean(editingId)} onChange={(event) => updateField("device_id", event.target.value)} placeholder="IMEI or UID" />
-            </Field>
-            <Field label="Name">
+            {editingId ? (
+              <Field label="Device ID">
+                <input className="field-input font-mono" value={form.device_id} disabled />
+              </Field>
+            ) : (
+              <Field label="IMEI" required>
+                <input className="field-input font-mono" value={form.imei} onChange={(event) => updateField("imei", event.target.value)} placeholder="15 digits, printed on the handset" />
+              </Field>
+            )}
+            <Field label="Name" required={!editingId}>
               <input className="field-input" value={form.name} onChange={(event) => updateField("name", event.target.value)} placeholder="e.g. TK-100 Gate" />
             </Field>
             {isPlatformAdmin ? (
@@ -265,12 +349,35 @@ export function DevicesRoute() {
                 <option value="other">Other</option>
               </select>
             </Field>
-            <Field label="Status">
-              <select className="field-input" value={form.active} onChange={(event) => updateField("active", event.target.value)}>
-                <option value="true">Active</option>
-                <option value="false">Inactive (hidden from map)</option>
-              </select>
-            </Field>
+            {editingId ? (
+              <Field label="Status">
+                <select className="field-input" value={form.active} onChange={(event) => updateField("active", event.target.value)}>
+                  <option value="true">Active</option>
+                  <option value="false">Inactive (hidden from map)</option>
+                </select>
+              </Field>
+            ) : null}
+            {!editingId ? (
+              <>
+                <Field label="Channel">
+                  <select className="field-input" value={form.channel_id} onChange={(event) => updateField("channel_id", event.target.value)}>
+                    <option value="">No channel yet</option>
+                    {orgChannels.map((channel) => (
+                      <option value={channel.id} key={channel.id}>{channel.name}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Service expires">
+                  <input type="date" className="field-input" value={form.service_ends_at} onChange={(event) => updateField("service_ends_at", event.target.value)} />
+                </Field>
+                <Field label="Location reporting">
+                  <select className="field-input" value={form.gps_enabled} onChange={(event) => updateField("gps_enabled", event.target.value)}>
+                    <option value="true">On, every {form.gps_frequency}s</option>
+                    <option value="false">Off</option>
+                  </select>
+                </Field>
+              </>
+            ) : null}
             <Field label="Notes" wide>
               <textarea className="field-input min-h-[68px] resize-y" value={form.notes} onChange={(event) => updateField("notes", event.target.value)} placeholder="Any additional details" />
             </Field>
@@ -279,8 +386,11 @@ export function DevicesRoute() {
             <button type="button" className="rounded bg-white/10 px-4 py-2 text-xs text-neutral-400 hover:text-neutral-100" onClick={closeForm}>
               Cancel
             </button>
-            <button type="submit" disabled={saveMutation.isPending} className="inline-flex items-center gap-2 rounded bg-ops-green px-4 py-2 text-xs font-bold text-black disabled:opacity-50">
-              <Save size={14} /> {saveMutation.isPending ? "Saving..." : "Save device"}
+            <button type="submit" disabled={saveMutation.isPending || onboardMutation.isPending} className="inline-flex items-center gap-2 rounded bg-ops-green px-4 py-2 text-xs font-bold text-black disabled:opacity-50">
+              <Save size={14} />
+              {editingId
+                ? (saveMutation.isPending ? "Saving..." : "Save device")
+                : (onboardMutation.isPending ? "Onboarding on the radio network..." : "Onboard radio")}
             </button>
           </div>
         </form>

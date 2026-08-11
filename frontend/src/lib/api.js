@@ -149,6 +149,16 @@ export function allocateRadioToOrganization(deviceId, organizationId) {
   });
 }
 
+// Onboarding a handset is not the same call as editing one. The radio network
+// assigns the id, so this creates the radio there first and returns the device
+// it created here - which is why there is no device_id to send.
+export function onboardRadio(payload) {
+  return request("/api/pocstars/admin/radios", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getPocstarsRegistry() {
   return request("/api/pocstars/admin/registry");
 }

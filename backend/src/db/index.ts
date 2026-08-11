@@ -2958,6 +2958,34 @@ async function upsertDevice({ device_id, name, company, operator, device_type, n
   return rows[0];
 }
 
+// A radio that was just created on the radio network. Unlike upsertDevice this
+// marks the row pocstars_managed, so the inventory sync reconciles it like any
+// other radio instead of leaving it as a hand-entered row that never resolves.
+async function upsertPocstarsDevice({
+  device_id, organization_id, unit_id, name, operator, device_type, notes,
+}) {
+  const { rows } = await pool.query(
+    `INSERT INTO devices (
+       device_id, organization_id, unit_id, name, operator, device_type, notes,
+       active, pocstars_managed, pocstars_online
+     )
+     VALUES ($1,$2,$3,$4,$5,$6,$7,true,true,NULL)
+     ON CONFLICT (device_id) DO UPDATE SET
+       organization_id = EXCLUDED.organization_id,
+       unit_id         = EXCLUDED.unit_id,
+       name            = EXCLUDED.name,
+       operator        = EXCLUDED.operator,
+       device_type     = EXCLUDED.device_type,
+       notes           = EXCLUDED.notes,
+       active          = true,
+       pocstars_managed = true
+     RETURNING *`,
+    [device_id, organization_id || null, unit_id || null, name || null,
+     operator || null, device_type || "handheld", notes || null],
+  );
+  return rows[0];
+}
+
 async function getDevice(device_id) {
   const { rows } = await pool.query("SELECT * FROM devices WHERE device_id = $1", [device_id]);
   return rows[0] ?? null;
@@ -3690,6 +3718,7 @@ export {
   clearAll,
   listDevices,
   upsertDevice,
+  upsertPocstarsDevice,
   getDevice,
   updateDeviceFields,
   deleteDevice,

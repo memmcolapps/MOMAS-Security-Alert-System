@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { requirePlatformAdmin } from "../auth";
 import * as db from "../db";
-import { liveRadioConfigured, queryPocstarsInventory } from "../pocstars/live-gateway";
+import { liveRadioConfigured, provisionOnNetwork, queryPocstarsInventory } from "../pocstars/live-gateway";
 
 const router = new Hono();
 
@@ -34,6 +34,73 @@ router.post("/sync", async (c) => {
       metadata: summary,
     });
     return c.json({ summary });
+  } catch (error) {
+    return c.json(jsonError(error), 409);
+  }
+});
+
+// Onboard a physical handset. The radio network assigns the id, so it is
+// created there first and recorded here afterwards - the reverse would invent a
+// device_id that no radio answers to, which is how a console ends up listing
+// radios that can never be called.
+router.post("/radios", async (c) => {
+  const user = (c as any).get("user");
+  const body = await c.req.json().catch(() => ({}));
+  const organizationId = Number(body.organization_id);
+  const imei = String(body.imei || "").trim();
+  const name = String(body.name || "").trim();
+
+  if (!Number.isSafeInteger(organizationId) || organizationId <= 0) {
+    return c.json({ error: "Choose the organization this radio belongs to." }, 400);
+  }
+  if (!/^\d{10,20}$/.test(imei)) {
+    return c.json({ error: "Enter the IMEI printed on the handset." }, 400);
+  }
+  if (!name) return c.json({ error: "Give the radio a name." }, 400);
+
+  try {
+    const organization = await db.getOrganization(organizationId);
+    if (!organization) return c.json({ error: "That organization could not be found." }, 404);
+    const companyId = Number(organization.pocstars_company_id);
+    if (!Number.isSafeInteger(companyId) || companyId <= 0) {
+      return c.json({
+        error: "That organization has no company on the radio network yet, so a radio cannot be added to it.",
+      }, 409);
+    }
+
+    const radio: any = await provisionOnNetwork("provision.radio.create", {
+      companyId,
+      imei,
+      name,
+      channelIds: Array.isArray(body.channel_ids) ? body.channel_ids : [],
+      defaultChannelId: body.default_channel_id ?? null,
+      serviceEndsAt: body.service_ends_at || "2030-01-01 00:00:00",
+      gpsEnabled: body.gps_enabled !== false,
+      gpsFrequency: Number(body.gps_frequency || 30),
+    });
+
+    // The network is the source of truth for identity, so the uid it assigned
+    // becomes the device_id here. Marked pocstars_managed so the inventory sync
+    // owns it from now on rather than treating it as a hand-entered stray.
+    const device = await db.upsertPocstarsDevice({
+      device_id: String(radio.uid),
+      organization_id: organizationId,
+      unit_id: body.unit_id ? Number(body.unit_id) : null,
+      name,
+      operator: body.operator || null,
+      device_type: body.device_type || "handheld",
+      notes: body.notes || null,
+    });
+
+    await db.createAuditLog({
+      organization_id: organizationId,
+      actor_user_id: user?.id || null,
+      action: "radio.onboard",
+      target_type: "device",
+      target_id: String(radio.uid),
+      metadata: { imei, name, channels: radio.channels, defaultChannelId: radio.defaultChannelId },
+    });
+    return c.json({ device, radio }, 201);
   } catch (error) {
     return c.json(jsonError(error), 409);
   }

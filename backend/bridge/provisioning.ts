@@ -270,6 +270,123 @@ export class PocstarsProvisioning {
     }));
   }
 
+  // Every handset on this install signs in with the same stored value - it is
+  // the column default, and all 78 of EPAIL's radios carry it. The handset is
+  // identified by its IMEI, not by a secret, so there is nothing to generate.
+  static readonly HANDSET_PASSWORD = "C4CA4238A0B923820DCC509A6F75849B";
+
+  // Put a handset on the radio network. The uid is assigned by the database on
+  // insert, which is why it cannot be supplied by the caller: MOMAS learns the
+  // radio's identity from this call rather than the other way round.
+  async createRadio({
+    companyId, imei, name, channelIds, defaultChannelId, serviceEndsAt, gpsEnabled, gpsFrequency,
+  }: {
+    companyId: number;
+    imei: string;
+    name: string;
+    channelIds: number[];
+    defaultChannelId: number | null;
+    serviceEndsAt: string;
+    gpsEnabled: boolean;
+    gpsFrequency: number;
+  }) {
+    const account = String(imei || "").trim();
+    if (!account) throw new Error("The radio's IMEI is required.");
+    if (!/^\d{10,20}$/.test(account)) {
+      throw new Error("A radio's IMEI is the digits printed on the handset.");
+    }
+    if (!String(name || "").trim()) throw new Error("A radio name is required.");
+
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      const [companies]: any = await connection.query(
+        "SELECT Corg_ID FROM tb_ComOrg WHERE Corg_ID = ? AND IsActive = 1",
+        [companyId],
+      );
+      if (!companies.length) throw new Error(`Unknown or inactive company ${companyId}.`);
+
+      // An IMEI is one handset. The vendor schema does not enforce this, and a
+      // duplicate would give two rows the same identity on the network.
+      const [clash]: any = await connection.query(
+        "SELECT User_ID, User_CompanyID FROM tb_User WHERE User_Account = ? AND IsActive = 1 LIMIT 1",
+        [account],
+      );
+      if (clash.length) {
+        throw new Error(
+          Number(clash[0].User_CompanyID) === companyId
+            ? `That IMEI is already registered as radio ${clash[0].User_ID}.`
+            : "That IMEI is already registered to another organization on this network.",
+        );
+      }
+
+      // A radio may only sit on its own organization's channels. Without this a
+      // caller could put a handset into another tenant's talk group.
+      const requested = [...new Set(channelIds.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))];
+      let channels: number[] = [];
+      if (requested.length) {
+        const [rows]: any = await connection.query(
+          `SELECT Cg_ID FROM tb_ChatGroup
+            WHERE Cg_ComID = ? AND IsActive = 1 AND Cg_ID IN (?)`,
+          [companyId, requested],
+        );
+        channels = rows.map((row: any) => Number(row.Cg_ID));
+        const rejected = requested.filter((id) => !channels.includes(id));
+        if (rejected.length) {
+          throw new Error(`Channel ${rejected[0]} does not belong to this organization.`);
+        }
+      }
+      const bootChannel = defaultChannelId && channels.includes(Number(defaultChannelId))
+        ? Number(defaultChannelId)
+        : channels[0] ?? null;
+
+      const [result]: any = await connection.query(
+        `INSERT INTO tb_User
+           (User_Account, User_Password, User_Name, User_CompanyID, User_Type,
+            User_AudioStatus, User_Enable, IsActive, User_Back, Parent_CompanyID,
+            User_Banned, User_Encrypt, network_type, chargeType, UserModel,
+            YearCardType, User_GPSswitch, User_GPSfrequency, User_DefaultChatGroup,
+            User_CreateTime, User_UpdateTime, User_ServiceBeginTime,
+            User_ServiceEndTime, Creation_Time, Last_Update_Time, sort)
+         VALUES (?, ?, ?, ?, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, ?, ?, ?,
+                 NOW(), NOW(), NOW(), ?, NOW(), NOW(), 99)`,
+        [
+          account,
+          PocstarsProvisioning.HANDSET_PASSWORD,
+          String(name).trim(),
+          companyId,
+          gpsEnabled ? 1 : 0,
+          Math.max(5, Number(gpsFrequency) || 30),
+          bootChannel,
+          serviceEndsAt,
+        ],
+      );
+      const uid = Number(result.insertId);
+      if (!uid) throw new Error("The radio network did not return a radio id.");
+
+      for (const channelId of channels) {
+        await connection.query(
+          `INSERT INTO tb_UserOfGroup
+             (UOG_Cgid, UOG_UserId, UOG_Priority, createTime, IsActive,
+              Creation_Time, Last_Update_Time, isDefault)
+           VALUES (?, ?, 0, NOW(), 1, NOW(), NOW(), ?)`,
+          [channelId, uid, channelId === bootChannel ? 1 : 0],
+        );
+      }
+
+      // Without this the row is correct and the network never notices it.
+      await this.touchUsers(connection, [uid]);
+      await connection.commit();
+      return { uid, account, name: String(name).trim(), channels, defaultChannelId: bootChannel };
+    } catch (error) {
+      await connection.rollback().catch(() => {});
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
   async uidForAccount(account: string) {
     const [rows]: any = await this.pool.query(
       "SELECT User_ID AS uid FROM tb_User WHERE User_Account = ? LIMIT 1",
