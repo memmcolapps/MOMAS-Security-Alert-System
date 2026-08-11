@@ -167,7 +167,7 @@ router.post("/devices/:device_id/allocate", async (c) => {
 // Deallocation returns a radio to the pool rather than leaving it inside the
 // organization that just gave it up.
 async function poolCompanyId() {
-  const result: any = await provisionOnNetwork("provision.pool");
+  const result: any = await provisionOnNetwork("provision.pool", { create: true });
   return Number(result?.companyId);
 }
 

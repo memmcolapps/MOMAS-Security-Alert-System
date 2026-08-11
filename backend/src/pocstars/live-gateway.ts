@@ -181,6 +181,15 @@ async function resolveCompanyIds(client: PocstarsBridgeClient) {
     const cached = companyIdByGroupId.get(groupId);
     if (cached) companyIds.add(cached);
   }
+
+  // The pool holds radios nobody has been allocated yet. It belongs to no
+  // organization and owns no channel, so neither branch above can find it -
+  // and without it, a radio waiting in the pool is absent from the snapshot
+  // and the stale sweep marks it inactive, as though the handset had vanished.
+  const pool = await client.provision("provision.pool").catch(() => null);
+  const poolCompanyId = Number(pool?.companyId);
+  if (Number.isSafeInteger(poolCompanyId) && poolCompanyId > 0) companyIds.add(poolCompanyId);
+
   return [...companyIds];
 }
 

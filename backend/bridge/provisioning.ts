@@ -276,12 +276,20 @@ export class PocstarsProvisioning {
   // nobody until a platform admin gives it to an organization.
   static readonly POOL_COMPANY_NAME = "MOMAS UNALLOCATED POOL";
 
-  async ensurePoolCompany() {
-    const [existing]: any = await this.pool.query(
+  // Lookup only. The inventory sync needs the pool in its enumeration or
+  // pooled radios go missing from the platform registry, but a read should
+  // never bring a vendor company into existence as a side effect.
+  async findPoolCompany() {
+    const [rows]: any = await this.pool.query(
       "SELECT Corg_ID FROM tb_ComOrg WHERE Corg_Name = ? AND IsActive = 1 LIMIT 1",
       [PocstarsProvisioning.POOL_COMPANY_NAME],
     );
-    if (existing.length) return Number(existing[0].Corg_ID);
+    return rows.length ? Number(rows[0].Corg_ID) : null;
+  }
+
+  async ensurePoolCompany() {
+    const existingId = await this.findPoolCompany();
+    if (existingId) return existingId;
 
     // No dispatcher seats: nothing should ever be able to talk to the pool.
     const [created]: any = await this.pool.query(

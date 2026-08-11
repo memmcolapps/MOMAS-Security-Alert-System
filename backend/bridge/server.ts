@@ -254,9 +254,12 @@ async function handleProvisioning(ws: ServerWebSocket<BridgeSession>, message: a
         });
       }
       case "provision.pool": {
+        // Reads look the pool up; only an allocation creates it.
+        const poolId = message.create
+          ? await provisioning.ensurePoolCompany()
+          : await provisioning.findPoolCompany();
         return send(ws, {
-          type: "provision.result", requestId, ok: true,
-          result: { companyId: await provisioning.ensurePoolCompany() },
+          type: "provision.result", requestId, ok: true, result: { companyId: poolId },
         });
       }
       case "provision.radio.reassign": {
