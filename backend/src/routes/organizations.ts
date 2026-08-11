@@ -291,9 +291,16 @@ setInterval(() => {
         target_id: inventory?.dispatcher?.id ?? null,
         metadata: summary,
       });
-      // Presence is watched per vendor company, and the sync is what discovers
-      // which companies exist. Starting a watcher twice is a no-op.
-      for (const companyId of knownCompanyIds()) startPresenceWatcher(companyId);
+      // Presence is watched per vendor company. The database sync is the better
+      // source for which companies exist, but it is not the only one: a sync
+      // that fell back to the voice plane resolves no companies at all, and
+      // relying on it alone meant one transient fallback left presence
+      // unwatched until the next restart. Organizations know their own company.
+      const watched = new Set<number>([
+        ...knownCompanyIds(),
+        ...(await db.listOrganizationCompanyIds()),
+      ]);
+      for (const companyId of watched) startPresenceWatcher(companyId);
     } catch {
       // Live calls take priority. The next five-minute cycle retries safely.
     } finally {
