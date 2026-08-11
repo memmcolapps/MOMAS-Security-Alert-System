@@ -238,14 +238,12 @@ export function DevicesRoute() {
         notify("Give the radio a name", "error");
         return;
       }
-      if (!form.organization_id) {
-        notify("Choose the organization this radio belongs to", "error");
-        return;
-      }
       onboardMutation.mutate({
         imei,
         name: form.name.trim(),
-        organization_id: Number(form.organization_id),
+        // Left blank the radio goes to the unallocated pool, which is the
+        // normal case: handsets are bought before anyone is given one.
+        organization_id: form.organization_id ? Number(form.organization_id) : null,
         unit_id: form.unit_id ? Number(form.unit_id) : null,
         channel_ids: form.channel_id ? [Number(form.channel_id)] : [],
         default_channel_id: form.channel_id ? Number(form.channel_id) : null,
@@ -320,7 +318,7 @@ export function DevicesRoute() {
             {isPlatformAdmin ? (
               <Field label="Company">
                 <select className="field-input" value={form.organization_id} onChange={(event) => updateField("organization_id", event.target.value)}>
-                  <option value="">Unassigned</option>
+                  <option value="">{editingId ? "Unassigned" : "Unallocated - hold in pool"}</option>
                   {organizations.map((org) => (
                     <option value={org.id} key={org.id}>{org.name}</option>
                   ))}

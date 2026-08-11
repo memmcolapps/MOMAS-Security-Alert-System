@@ -253,11 +253,33 @@ async function handleProvisioning(ws: ServerWebSocket<BridgeSession>, message: a
           result: { companyId: await provisioning.companyForGroup(Number(message.groupId)) },
         });
       }
+      case "provision.pool": {
+        return send(ws, {
+          type: "provision.result", requestId, ok: true,
+          result: { companyId: await provisioning.ensurePoolCompany() },
+        });
+      }
+      case "provision.radio.reassign": {
+        return send(ws, {
+          type: "provision.result", requestId, ok: true,
+          result: await provisioning.reassignRadio({
+            uid: Number(message.uid),
+            toCompanyId: companyId,
+            channelIds: Array.isArray(message.channelIds) ? message.channelIds.map(Number) : [],
+            defaultChannelId: message.defaultChannelId ? Number(message.defaultChannelId) : null,
+          }),
+        });
+      }
       case "provision.radio.create": {
+        // No organization chosen yet: the radio is real hardware that nobody
+        // has been given, so it lands in the pool rather than inside a tenant.
+        const target = Number.isSafeInteger(companyId) && companyId > 0
+          ? companyId
+          : await provisioning.ensurePoolCompany();
         return send(ws, {
           type: "provision.result", requestId, ok: true,
           result: await provisioning.createRadio({
-            companyId,
+            companyId: target,
             imei: String(message.imei || "").trim(),
             name: String(message.name || "").trim(),
             channelIds: Array.isArray(message.channelIds) ? message.channelIds.map(Number) : [],

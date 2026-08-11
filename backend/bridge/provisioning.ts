@@ -270,6 +270,138 @@ export class PocstarsProvisioning {
     }));
   }
 
+  // Where a radio lives before anyone has been allocated it. A company with no
+  // channels is the honest representation of unallocated hardware: the handset
+  // exists and is inventoried, but it belongs to no talk group, so it can reach
+  // nobody until a platform admin gives it to an organization.
+  static readonly POOL_COMPANY_NAME = "MOMAS UNALLOCATED POOL";
+
+  async ensurePoolCompany() {
+    const [existing]: any = await this.pool.query(
+      "SELECT Corg_ID FROM tb_ComOrg WHERE Corg_Name = ? AND IsActive = 1 LIMIT 1",
+      [PocstarsProvisioning.POOL_COMPANY_NAME],
+    );
+    if (existing.length) return Number(existing[0].Corg_ID);
+
+    // No dispatcher seats: nothing should ever be able to talk to the pool.
+    const [created]: any = await this.pool.query(
+      `INSERT INTO tb_ComOrg
+         (Aorg_ID, Corg_Name, Corg_Parent, Corg_Type, IsComDispatch, IsControl,
+          Dis_Size, IsActive, Creation_Time, Last_Update_Time)
+       VALUES (NULL, ?, 0, 0, 0, 1, 0, 1, NOW(), NOW())`,
+      [PocstarsProvisioning.POOL_COMPANY_NAME],
+    );
+    const companyId = Number(created.insertId);
+    if (!companyId) throw new Error("The radio network did not return a pool company id.");
+    return companyId;
+  }
+
+  // Move a handset to another organization. The uid does not change, which is
+  // what makes this safe: MOMAS's device_id, the radio's location history, its
+  // recordings and its terminal status all key off the uid and survive intact.
+  // Only ownership and reachability move.
+  async reassignRadio({ uid, toCompanyId, channelIds, defaultChannelId }: {
+    uid: number;
+    toCompanyId: number;
+    channelIds: number[];
+    defaultChannelId: number | null;
+  }) {
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      const [radios]: any = await connection.query(
+        `SELECT User_ID, User_Account, User_Name, User_CompanyID
+           FROM tb_User WHERE User_ID = ? AND User_Type = 0 AND IsActive = 1`,
+        [uid],
+      );
+      if (!radios.length) throw new Error(`Radio ${uid} could not be found on the radio network.`);
+      const radio = radios[0];
+      const fromCompanyId = Number(radio.User_CompanyID);
+
+      const [companies]: any = await connection.query(
+        "SELECT Corg_ID FROM tb_ComOrg WHERE Corg_ID = ? AND IsActive = 1",
+        [toCompanyId],
+      );
+      if (!companies.length) throw new Error(`Unknown or inactive company ${toCompanyId}.`);
+
+      const requested = [...new Set(channelIds.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))];
+      let channels: number[] = [];
+      if (requested.length) {
+        const [rows]: any = await connection.query(
+          "SELECT Cg_ID FROM tb_ChatGroup WHERE Cg_ComID = ? AND IsActive = 1 AND Cg_ID IN (?)",
+          [toCompanyId, requested],
+        );
+        channels = rows.map((row: any) => Number(row.Cg_ID));
+        const rejected = requested.filter((id) => !channels.includes(id));
+        if (rejected.length) {
+          throw new Error(`Channel ${rejected[0]} does not belong to the receiving organization.`);
+        }
+      }
+      const bootChannel = defaultChannelId && channels.includes(Number(defaultChannelId))
+        ? Number(defaultChannelId)
+        : channels[0] ?? null;
+
+      // Leaving the old owner's channels is the part that must not be skipped.
+      // The vendor does not enforce that a radio's channels belong to its own
+      // company - there are already 22 memberships on this install that cross
+      // it - so a stale row would leave the handset audible to its old tenant.
+      const [stale]: any = await connection.query(
+        `SELECT m.UOG_ID FROM tb_UserOfGroup m
+           JOIN tb_ChatGroup g ON g.Cg_ID = m.UOG_Cgid
+          WHERE m.UOG_UserId = ? AND m.IsActive = 1 AND g.Cg_ComID <> ?`,
+        [uid, toCompanyId],
+      );
+      for (const row of stale) {
+        await connection.query(
+          "UPDATE tb_UserOfGroup SET IsActive = 0, Last_Update_Time = NOW() WHERE UOG_ID = ?",
+          [row.UOG_ID],
+        );
+      }
+
+      for (const channelId of channels) {
+        const [existing]: any = await connection.query(
+          "SELECT UOG_ID FROM tb_UserOfGroup WHERE UOG_Cgid = ? AND UOG_UserId = ?",
+          [channelId, uid],
+        );
+        if (existing.length) {
+          await connection.query(
+            "UPDATE tb_UserOfGroup SET IsActive = 1, isDefault = ?, Last_Update_Time = NOW() WHERE UOG_ID = ?",
+            [channelId === bootChannel ? 1 : 0, existing[0].UOG_ID],
+          );
+        } else {
+          await connection.query(
+            `INSERT INTO tb_UserOfGroup
+               (UOG_Cgid, UOG_UserId, UOG_Priority, createTime, IsActive,
+                Creation_Time, Last_Update_Time, isDefault)
+             VALUES (?, ?, 0, NOW(), 1, NOW(), NOW(), ?)`,
+            [channelId, uid, channelId === bootChannel ? 1 : 0],
+          );
+        }
+      }
+
+      await connection.query(
+        `UPDATE tb_User
+            SET User_CompanyID = ?, User_DefaultChatGroup = ?,
+                User_UpdateTime = NOW(), Last_Update_Time = NOW()
+          WHERE User_ID = ?`,
+        [toCompanyId, bootChannel, uid],
+      );
+
+      await connection.commit();
+      return {
+        uid, account: radio.User_Account, name: radio.User_Name,
+        fromCompanyId, toCompanyId, channels, defaultChannelId: bootChannel,
+        leftChannels: stale.length,
+      };
+    } catch (error) {
+      await connection.rollback().catch(() => {});
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
   // Every handset on this install signs in with the same stored value - it is
   // the column default, and all 78 of EPAIL's radios carry it. The handset is
   // identified by its IMEI, not by a secret, so there is nothing to generate.

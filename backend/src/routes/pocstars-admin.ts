@@ -50,24 +50,32 @@ router.post("/radios", async (c) => {
   const imei = String(body.imei || "").trim();
   const name = String(body.name || "").trim();
 
-  if (!Number.isSafeInteger(organizationId) || organizationId <= 0) {
-    return c.json({ error: "Choose the organization this radio belongs to." }, 400);
+  // No organization is a valid answer: radios are bought before anyone has been
+  // given them, and an unallocated radio waits in the pool.
+  if (body.organization_id != null && (!Number.isSafeInteger(organizationId) || organizationId <= 0)) {
+    return c.json({ error: "Choose the organization this radio belongs to, or leave it unallocated." }, 400);
   }
   if (!/^\d{10,20}$/.test(imei)) {
     return c.json({ error: "Enter the IMEI printed on the handset." }, 400);
   }
   if (!name) return c.json({ error: "Give the radio a name." }, 400);
 
+  const allocated = body.organization_id != null;
   try {
-    const organization = await db.getOrganization(organizationId);
-    if (!organization) return c.json({ error: "That organization could not be found." }, 404);
-    const companyId = Number(organization.pocstars_company_id);
-    if (!Number.isSafeInteger(companyId) || companyId <= 0) {
-      return c.json({
-        error: "That organization has no company on the radio network yet, so a radio cannot be added to it.",
-      }, 409);
+    let companyId: number | null = null;
+    if (allocated) {
+      const organization = await db.getOrganization(organizationId);
+      if (!organization) return c.json({ error: "That organization could not be found." }, 404);
+      companyId = Number(organization.pocstars_company_id);
+      if (!Number.isSafeInteger(companyId) || companyId <= 0) {
+        return c.json({
+          error: "That organization has no company on the radio network yet, so a radio cannot be added to it.",
+        }, 409);
+      }
     }
 
+    // A null company sends the radio to the pool, where it is inventoried but
+    // reaches nobody until it is allocated.
     const radio: any = await provisionOnNetwork("provision.radio.create", {
       companyId,
       imei,
@@ -84,7 +92,7 @@ router.post("/radios", async (c) => {
     // owns it from now on rather than treating it as a hand-entered stray.
     const device = await db.upsertPocstarsDevice({
       device_id: String(radio.uid),
-      organization_id: organizationId,
+      organization_id: allocated ? organizationId : null,
       unit_id: body.unit_id ? Number(body.unit_id) : null,
       name,
       operator: body.operator || null,
@@ -93,7 +101,7 @@ router.post("/radios", async (c) => {
     });
 
     await db.createAuditLog({
-      organization_id: organizationId,
+      organization_id: allocated ? organizationId : null,
       actor_user_id: user?.id || null,
       action: "radio.onboard",
       target_type: "device",
@@ -115,21 +123,53 @@ router.post("/devices/:device_id/allocate", async (c) => {
   if (organizationId !== null && (!Number.isSafeInteger(organizationId) || organizationId <= 0)) {
     return c.json({ error: "Choose the organization this radio belongs to." }, 400);
   }
+  const deviceId = c.req.param("device_id");
   try {
-    const device = await db.allocateDeviceToOrganization(c.req.param("device_id"), organizationId);
+    // Allocation has to happen on the radio network first. Recording it here
+    // alone would leave MOMAS asserting an ownership the network disagrees
+    // with: the receiving organization's dispatcher seats lease against their
+    // own company, so a radio still filed under the old one is invisible to
+    // them however confidently this console lists it.
+    let network: any = null;
+    const existing = await db.getDevice(deviceId);
+    if (existing?.pocstars_managed) {
+      const companyId = organizationId
+        ? Number((await db.getOrganization(organizationId))?.pocstars_company_id)
+        : await poolCompanyId();
+      if (!Number.isSafeInteger(companyId) || companyId <= 0) {
+        return c.json({
+          error: "That organization has no company on the radio network yet, so a radio cannot be allocated to it.",
+        }, 409);
+      }
+      network = await provisionOnNetwork("provision.radio.reassign", {
+        companyId,
+        uid: Number(deviceId),
+        channelIds: Array.isArray(body.channel_ids) ? body.channel_ids : [],
+        defaultChannelId: body.default_channel_id ?? null,
+      });
+    }
+
+    const device = await db.allocateDeviceToOrganization(deviceId, organizationId);
     await db.createAuditLog({
       organization_id: organizationId,
       actor_user_id: user?.id || null,
       action: organizationId ? "radio.allocate" : "radio.deallocate",
       target_type: "device",
       target_id: device.device_id,
-      metadata: { organization_id: organizationId },
+      metadata: { organization_id: organizationId, network },
     });
-    return c.json({ device });
+    return c.json({ device, network });
   } catch (error) {
     return c.json(jsonError(error), 409);
   }
 });
+
+// Deallocation returns a radio to the pool rather than leaving it inside the
+// organization that just gave it up.
+async function poolCompanyId() {
+  const result: any = await provisionOnNetwork("provision.pool");
+  return Number(result?.companyId);
+}
 
 router.post("/groups/:group_id/assign", async (c) => {
   const user = (c as any).get("user");
