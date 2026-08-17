@@ -3,7 +3,13 @@ import ffmpeg from "@ffmpeg-installer/ffmpeg";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { Hono } from "hono";
-import { canManageOrganization, primaryOrganization, requireAuth } from "../auth";
+import {
+  canManageOrganization,
+  isPlatformOperator,
+  isPlatformStaff,
+  primaryOrganization,
+  requireAuth,
+} from "../auth";
 import { env } from "../config";
 import * as db from "../db";
 import { bus } from "../events";
@@ -46,7 +52,7 @@ router.use("*", requireAuth);
 
 function orgScope(c: any) {
   const user = c.get("user");
-  if (!user || user.platform_role === "admin") return {};
+  if (!user || isPlatformStaff(user)) return {};
   const org = primaryOrganization(user);
   return org ? {
     organizationId: org.organization_id,
@@ -55,8 +61,13 @@ function orgScope(c: any) {
   } : { organizationId: -1 };
 }
 
+// Every tier sees the whole radio estate; only ops and above may move it.
 function isPlatformAdmin(c: any) {
-  return c.get("user")?.platform_role === "admin";
+  return isPlatformStaff(c.get("user"));
+}
+
+function canEditEstate(c: any) {
+  return isPlatformOperator(c.get("user"));
 }
 
 async function ensureDeviceAccess(c: any, deviceIds: string[]) {
@@ -536,7 +547,7 @@ router.post("/devices", async (c) => {
     // admins may create one or move it between organizations. This branch
     // upserts organization_id, which previously let an organization admin claim
     // an existing device_id and pull another tenant's radio into their own org.
-    if (user?.platform_role === "admin") {
+    if (isPlatformOperator(user)) {
       const device = await db.upsertDevice({
         device_id: device_id.trim(),
         name,
@@ -557,6 +568,13 @@ router.post("/devices", async (c) => {
         metadata: { unit_id: body.unit_id || null },
       });
       return c.json({ device });
+    }
+
+    // Support is platform staff with no organization of its own, so it would
+    // otherwise fall into the tenant branch below and be judged against an
+    // undefined org. Refuse it by name instead of by accident.
+    if (isPlatformStaff(user)) {
+      return c.json({ error: "The support role cannot make changes." }, 403);
     }
 
     // Non-admin: can only update operational fields on devices in their own org.
@@ -581,7 +599,7 @@ router.post("/devices", async (c) => {
 
 router.delete("/devices/:device_id", async (c) => {
   const user = (c as any).get("user");
-  if (user?.platform_role !== "admin") return c.json({ error: "forbidden" }, 403);
+  if (!isPlatformOperator(user)) return c.json({ error: "forbidden" }, 403);
   try {
     const deleted = await db.deleteDevice(c.req.param("device_id"));
     if (!deleted) return c.json({ error: "Device not found" }, 404);

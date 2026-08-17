@@ -5,11 +5,13 @@ import { useMemo, useState } from "react";
 import {
   assignPocstarsGroup,
   createOrganization,
+  getMe,
   getPocstarsRegistry,
   listOrganizations,
   runPocstarsPlatformSync,
 } from "../lib/api";
 import { NIGERIAN_STATES } from "../lib/domain";
+import { isPlatformOperator } from "../lib/platform-roles";
 
 // What makes a company incomplete rather than merely suspended. These are the
 // three states an admin scans this list for, and none of them were visible:
@@ -33,6 +35,8 @@ const emptyOrg = {
 
 export function AdminOrganizationsRoute() {
   const queryClient = useQueryClient();
+  const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
+  const canWrite = isPlatformOperator(meQuery.data?.user);
   const [creating, setCreating] = useState(false);
   const [orgForm, setOrgForm] = useState(emptyOrg);
   const [search, setSearch] = useState("");
@@ -71,13 +75,15 @@ export function AdminOrganizationsRoute() {
           </h1>
           <p className="mt-1 text-[11px] text-neutral-500">All client workspaces. Click a company to manage its access, admins, and devices.</p>
         </div>
-        <button
-          className="inline-flex items-center gap-2 rounded-md bg-ops-red px-4 py-2 text-xs font-bold text-black hover:opacity-85"
-          onClick={() => setCreating((value) => !value)}
-        >
-          {creating ? <X size={14} /> : <Plus size={14} />}
-          {creating ? "Cancel" : "New company"}
-        </button>
+        {canWrite ? (
+          <button
+            className="inline-flex items-center gap-2 rounded-md bg-ops-red px-4 py-2 text-xs font-bold text-black hover:opacity-85"
+            onClick={() => setCreating((value) => !value)}
+          >
+            {creating ? <X size={14} /> : <Plus size={14} />}
+            {creating ? "Cancel" : "New company"}
+          </button>
+        ) : null}
       </header>
 
       {/* The outcome of a create belongs next to the button that caused it. This
@@ -224,6 +230,9 @@ export function AdminOrganizationsRoute() {
 }
 
 function RadioNetworkPanel({ organizations }) {
+  const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
+  // Every tier reads the registry; only operators sync it or move a channel.
+  const canWrite = isPlatformOperator(meQuery.data?.user);
   const queryClient = useQueryClient();
   const [assignTargets, setAssignTargets] = useState({});
 
@@ -275,6 +284,7 @@ function RadioNetworkPanel({ organizations }) {
         </div>
         <button
           className="inline-flex items-center gap-2 rounded-md bg-ops-green px-4 py-2 text-xs font-bold text-black hover:opacity-85 disabled:opacity-50"
+          hidden={!canWrite}
           disabled={syncMutation.isPending || (registry && !registry.configured)}
           onClick={() => syncMutation.mutate()}
         >
@@ -342,6 +352,7 @@ function RadioNetworkPanel({ organizations }) {
                     {group.organization_id ? (
                       <button
                         className="rounded border border-white/10 px-3 py-1 text-[11px] text-neutral-400 hover:border-ops-red hover:text-ops-red disabled:opacity-40"
+                        hidden={!canWrite}
                         disabled={assignMutation.isPending}
                         onClick={() => {
                           if (window.confirm(
@@ -356,6 +367,7 @@ function RadioNetworkPanel({ organizations }) {
                     ) : (
                       <button
                         className="rounded bg-ops-green px-3 py-1 text-[11px] font-bold text-black disabled:opacity-40"
+                        hidden={!canWrite}
                         disabled={!assignTargets[group.group_id] || assignMutation.isPending}
                         onClick={() => assignMutation.mutate({
                           groupId: group.group_id,

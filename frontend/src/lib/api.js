@@ -194,6 +194,30 @@ export function removeOrganizationUser(orgId, userId) {
   });
 }
 
+export function getPlatformStaff() {
+  return request("/api/platform/staff");
+}
+
+export function createPlatformStaff(payload) {
+  return request("/api/platform/staff", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updatePlatformStaffRole(userId, platform_role) {
+  return request(`/api/platform/staff/${userId}`, {
+    method: "PUT",
+    body: JSON.stringify({ platform_role }),
+  });
+}
+
+export function removePlatformStaff(userId) {
+  return request(`/api/platform/staff/${userId}`, {
+    method: "DELETE",
+  });
+}
+
 export function getOrgAdmin() {
   return request("/api/org");
 }

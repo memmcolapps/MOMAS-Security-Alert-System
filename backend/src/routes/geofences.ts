@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import {
   canManageOrganization,
   canManageUnit,
+  isPlatformOperator,
+  isPlatformStaff,
   primaryOrganization,
   requireAuth,
 } from "../auth";
@@ -17,7 +19,7 @@ router.use("*", requireAuth);
 
 function scope(c: any) {
   const user = c.get("user");
-  if (user?.platform_role === "admin") return {};
+  if (isPlatformStaff(user)) return {};
   const membership = primaryOrganization(user);
   return membership
     ? {
@@ -29,7 +31,7 @@ function scope(c: any) {
 
 function canManage(c: any, unitId?: number | null) {
   const user = c.get("user");
-  if (user?.platform_role === "admin") return true;
+  if (isPlatformStaff(user)) return isPlatformOperator(user);
   const membership = primaryOrganization(user);
   return canManageOrganization(membership) || canManageUnit(membership, unitId || membership?.unit_id);
 }
@@ -177,7 +179,7 @@ router.post("/preview", async (c) => {
   try {
     const membership = primaryOrganization(user);
     const organizationId =
-      user?.platform_role === "admin" ? Number(body.organization_id) : Number(membership?.organization_id);
+      isPlatformStaff(user) ? Number(body.organization_id) : Number(membership?.organization_id);
     if (!organizationId) return c.json({ error: "organization_id is required." }, 400);
     const unitId = body.unit_id ? Number(body.unit_id) : membership?.scope_level === "unit" ? membership.unit_id : null;
     const fenceInput = validateFence(body);
@@ -194,7 +196,7 @@ router.post("/", async (c) => {
   try {
     const membership = primaryOrganization(user);
     const organizationId =
-      user?.platform_role === "admin" ? Number(body.organization_id) : Number(membership?.organization_id);
+      isPlatformStaff(user) ? Number(body.organization_id) : Number(membership?.organization_id);
     const unitId = body.unit_id ? Number(body.unit_id) : membership?.scope_level === "unit" ? membership.unit_id : null;
     if (!organizationId) return c.json({ error: "organization_id is required." }, 400);
     if (!canManage(c, unitId)) return c.json({ error: "forbidden" }, 403);

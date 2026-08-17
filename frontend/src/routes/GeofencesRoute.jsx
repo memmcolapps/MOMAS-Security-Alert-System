@@ -30,6 +30,7 @@ import {
   saveGeofence,
   searchPlaces,
 } from "../lib/api";
+import { isPlatformOperator, isPlatformStaff } from "../lib/platform-roles";
 import {
   bufferRing,
   circleAroundAssets,
@@ -263,9 +264,9 @@ export function GeofencesRoute() {
   const fencesQuery = useQuery({ queryKey: ["geofences"], queryFn: listGeofences, refetchInterval: 30_000 });
   const devicesQuery = useQuery({ queryKey: ["devices"], queryFn: listDevices });
   const dronesQuery = useQuery({ queryKey: ["drone-registry"], queryFn: getDroneRegistry });
-  const isAdmin = meQuery.data?.user?.platform_role === "admin";
+  const isAdmin = isPlatformStaff(meQuery.data?.user);
   const membership = meQuery.data?.user?.active_membership || meQuery.data?.user?.memberships?.[0];
-  const canManage = isAdmin || ["org_owner", "org_admin", "unit_admin", "admin"].includes(membership?.role);
+  const canManage = isPlatformOperator(meQuery.data?.user) || ["org_owner", "org_admin", "unit_admin", "admin"].includes(membership?.role);
   const organizationsQuery = useQuery({
     queryKey: ["organizations"],
     queryFn: listOrganizations,

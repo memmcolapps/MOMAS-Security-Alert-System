@@ -9,7 +9,13 @@
  * transport, different identifiers, different lifecycle.
  */
 import { Hono } from "hono";
-import { canManageOrganization, primaryOrganization, requireAuth } from "../auth";
+import {
+  canManageOrganization,
+  isPlatformOperator,
+  isPlatformStaff,
+  primaryOrganization,
+  requireAuth,
+} from "../auth";
 import * as db from "../db";
 import { getDronePositions, getListenerStatus } from "../drones/mavlink-listener";
 
@@ -21,18 +27,23 @@ function jsonError(error: unknown) {
   return { error: error instanceof Error ? error.message : String(error) };
 }
 
-/** Org scope for the current user. Admin → {} (sees everything). */
+/** Org scope for the current user. Platform staff → {} (sees everything). */
 function orgScope(c: any) {
   const user = c.get("user");
-  if (!user || user.platform_role === "admin") return {} as any;
+  if (!user || isPlatformStaff(user)) return {} as any;
   const org = primaryOrganization(user);
   return org
     ? { organizationId: org.organization_id, unitId: org.scope_level === "unit" ? org.unit_id : null }
     : { organizationId: -1 };
 }
 
-function isAdmin(c: any) {
-  return c.get("user")?.platform_role === "admin";
+// Seeing every airframe is a staff-wide read; changing the registry is not.
+function isStaff(c: any) {
+  return isPlatformStaff(c.get("user"));
+}
+
+function canEditRegistry(c: any) {
+  return isPlatformOperator(c.get("user"));
 }
 
 /**
@@ -49,7 +60,7 @@ router.get("/positions", async (c) => {
     const regMap = new Map(registry.map((d: any) => [Number(d.sysid), d]));
     const live = getDronePositions();
 
-    const visible = isAdmin(c) ? live : live.filter((drone) => regMap.has(drone.sysid));
+    const visible = isStaff(c) ? live : live.filter((drone) => regMap.has(drone.sysid));
     const drones = visible.map((d) => {
       const reg: any = regMap.get(d.sysid);
       return {
@@ -92,7 +103,7 @@ router.post("/registry", async (c) => {
   }
 
   const membership = primaryOrganization(user);
-  const admin = user?.platform_role === "admin";
+  const admin = isPlatformOperator(user);
   if (!admin && !canManageOrganization(membership)) {
     return c.json({ error: "forbidden" }, 403);
   }
@@ -159,7 +170,7 @@ router.post("/registry", async (c) => {
 
 /** Delete a registry entry. Admin only. */
 router.delete("/registry/:sysid", async (c) => {
-  if (!isAdmin(c)) return c.json({ error: "forbidden" }, 403);
+  if (!canEditRegistry(c)) return c.json({ error: "forbidden" }, 403);
   const sysid = parseInt(c.req.param("sysid"), 10);
   if (!Number.isInteger(sysid)) return c.json({ error: "invalid sysid" }, 400);
   try {

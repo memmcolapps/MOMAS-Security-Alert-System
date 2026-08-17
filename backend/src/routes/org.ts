@@ -1,5 +1,12 @@
 import { Hono } from "hono";
-import { canManageOrganization, canManageUnit, normalizeOrgRole, primaryOrganization, requireOrgManager } from "../auth";
+import {
+  canManageOrganization,
+  canManageUnit,
+  isPlatformStaff,
+  normalizeOrgRole,
+  primaryOrganization,
+  requireOrgManager,
+} from "../auth";
 import * as db from "../db";
 import { provisionOnNetwork } from "../pocstars/live-gateway";
 
@@ -26,7 +33,7 @@ function clientError(error: unknown) {
 
 function organizationIdFor(c: any) {
   const user = c.get("user");
-  if (user?.platform_role === "admin") return Number(c.req.query("organization_id") || 0);
+  if (isPlatformStaff(user)) return Number(c.req.query("organization_id") || 0);
   return primaryOrganization(user)?.organization_id;
 }
 
@@ -34,8 +41,11 @@ function actor(c: any) {
   return c.get("user")?.id || null;
 }
 
+// Platform staff acting inside an organization console. Support never reaches
+// the write paths that consult this - requireOrgManager refuses its non-GET
+// requests before the handler runs.
 function isPlatformAdmin(c: any) {
-  return c.get("user")?.platform_role === "admin";
+  return isPlatformStaff(c.get("user"));
 }
 
 function membership(c: any) {

@@ -3436,7 +3436,11 @@ async function setOrganizationStates(organizationId, states = []) {
   }
 }
 
-async function createUser({ email, name, password, platform_role = "none", must_change_password = platform_role !== "admin" }) {
+// Every account created through a console starts on a temporary password. This
+// used to exempt platform admins, which was harmless while the only admin came
+// from the VPS bootstrap and never passed through here - an invited admin would
+// otherwise keep the password whoever invited them had typed.
+async function createUser({ email, name, password, platform_role = "none", must_change_password = true }) {
   const password_hash = await (Bun as any).password.hash(password, {
     algorithm: "bcrypt",
     cost: 10,
@@ -3467,9 +3471,106 @@ async function updateUserPassword(userId, password) {
   return rows[0] ?? null;
 }
 
+// ── Platform staff ──────────────────────────────────────────────────────────
+// Staff are users with a platform_role above 'none'. They hold no organization
+// membership: the tenancy line runs between the two, and getMembershipsForUser
+// is what every scope check reads.
+
+const PLATFORM_STAFF_COLUMNS =
+  "id, email, name, platform_role, must_change_password, status, created_at, updated_at";
+
+async function listPlatformStaff() {
+  const { rows } = await pool.query(
+    `SELECT ${PLATFORM_STAFF_COLUMNS}
+       FROM users
+      WHERE platform_role <> 'none'
+      ORDER BY CASE platform_role WHEN 'admin' THEN 0 WHEN 'ops' THEN 1 ELSE 2 END,
+               lower(coalesce(name, email))`,
+  );
+  return rows;
+}
+
+async function countPlatformOwners(excludeUserId = null) {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS count
+       FROM users
+      WHERE platform_role = 'admin' AND status = 'active' AND ($1::int IS NULL OR id <> $1)`,
+    [excludeUserId],
+  );
+  return rows[0]?.count ?? 0;
+}
+
+/**
+ * Invite somebody onto the platform side.
+ *
+ * An address that already belongs to a tenant user is refused rather than
+ * promoted: their memberships would survive the change and leave an account
+ * that is both platform staff and a member of one organization, which every
+ * scope check in the codebase reads as "sees everything" and every org console
+ * reads as "one of ours". A previously removed staffer has no memberships left,
+ * so re-inviting them is allowed and simply restores the role.
+ */
+async function createPlatformStaff({ email, name, password, platform_role }) {
+  const existing = await getUserByEmail(email);
+  if (existing) {
+    const memberships = await getMembershipsForUser(existing.id);
+    if (memberships.length) {
+      throw new Error(
+        "That email already belongs to an organization user. Remove them from their organization first.",
+      );
+    }
+    const { rows } = await pool.query(
+      `UPDATE users SET platform_role = $2, updated_at = NOW() WHERE id = $1
+       RETURNING ${PLATFORM_STAFF_COLUMNS}`,
+      [existing.id, platform_role],
+    );
+    return rows[0];
+  }
+  if (!password) throw new Error("Enter a temporary password for the new platform user.");
+  const user = await createUser({ email, name, password, platform_role, must_change_password: true });
+  return user;
+}
+
+async function updatePlatformStaffRole(userId, platform_role) {
+  const { rows } = await pool.query(
+    `UPDATE users SET platform_role = $2, updated_at = NOW()
+      WHERE id = $1 AND platform_role <> 'none'
+      RETURNING ${PLATFORM_STAFF_COLUMNS}`,
+    [userId, platform_role],
+  );
+  return rows[0] ?? null;
+}
+
+async function deletePlatformStaff(userId) {
+  const { rows } = await pool.query(
+    `DELETE FROM users WHERE id = $1 AND platform_role <> 'none'
+     RETURNING ${PLATFORM_STAFF_COLUMNS}`,
+    [userId],
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Audit entries that belong to no organization - staff changes, and any
+ * platform act performed outside a tenant. listAuditLogs filters *by* org, so
+ * without this these rows are written and never read by anything.
+ */
+async function listPlatformAuditLogs(limit = 100) {
+  const { rows } = await pool.query(
+    `SELECT a.*, u.email AS actor_email, u.name AS actor_name
+       FROM audit_logs a
+       LEFT JOIN users u ON u.id = a.actor_user_id
+      WHERE a.organization_id IS NULL
+      ORDER BY a.created_at DESC
+      LIMIT $1`,
+    [limit],
+  );
+  return rows;
+}
+
 function assertCanJoinOrganization(user) {
-  if (user?.platform_role === "admin") {
-    throw new Error("This email belongs to a platform admin and cannot be added to an organization.");
+  if (user && String(user.platform_role || "none") !== "none") {
+    throw new Error("This email belongs to platform staff and cannot be added to an organization.");
   }
 }
 
@@ -3829,6 +3930,12 @@ export {
   deleteOrganizationUnit,
   createAuditLog,
   listAuditLogs,
+  listPlatformAuditLogs,
+  listPlatformStaff,
+  countPlatformOwners,
+  createPlatformStaff,
+  updatePlatformStaffRole,
+  deletePlatformStaff,
   insertSosAlert,
   getSosAlert,
   reconcileSosAlert,

@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { requirePlatformAdmin } from "../auth";
+import { requirePlatform } from "../auth";
 import * as db from "../db";
 import { liveRadioConfigured, provisionOnNetwork, queryPocstarsInventory } from "../pocstars/live-gateway";
 
@@ -9,7 +9,10 @@ function jsonError(error: unknown) {
   return { error: error instanceof Error ? error.message : String(error) };
 }
 
-router.use("*", requirePlatformAdmin);
+// The registry is a read every tier needs; onboarding and moving radios is
+// operator work, because each of those writes lands on the vendor network.
+router.use("*", requirePlatform("support"));
+const requireOps = requirePlatform("ops");
 
 router.get("/registry", async (c) => {
   try {
@@ -20,7 +23,7 @@ router.get("/registry", async (c) => {
   }
 });
 
-router.post("/sync", async (c) => {
+router.post("/sync", requireOps, async (c) => {
   const user = (c as any).get("user");
   try {
     const inventory = await queryPocstarsInventory();
@@ -43,7 +46,7 @@ router.post("/sync", async (c) => {
 // created there first and recorded here afterwards - the reverse would invent a
 // device_id that no radio answers to, which is how a console ends up listing
 // radios that can never be called.
-router.post("/radios", async (c) => {
+router.post("/radios", requireOps, async (c) => {
   const user = (c as any).get("user");
   const body = await c.req.json().catch(() => ({}));
   const organizationId = Number(body.organization_id);
@@ -116,7 +119,7 @@ router.post("/radios", async (c) => {
 
 // Allocation is a platform-admin act: a handset is physical and belongs to
 // exactly one organization. Orgs arrange their allocated radios themselves.
-router.post("/devices/:device_id/allocate", async (c) => {
+router.post("/devices/:device_id/allocate", requireOps, async (c) => {
   const user = (c as any).get("user");
   const body = await c.req.json().catch(() => ({}));
   const organizationId = body.organization_id === null ? null : Number(body.organization_id);
@@ -171,7 +174,7 @@ async function poolCompanyId() {
   return Number(result?.companyId);
 }
 
-router.post("/groups/:group_id/assign", async (c) => {
+router.post("/groups/:group_id/assign", requireOps, async (c) => {
   const user = (c as any).get("user");
   const body = await c.req.json().catch(() => ({}));
 

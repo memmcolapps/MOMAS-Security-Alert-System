@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { WSContext, WSEvents } from "hono/ws";
-import { canManageOrganization, primaryOrganization } from "../auth";
+import { canManageOrganization, isPlatformStaff, primaryOrganization } from "../auth";
 import { env } from "../config";
 import * as db from "../db";
 import { PocstarsBridgeClient } from "./bridge-client";
@@ -52,7 +52,7 @@ function sessionsFor(organizationId: number | null, isPlatform: boolean) {
 
 async function claimSeatSlot(user: any, organizationId: number | null) {
   reapDeadSessions();
-  const isPlatform = user?.platform_role === "admin";
+  const isPlatform = isPlatformStaff(user);
   const organization = organizationId ? await db.getOrganization(organizationId) : null;
   const limit = isPlatform
     ? Number(organization?.platform_radio_seats ?? 1)
@@ -287,7 +287,7 @@ function send(ws: WSContext, value: Record<string, unknown>) {
 }
 
 function operatorScope(user: any) {
-  if (user?.platform_role === "admin") return {};
+  if (isPlatformStaff(user)) return {};
   const membership = primaryOrganization(user);
   if (!membership) return { organizationId: -1 };
   return {

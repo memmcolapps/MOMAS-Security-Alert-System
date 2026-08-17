@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { requireAuth, scopeForUser } from "../auth";
+import { isPlatformOperator, isPlatformStaff, requireAuth, scopeForUser } from "../auth";
 import { classify } from "../classifier";
 import * as db from "../db";
 import { bus } from "../events";
@@ -67,13 +67,13 @@ function isResponse(value: unknown): value is Response {
 
 function requireAnalyst(c: any) {
   const user = currentUser(c);
-  if (user?.platform_role === "admin" || managerRoles.has(user?.active_membership?.role)) return null;
+  if (isPlatformOperator(user) || managerRoles.has(user?.active_membership?.role)) return null;
   return c.json({ error: "Analyst or organization admin access is required." }, 403);
 }
 
 function requireOrganization(c: any) {
   const user = currentUser(c);
-  if (user?.platform_role === "admin") return null;
+  if (isPlatformStaff(user)) return null;
   if (primaryOrgId(user)) return null;
   return c.json({ error: "Select an organization to access OSINT data." }, 403);
 }
@@ -97,7 +97,7 @@ router.get("/events", (c) => {
     write: (chunk) => writer.write(alertEncoder.encode(chunk)),
     close: () => writer.close(),
     orgId: primaryOrgId(user),
-    isAdmin: user?.platform_role === "admin",
+    isAdmin: isPlatformStaff(user),
   };
   alertClients.add(client);
   void client.write(":ok\n\n");

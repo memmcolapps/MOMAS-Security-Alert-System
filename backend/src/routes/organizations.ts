@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { normalizeOrgRole, requirePlatformAdmin } from "../auth";
+import { isPlatformOwner, normalizeOrgRole, requirePlatform } from "../auth";
 import * as db from "../db";
 import {
   knownCompanyIds,
@@ -27,7 +27,12 @@ function clientError(error: unknown) {
   return { status: 500 as const, body: { error: message } };
 }
 
-router.use("*", requirePlatformAdmin);
+// Reading the tenant list is open to every platform tier; each write below
+// names the tier it needs. Deleting an organization and changing what it pays
+// for are the owner's alone.
+router.use("*", requirePlatform("support"));
+const requireOps = requirePlatform("ops");
+const requireOwner = requirePlatform("admin");
 
 router.get("/", async (c) => {
   try {
@@ -37,7 +42,7 @@ router.get("/", async (c) => {
   }
 });
 
-router.post("/", async (c) => {
+router.post("/", requireOps, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   if (!body.name) return c.json({ error: "Enter an organization name." }, 400);
   try {
@@ -95,7 +100,7 @@ async function provisionCompanyOnNetwork(organization: any) {
 // Retry for a company whose radio provisioning failed at creation. Without this
 // the only record of the failure was a warning line that disappeared on the
 // next create, and the company was stuck with no radio forever.
-router.post("/:id/radio/provision", async (c) => {
+router.post("/:id/radio/provision", requireOps, async (c) => {
   const id = Number(c.req.param("id"));
   const user = (c as any).get("user");
   const organization = await db.getOrganization(id);
@@ -134,9 +139,19 @@ router.get("/:id", async (c) => {
   return c.json({ organization, devices, users, units, audit, channels });
 });
 
-router.put("/:id/access", async (c) => {
+router.put("/:id/access", requireOps, async (c) => {
   const id = Number(c.req.param("id"));
   const body = await c.req.json().catch(() => ({}));
+
+  // Seat counts and the company binding are what this install is billed for and
+  // what its radios lease against, so they sit above the tier that edits a
+  // name, a status or a state list.
+  const billingFields = ["radio_seats", "platform_radio_seats", "pocstars_company_id", "pocstars_company_name"];
+  const touchesBilling = billingFields.some((field) => body[field] !== undefined);
+  if (touchesBilling && !isPlatformOwner((c as any).get("user"))) {
+    return c.json({ error: "Only a platform owner can change seat counts or the radio company." }, 403);
+  }
+
   try {
     const organization = await db.updateOrganizationAccess(id, {
       name: body.name,
@@ -169,7 +184,7 @@ router.get("/:id/deletion-impact", async (c) => {
   }
 });
 
-router.delete("/:id", async (c) => {
+router.delete("/:id", requireOwner, async (c) => {
   const id = Number(c.req.param("id"));
   const user = (c as any).get("user");
   const organization = await db.getOrganization(id);
@@ -215,11 +230,11 @@ router.delete("/:id", async (c) => {
   }
 });
 
-router.post("/:id/pocstars/sync", (c) => c.json({
+router.post("/:id/pocstars/sync", requireOps, (c) => c.json({
   error: "Radio sync is now platform-wide. Use POST /api/pocstars/admin/sync and claim channels from the registry.",
 }, 410));
 
-router.post("/:id/users", async (c) => {
+router.post("/:id/users", requireOps, async (c) => {
   const organization_id = Number(c.req.param("id"));
   const body = await c.req.json().catch(() => ({}));
   if (!body.email || !body.password) {
@@ -249,7 +264,7 @@ router.post("/:id/users", async (c) => {
   }
 });
 
-router.delete("/:id/users/:user_id", async (c) => {
+router.delete("/:id/users/:user_id", requireOps, async (c) => {
   const organizationId = Number(c.req.param("id"));
   const userId = Number(c.req.param("user_id"));
   const removed = await db.removeOrganizationUser(organizationId, userId);
@@ -257,14 +272,14 @@ router.delete("/:id/users/:user_id", async (c) => {
   return c.json({ ok: true });
 });
 
-router.post("/:id/devices/:device_id", async (c) => {
+router.post("/:id/devices/:device_id", requireOps, async (c) => {
   const organizationId = Number(c.req.param("id"));
   const device = await db.assignDeviceToOrganization(c.req.param("device_id"), organizationId);
   if (!device) return c.json({ error: "That device could not be found." }, 404);
   return c.json({ device });
 });
 
-router.delete("/:id/devices/:device_id", async (c) => {
+router.delete("/:id/devices/:device_id", requireOps, async (c) => {
   const device = await db.assignDeviceToOrganization(c.req.param("device_id"), null);
   if (!device) return c.json({ error: "That device could not be found." }, 404);
   return c.json({ device });

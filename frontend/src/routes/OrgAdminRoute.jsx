@@ -17,6 +17,7 @@ import {
   updateOrgChannel,
   updateOrgUnit,
 } from "../lib/api";
+import { isPlatformOperator } from "../lib/platform-roles";
 import { NIGERIAN_STATES, ORG_ROLES, deviceTypeLabel, orgRoleLabel } from "../lib/domain";
 
 const TABS = [
@@ -35,7 +36,7 @@ export function OrgAdminRoute() {
   const data = orgQuery.data || {};
   const organization = data.organization;
   const currentMembership = meQuery.data?.user?.active_membership || meQuery.data?.user?.memberships?.[0];
-  const canCreateUnits = meQuery.data?.user?.platform_role === "admin" || ["org_owner", "org_admin", "admin"].includes(currentMembership?.role);
+  const canCreateUnits = isPlatformOperator(meQuery.data?.user) || ["org_owner", "org_admin", "admin"].includes(currentMembership?.role);
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["org-admin"] });
 
   if (orgQuery.isLoading) return <Shell>Loading...</Shell>;

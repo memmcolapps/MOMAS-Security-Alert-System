@@ -1,8 +1,9 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, ChevronDown, FileSearch, LogOut, Map, MapPinned, Plane, Radio, ShieldAlert, Siren, UsersRound } from "lucide-react";
+import { Building2, ChevronDown, FileSearch, LogOut, Map, MapPinned, Plane, Radio, ShieldAlert, ShieldCheck, Siren, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getActiveOrganizationId, getMe, setActiveOrganizationId, setAuthToken } from "../lib/api";
+import { PLATFORM_ROLE_LABELS, isPlatformOwner, isPlatformStaff } from "../lib/platform-roles";
 import { LocationStatus } from "./LocationStatus";
 
 export function AppHeader() {
@@ -13,7 +14,9 @@ export function AppHeader() {
 
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
   const user = meQuery.data?.user;
-  const isAdmin = user?.platform_role === "admin";
+  const isAdmin = isPlatformStaff(user);
+  const isOwner = isPlatformOwner(user);
+  const roleLabel = PLATFORM_ROLE_LABELS[user?.platform_role] || "Platform";
   const memberships = user?.memberships || [];
   const org = user?.active_membership || memberships.find((membership) => String(membership.organization_id) === String(getActiveOrganizationId())) || memberships[0] || null;
   const canManageOrg = isAdmin || ["org_owner", "org_admin", "unit_admin", "admin"].includes(org?.role);
@@ -65,7 +68,7 @@ export function AppHeader() {
           </span>
         ) : isAdmin ? (
           <span className="hidden items-center gap-2 rounded-full border border-ops-red/40 bg-red-500/10 px-2.5 py-0.5 text-[10px] font-bold text-ops-red sm:inline-flex">
-            Platform admin
+            {roleLabel}
           </span>
         ) : null}
 
@@ -78,6 +81,9 @@ export function AppHeader() {
           <NavItem to="/geofences" icon={MapPinned} label="Geofences" active={isActive("/geofences")} />
           {isAdmin ? (
             <NavItem to="/admin/organizations" icon={Building2} label="Companies" active={isActive("/admin/organizations")} />
+          ) : null}
+          {isOwner ? (
+            <NavItem to="/admin/team" icon={ShieldCheck} label="Team" active={isActive("/admin/team")} />
           ) : null}
           {!isAdmin && canManageOrg ? (
             <NavItem to="/org/admin" icon={UsersRound} label="Admin" active={isActive("/org/admin")} />
@@ -112,7 +118,7 @@ export function AppHeader() {
                     <span className="text-neutral-300">{org.name}</span> · {org.role} · {accessSummary}
                   </div>
                 ) : isAdmin ? (
-                  <div className="mt-1 text-[10px] text-ops-red">Platform admin · all states</div>
+                  <div className="mt-1 text-[10px] text-ops-red">{roleLabel} · all companies</div>
                 ) : null}
               </div>
               {!isAdmin && memberships.length > 1 ? (

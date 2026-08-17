@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { primaryOrganization, requireAuth } from "../auth";
+import { isPlatformStaff, primaryOrganization, requireAuth } from "../auth";
 import { env } from "../config";
 import * as db from "../db";
 import { bus } from "../events";
@@ -66,7 +66,7 @@ router.use("*", requireAuth);
 
 function requestScope(c: any) {
   const user = c.get("user");
-  if (user?.platform_role === "admin") return {};
+  if (isPlatformStaff(user)) return {};
   const membership = primaryOrganization(user);
   return membership
     ? {
@@ -86,7 +86,7 @@ router.get("/events", (c) => {
     close: () => writer.close(),
     organizationId: membership?.organization_id || null,
     unitId: membership?.scope_level === "unit" ? membership.unit_id : null,
-    admin: user?.platform_role === "admin",
+    admin: isPlatformStaff(user),
   };
   clients.add(client);
   void client.write(":ok\n\n");

@@ -17,9 +17,11 @@ import { LiveRadioBar } from "./components/LiveRadioBar";
 import { FollowProvider } from "./lib/follow-session";
 import { LiveRadioProvider } from "./lib/live-radio-session";
 import { getAuthToken, getMe } from "./lib/api";
+import { PLATFORM_RANK, platformRank } from "./lib/platform-roles";
 import { AlarmsRoute } from "./routes/AlarmsRoute";
 import { AdminOrganizationDetailRoute } from "./routes/AdminOrganizationDetailRoute";
 import { AdminOrganizationsRoute } from "./routes/AdminOrganizationsRoute";
+import { PlatformStaffRoute } from "./routes/PlatformStaffRoute";
 import { ChangePasswordRoute } from "./routes/ChangePasswordRoute";
 import { DevicesRoute } from "./routes/DevicesRoute";
 import { DronesRoute } from "./routes/DronesRoute";
@@ -124,16 +126,19 @@ async function requireReadySession() {
   return session;
 }
 
-async function requireAdmin() {
+async function requirePlatform(minimum) {
   const session = await requireReadySession();
-  if (session.user?.platform_role !== "admin") throw redirect({ to: "/" });
+  if (platformRank(session.user) < PLATFORM_RANK[minimum]) throw redirect({ to: "/" });
   return session;
 }
+
+const requireAdmin = () => requirePlatform("support");
+const requireOwner = () => requirePlatform("admin");
 
 async function requireOrgAdmin() {
   const session = await requireReadySession();
   const role = session.user?.active_membership?.role || session.user?.memberships?.[0]?.role;
-  if (session.user?.platform_role !== "admin" && !["org_owner", "org_admin", "unit_admin", "admin"].includes(role)) {
+  if (!platformRank(session.user) && !["org_owner", "org_admin", "unit_admin", "admin"].includes(role)) {
     throw redirect({ to: "/" });
   }
   return session;
@@ -211,6 +216,13 @@ const adminOrganizationDetailRoute = createRoute({
   component: AdminOrganizationDetailRoute,
 });
 
+const platformStaffRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/team",
+  beforeLoad: requireOwner,
+  component: PlatformStaffRoute,
+});
+
 const orgAdminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/org/admin",
@@ -229,6 +241,7 @@ const routeTree = rootRoute.addChildren([
   changePasswordRoute,
   adminOrganizationsRoute,
   adminOrganizationDetailRoute,
+  platformStaffRoute,
   orgAdminRoute,
 ]);
 

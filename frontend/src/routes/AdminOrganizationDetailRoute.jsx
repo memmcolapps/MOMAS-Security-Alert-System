@@ -7,6 +7,7 @@ import {
   attachDeviceToOrganization,
   deleteOrganization,
   detachDeviceFromOrganization,
+  getMe,
   getOrganization,
   getOrganizationDeletionImpact,
   listDevices,
@@ -15,6 +16,16 @@ import {
   updateOrganizationAccess,
 } from "../lib/api";
 import { NIGERIAN_STATES, ORG_ROLES, deviceTypeLabel, orgRoleLabel } from "../lib/domain";
+import { isPlatformOperator, isPlatformOwner } from "../lib/platform-roles";
+
+// Support can open this page - reading every tenant is the point of the tier -
+// so each section asks what the viewer may change rather than assuming the
+// answer is "everything". The query is shared with the header by its key.
+function usePlatformTier() {
+  const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
+  const user = meQuery.data?.user;
+  return { canWrite: isPlatformOperator(user), canOwn: isPlatformOwner(user) };
+}
 
 // Access and Settings were two tabs holding four fields between them, while
 // everything that actually differs per company - radios, channels, seats - was
@@ -126,6 +137,7 @@ function Wrapper({ children }) {
 // Identity, status and intelligence access in one place - they were split
 // across two tabs called "Access" and "Settings" for four fields.
 function OverviewSection({ organization, units, onSaved, onDirtyChange }) {
+  const { canWrite } = usePlatformTier();
   const initial = useMemo(() => ({
     name: organization.name,
     status: organization.status,
@@ -185,7 +197,14 @@ function OverviewSection({ organization, units, onSaved, onDirtyChange }) {
         </p>
         <StatePicker value={draft} onChange={edit} />
 
-        <SaveRow mutation={mutation} dirty={dirty} onSave={() => mutation.mutate(draft)} label="Save company" />
+        <SaveRow
+          mutation={mutation}
+          dirty={dirty}
+          onSave={() => mutation.mutate(draft)}
+          label="Save company"
+          allowed={canWrite}
+          deniedNote="Your role can view this company but not change it."
+        />
       </div>
 
       {/* Units are arranged by the company's own admins. Showing them read-only
@@ -220,7 +239,10 @@ function OverviewSection({ organization, units, onSaved, onDirtyChange }) {
 // Every save on this page reports the same way. Access used to confirm,
 // Settings said nothing at all, so you could not tell a saved edit from a
 // dropped one.
-function SaveRow({ mutation, dirty, onSave, label }) {
+function SaveRow({ mutation, dirty, onSave, label, allowed = true, deniedNote }) {
+  if (!allowed) {
+    return <p className="mt-4 text-[11px] text-neutral-500">{deniedNote}</p>;
+  }
   return (
     <div className="mt-4 flex flex-wrap items-center gap-3">
       <button
@@ -240,6 +262,7 @@ function SaveRow({ mutation, dirty, onSave, label }) {
 // The whole radio story for one company: whether it exists on the network, how
 // many concurrent sessions it may hold, and which channels it owns.
 function RadioSection({ organization, channels, onSaved, onDirtyChange }) {
+  const { canWrite, canOwn } = usePlatformTier();
   const initial = useMemo(() => ({
     radio_seats: Number(organization.radio_seats ?? 2),
     platform_radio_seats: Number(organization.platform_radio_seats ?? 1),
@@ -297,6 +320,7 @@ function RadioSection({ organization, channels, onSaved, onDirtyChange }) {
               radios. This usually means the setup failed when the company was created.
             </p>
             <button
+              hidden={!canWrite}
               className="mt-3 inline-flex items-center gap-2 rounded bg-ops-green px-4 py-2 text-xs font-bold text-black disabled:opacity-50"
               disabled={provisionMutation.isPending}
               onClick={() => provisionMutation.mutate()}
@@ -332,7 +356,16 @@ function RadioSection({ organization, channels, onSaved, onDirtyChange }) {
             />
           </Field>
         </div>
-        <SaveRow mutation={seatsMutation} dirty={dirty} onSave={() => seatsMutation.mutate(draft)} label="Save seats" />
+        {/* Seats are what this install is billed for, so they are the owner's
+            alone - the backend refuses them from any other tier. */}
+        <SaveRow
+          mutation={seatsMutation}
+          dirty={dirty}
+          onSave={() => seatsMutation.mutate(draft)}
+          label="Save seats"
+          allowed={canOwn}
+          deniedNote="Only a platform owner can change seat counts."
+        />
       </div>
 
       <div className="glass-panel overflow-hidden rounded-lg">
@@ -400,6 +433,7 @@ function AuditSection({ audit }) {
 const emptyUserForm = { email: "", name: "", password: "", role: "org_admin" };
 
 function UsersSection({ orgId, users, onChanged }) {
+  const { canWrite } = usePlatformTier();
   const [form, setForm] = useState(emptyUserForm);
 
   const addMutation = useMutation({
@@ -416,6 +450,7 @@ function UsersSection({ orgId, users, onChanged }) {
 
   return (
     <section className="space-y-5">
+      {canWrite ? (
       <form
         className="glass-panel rounded-lg p-5"
         onSubmit={(event) => {
@@ -450,6 +485,7 @@ function UsersSection({ orgId, users, onChanged }) {
           {addMutation.isSuccess ? <span className="text-xs text-ops-green">Added</span> : null}
         </div>
       </form>
+      ) : null}
 
       <div className="glass-panel overflow-hidden rounded-lg">
         <div className="border-b border-white/10 px-4 py-3 text-[11px] text-neutral-500">
@@ -462,14 +498,16 @@ function UsersSection({ orgId, users, onChanged }) {
                 <h3 className="text-sm text-neutral-100">{user.name || user.email}</h3>
                 <p className="text-[11px] text-neutral-500">{user.email} · {orgRoleLabel(user.role)}</p>
               </div>
-              <button
-                className="inline-flex items-center gap-1 rounded border border-red-500/20 px-2 py-1 text-[10px] text-red-400/70 hover:border-ops-red hover:text-ops-red"
-                onClick={() => {
-                  if (window.confirm(`Remove ${user.email} from this company?`)) removeMutation.mutate(user.id);
-                }}
-              >
-                <Trash2 size={11} /> Remove
-              </button>
+              {canWrite ? (
+                <button
+                  className="inline-flex items-center gap-1 rounded border border-red-500/20 px-2 py-1 text-[10px] text-red-400/70 hover:border-ops-red hover:text-ops-red"
+                  onClick={() => {
+                    if (window.confirm(`Remove ${user.email} from this company?`)) removeMutation.mutate(user.id);
+                  }}
+                >
+                  <Trash2 size={11} /> Remove
+                </button>
+              ) : null}
             </article>
           ))}
           {!users.length ? (
@@ -482,6 +520,7 @@ function UsersSection({ orgId, users, onChanged }) {
 }
 
 function DevicesSection({ orgId, devices, onChanged }) {
+  const { canWrite } = usePlatformTier();
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const allDevicesQuery = useQuery({
@@ -513,21 +552,23 @@ function DevicesSection({ orgId, devices, onChanged }) {
         <p className="text-[11px] text-neutral-500">
           {devices.length} device{devices.length === 1 ? "" : "s"} assigned to this company.
         </p>
-        <div className="flex gap-2">
-          <button
-            className="inline-flex items-center gap-2 rounded bg-white/10 px-3 py-2 text-xs text-neutral-200 hover:bg-white/20"
-            onClick={() => setPickerOpen((value) => !value)}
-          >
-            {pickerOpen ? <X size={13} /> : <Plus size={13} />}
-            {pickerOpen ? "Close" : "Attach existing"}
-          </button>
-          <Link
-            to="/devices"
-            className="inline-flex items-center gap-2 rounded bg-ops-green px-3 py-2 text-xs font-bold text-black hover:opacity-85"
-          >
-            <Plus size={13} /> Register new
-          </Link>
-        </div>
+        {canWrite ? (
+          <div className="flex gap-2">
+            <button
+              className="inline-flex items-center gap-2 rounded bg-white/10 px-3 py-2 text-xs text-neutral-200 hover:bg-white/20"
+              onClick={() => setPickerOpen((value) => !value)}
+            >
+              {pickerOpen ? <X size={13} /> : <Plus size={13} />}
+              {pickerOpen ? "Close" : "Attach existing"}
+            </button>
+            <Link
+              to="/devices"
+              className="inline-flex items-center gap-2 rounded bg-ops-green px-3 py-2 text-xs font-bold text-black hover:opacity-85"
+            >
+              <Plus size={13} /> Register new
+            </Link>
+          </div>
+        ) : null}
       </div>
 
       {pickerOpen ? (
@@ -586,14 +627,16 @@ function DevicesSection({ orgId, devices, onChanged }) {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        className="inline-flex items-center gap-1 rounded border border-white/10 px-2 py-1 text-[10px] text-neutral-400 hover:border-ops-red hover:text-ops-red"
-                        onClick={() => {
-                          if (window.confirm(`Detach ${device.device_id} from this company?`)) detachMutation.mutate(device.device_id);
-                        }}
-                      >
-                        Detach
-                      </button>
+                      {canWrite ? (
+                        <button
+                          className="inline-flex items-center gap-1 rounded border border-white/10 px-2 py-1 text-[10px] text-neutral-400 hover:border-ops-red hover:text-ops-red"
+                          onClick={() => {
+                            if (window.confirm(`Detach ${device.device_id} from this company?`)) detachMutation.mutate(device.device_id);
+                          }}
+                        >
+                          Detach
+                        </button>
+                      ) : null}
                     </td>
                   </tr>
                 ))
@@ -617,6 +660,7 @@ function DevicesSection({ orgId, devices, onChanged }) {
 // panel, read what actually goes, then type the name. Suspending is offered
 // alongside because it is what most people reaching for delete actually want.
 function DangerZone({ organization }) {
+  const { canOwn } = usePlatformTier();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -641,6 +685,10 @@ function DangerZone({ organization }) {
   const counts = impactQuery.data?.counts;
   const radio = impactQuery.data?.radio;
   const matches = confirmation.trim() === organization.name.trim();
+
+  // Nothing here is recoverable, so the panel is not shown at all below the
+  // owner tier - a disabled delete button still invites the attempt.
+  if (!canOwn) return null;
 
   return (
     <div className="mt-6 rounded-lg border border-red-500/30 bg-red-500/[0.04] p-4">

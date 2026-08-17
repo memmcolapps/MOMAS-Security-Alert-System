@@ -11,6 +11,7 @@ import {
   listOrganizations,
   saveDrone,
 } from "../lib/api";
+import { isPlatformOperator, isPlatformStaff } from "../lib/platform-roles";
 
 const emptyForm = {
   sysid: "",
@@ -53,9 +54,9 @@ export function DronesRoute() {
   });
 
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
-  const isPlatformAdmin = meQuery.data?.user?.platform_role === "admin";
+  const isPlatformAdmin = isPlatformStaff(meQuery.data?.user);
   const orgRole = meQuery.data?.user?.active_membership?.role || meQuery.data?.user?.memberships?.[0]?.role;
-  const canManageDrones = isPlatformAdmin || ["org_owner", "org_admin", "admin"].includes(orgRole);
+  const canManageDrones = isPlatformOperator(meQuery.data?.user) || ["org_owner", "org_admin", "admin"].includes(orgRole);
 
   const orgsQuery = useQuery({
     queryKey: ["organizations"],

@@ -33,6 +33,7 @@ import {
   resolveAlarm,
   startAlarmResponse,
 } from "../lib/api";
+import { isPlatformStaff } from "../lib/platform-roles";
 
 const FILTERS = [
   ["open", "Open"],
@@ -245,7 +246,7 @@ export function AlarmsRoute() {
   // Operators get the consequence; administrators also get the raw upstream
   // code, because someone has to be able to diagnose the integration.
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
-  const isPlatformAdmin = meQuery.data?.user?.platform_role === "admin";
+  const isPlatformAdmin = isPlatformStaff(meQuery.data?.user);
 
   const alerts = useMemo(() => alarmsQuery.data?.alerts || [], [alarmsQuery.data?.alerts]);
   const hasOpenAlarms = useMemo(() => alerts.some((alert) => Number(alert.status) < 2), [alerts]);
