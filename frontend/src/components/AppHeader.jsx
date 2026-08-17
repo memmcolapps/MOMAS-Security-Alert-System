@@ -79,12 +79,9 @@ export function AppHeader() {
           <NavItem to="/devices" icon={Radio} label="Devices" active={isActive("/devices")} />
           <NavItem to="/drones" icon={Plane} label="Drones" active={isActive("/drones")} />
           <NavItem to="/geofences" icon={MapPinned} label="Geofences" active={isActive("/geofences")} />
-          {isAdmin ? (
-            <NavItem to="/admin/organizations" icon={Building2} label="Companies" active={isActive("/admin/organizations")} />
-          ) : null}
-          {isOwner ? (
-            <NavItem to="/admin/team" icon={ShieldCheck} label="Team" active={isActive("/admin/team")} />
-          ) : null}
+          {/* Platform administration lives in the account menu, not here. This
+              bar is operational views, and an eighth item pushed the account
+              button off-screen on a laptop - the nav does not shrink or wrap. */}
           {!isAdmin && canManageOrg ? (
             <NavItem to="/org/admin" icon={UsersRound} label="Admin" active={isActive("/org/admin")} />
           ) : null}
@@ -121,6 +118,29 @@ export function AppHeader() {
                   <div className="mt-1 text-[10px] text-ops-red">{roleLabel} · all companies</div>
                 ) : null}
               </div>
+              {isAdmin ? (
+                <div className="border-b border-white/10 py-1">
+                  <p className="px-2 pb-1 pt-0.5 text-[9px] font-bold uppercase tracking-wide text-neutral-600">
+                    Platform
+                  </p>
+                  <MenuLink
+                    to="/admin/organizations"
+                    icon={Building2}
+                    label="Companies"
+                    active={isActive("/admin/organizations")}
+                    onNavigate={() => setMenuOpen(false)}
+                  />
+                  {isOwner ? (
+                    <MenuLink
+                      to="/admin/team"
+                      icon={ShieldCheck}
+                      label="Platform team"
+                      active={isActive("/admin/team")}
+                      onNavigate={() => setMenuOpen(false)}
+                    />
+                  ) : null}
+                </div>
+              ) : null}
               {!isAdmin && memberships.length > 1 ? (
                 <div className="border-b border-white/10 py-1">
                   {memberships.map((membership) => (
@@ -150,6 +170,20 @@ export function AppHeader() {
         </div>
       </div>
     </header>
+  );
+}
+
+function MenuLink({ to, icon: Icon, label, active, onNavigate }) {
+  return (
+    <Link
+      to={to}
+      onClick={onNavigate}
+      className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-[11px] ${
+        active ? "bg-white/10 text-ops-red" : "text-neutral-300 hover:bg-white/10"
+      }`}
+    >
+      <Icon size={13} /> {label}
+    </Link>
   );
 }
 

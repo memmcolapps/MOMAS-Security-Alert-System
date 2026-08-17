@@ -269,12 +269,12 @@ export function PlatformStaffRoute() {
           {audit.length ? (
             audit.map((entry) => (
               <div key={entry.id} className="flex flex-wrap items-baseline gap-x-2 gap-y-1 px-4 py-2 text-[11px]">
-                <span className="font-bold text-neutral-300">{entry.action}</span>
-                <span className="text-neutral-500">
-                  {entry.metadata?.email || entry.target_id ? `· ${entry.metadata?.email || entry.target_id}` : ""}
-                </span>
+                <span className="font-bold text-neutral-300">{auditLabel(entry)}</span>
+                {auditSubject(entry) ? (
+                  <span className="text-neutral-500">· {auditSubject(entry)}</span>
+                ) : null}
                 <span className="ml-auto text-neutral-600">
-                  {entry.actor_email || "removed user"} · {new Date(entry.created_at).toLocaleString()}
+                  {entry.actor_email || "removed account"} · {new Date(entry.created_at).toLocaleString()}
                 </span>
               </div>
             ))
@@ -285,6 +285,29 @@ export function PlatformStaffRoute() {
       </section>
     </main>
   );
+}
+
+// Audit rows are stored as machine actions ("platform.staff.role"). Read back
+// as a sentence, because this panel is the record somebody consults when asking
+// who changed what.
+const AUDIT_LABELS = {
+  "platform.staff.create": "Added a platform user",
+  "platform.staff.role": "Changed a platform role",
+  "platform.staff.remove": "Removed a platform user",
+};
+
+function auditLabel(entry) {
+  return AUDIT_LABELS[entry.action] || entry.action;
+}
+
+/** Who or what the entry was about - never a bare id, which reads as noise. */
+function auditSubject(entry) {
+  const email = entry.metadata?.email;
+  if (!email) return null;
+  const { from, to, platform_role: role } = entry.metadata || {};
+  if (from && to) return `${email} · ${from} → ${to}`;
+  if (role) return `${email} · ${role}`;
+  return email;
 }
 
 function Field({ label, children }) {

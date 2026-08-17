@@ -3554,6 +3554,13 @@ async function deletePlatformStaff(userId) {
  * Audit entries that belong to no organization - staff changes, and any
  * platform act performed outside a tenant. listAuditLogs filters *by* org, so
  * without this these rows are written and never read by anything.
+ *
+ * Machine work shares this bucket and vastly outnumbers the human record: the
+ * automatic inventory sync writes here every few minutes with a null actor, so
+ * an unfiltered read buried every staff change under sync chatter. Rows are
+ * kept when a person did them, or when they are administrative regardless of
+ * actor - `platform.%` rows must survive the removal of the account that
+ * performed them, which sets actor_user_id to null.
  */
 async function listPlatformAuditLogs(limit = 100) {
   const { rows } = await pool.query(
@@ -3561,6 +3568,7 @@ async function listPlatformAuditLogs(limit = 100) {
        FROM audit_logs a
        LEFT JOIN users u ON u.id = a.actor_user_id
       WHERE a.organization_id IS NULL
+        AND (a.actor_user_id IS NOT NULL OR a.action LIKE 'platform.%')
       ORDER BY a.created_at DESC
       LIMIT $1`,
     [limit],
