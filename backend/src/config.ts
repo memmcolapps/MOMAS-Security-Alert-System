@@ -57,10 +57,31 @@ const envSchema = z.object({
   GEOFENCE_RADIO_POLL_SEC: intFromEnv(15),
   GEOFENCE_DEFAULT_BUFFER_M: intFromEnv(30),
   GEOFENCE_CONFIRMATIONS: intFromEnv(3),
-  AUTH_JWT_SECRET: z.string().min(16).default("momas-dev-secret-change-me"),
+  // No default, deliberately. This used to fall back to a fixed string that is
+  // in the repository's history, while `environment` below defaults to
+  // "production" - so a missing or mistyped value on the server would boot
+  // normally and sign every session with a publicly known secret, letting
+  // anyone mint a platform-owner token. Refusing to start is the safe failure.
+  // The minimum stays at 16, the value it has always validated against.
+  // Raising it here would refuse to start on any server whose existing secret
+  // is shorter - a config change disguised as a security fix. Rotate to a
+  // longer secret deliberately; it invalidates every live session.
+  AUTH_JWT_SECRET: z
+    .string({ error: "AUTH_JWT_SECRET is not set. Generate one with: openssl rand -hex 48" })
+    .min(16, "AUTH_JWT_SECRET must be at least 16 characters. Generate one with: openssl rand -hex 48"),
   EPAIL_ADMIN_EMAIL: z.string().email().optional(),
   EPAIL_ADMIN_PASSWORD: z.string().min(8).optional(),
   environment: z.enum(["local", "production"]).default("production"),
 });
 
-export const env = envSchema.parse(process.env);
+function loadEnv() {
+  const parsed = envSchema.safeParse(process.env);
+  if (parsed.success) return parsed.data;
+  // A raw ZodError dump in journald is how a five-second fix becomes an
+  // afternoon. Name the variables and stop.
+  const lines = parsed.error.issues.map((issue) => `  - ${issue.path.join(".")}: ${issue.message}`);
+  console.error(`[Config] Refusing to start - invalid environment:\n${lines.join("\n")}`);
+  process.exit(1);
+}
+
+export const env = loadEnv();

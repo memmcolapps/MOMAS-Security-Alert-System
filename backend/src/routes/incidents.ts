@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { requireAuth, scopeForUser } from "../auth";
+import { requireAuth, requirePlatform, scopeForUser } from "../auth";
 import * as db from "../db";
 import { bus } from "../events";
 import { reverseGeocode } from "../geocoder";
@@ -125,7 +125,14 @@ function clearCache() {
   cache.clear();
 }
 
+// A manual scrape fans out to seven collectors, several of them metered. The
+// route used to fire it with `void` and no guard, so repeated clicks stacked
+// overlapping runs against the same quotas - the background tiers have had an
+// equivalent guard since they were written (see `running` in server.ts).
+let manualScrapeRunning = false;
+
 async function runManualScrape(daysBack: number) {
+  manualScrapeRunning = true;
   try {
     await Promise.all([
       scrapeAll(),
@@ -139,6 +146,8 @@ async function runManualScrape(daysBack: number) {
     clearCache();
   } catch (error) {
     console.error("[Scrape] Manual scrape error:", error instanceof Error ? error.message : error);
+  } finally {
+    manualScrapeRunning = false;
   }
 }
 
@@ -203,9 +212,17 @@ router.get("/reverse-geocode", (c) => {
   return c.json(result);
 });
 
+// The three reads below resolve the incident through the caller's scope. A 404
+// rather than a 403 on an out-of-scope id, so the response cannot be used to
+// confirm that an incident exists in a state the caller may not see.
+async function incidentInScope(c: any) {
+  const scope = await scopeForUser(c.get("user"));
+  return db.getIncidentInScope(c.req.param("id"), scope);
+}
+
 router.get("/:id/evidence", async (c) => {
   try {
-    const incident = await db.getById(c.req.param("id"));
+    const incident = await incidentInScope(c);
     if (!incident) return c.json({ error: "Not found" }, 404);
     const evidence = await db.getIncidentEvidence(incident.id);
     const refreshed = await db.refreshIncidentConfidence(incident.id);
@@ -221,7 +238,7 @@ router.get("/:id/evidence", async (c) => {
 
 router.get("/:id/report", async (c) => {
   try {
-    const incident = await db.getById(c.req.param("id"));
+    const incident = await incidentInScope(c);
     if (!incident) return c.json({ error: "Not found" }, 404);
     return c.json({ markdown: await incidentReportMarkdown(incident) });
   } catch (error) {
@@ -231,7 +248,7 @@ router.get("/:id/report", async (c) => {
 
 router.get("/:id", async (c) => {
   try {
-    const row = await db.getById(c.req.param("id"));
+    const row = await incidentInScope(c);
     if (!row) return c.json({ error: "Not found" }, 404);
     return c.json(row);
   } catch (error) {
@@ -239,17 +256,44 @@ router.get("/:id", async (c) => {
   }
 });
 
-router.post("/scrape", async (c) => {
+// Collection is platform-wide, not per tenant: one manual run refreshes the
+// corpus every organization reads, and spends shared API quota doing it. It is
+// operator work, and it was previously open to any signed-in account.
+router.post("/scrape", requirePlatform("ops"), async (c) => {
+  if (manualScrapeRunning) {
+    return c.json({ error: "A manual scrape is already running. Wait for it to finish." }, 409);
+  }
   const body = await c.req.json().catch(() => ({}));
-  const daysBack = parseInt(String(body?.days_back || "7"), 10) || 7;
+  const requested = parseInt(String(body?.days_back ?? "7"), 10);
+  const daysBack = Math.min(30, Math.max(1, Number.isFinite(requested) ? requested : 7));
   void runManualScrape(daysBack);
-  return c.json({ message: "Scrape started", timestamp: new Date().toISOString() });
+  return c.json({ message: "Scrape started", days_back: daysBack, timestamp: new Date().toISOString() });
 });
 
-router.delete("/", async (c) => {
+// Destroys the entire incident corpus and its scrape history for every tenant,
+// with no way back. It was reachable by any signed-in account, including a
+// viewer in a customer organization. Owner-only, and the name has to be typed -
+// the same shape as deleting a company.
+router.delete("/", requirePlatform("admin"), async (c) => {
+  const user = (c as any).get("user");
+  const confirm = String(c.req.query("confirm") ?? "").trim();
+  if (confirm !== "DELETE ALL INCIDENTS") {
+    return c.json({
+      error: 'Type DELETE ALL INCIDENTS in the confirm parameter to erase every incident and scrape log.',
+    }, 400);
+  }
   try {
+    const counts = await db.countAllIncidents();
     await db.clearAll();
-    return c.json({ message: "All incidents and scrape logs cleared" });
+    await db.createAuditLog({
+      organization_id: null,
+      actor_user_id: user?.id,
+      action: "platform.incidents.purge",
+      target_type: "incidents",
+      target_id: null,
+      metadata: { email: user?.email, ...counts },
+    });
+    return c.json({ message: "All incidents and scrape logs cleared", ...counts });
   } catch (error) {
     return c.json(jsonError(error), 500);
   }

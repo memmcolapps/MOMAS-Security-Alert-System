@@ -35,6 +35,7 @@ import {
   triggerScrape,
 } from "../lib/api";
 import { config } from "../lib/app-config";
+import { isPlatformOperator } from "../lib/platform-roles";
 import {
   NIGERIAN_STATES,
   rangeForMode,
@@ -126,6 +127,9 @@ export function OperationsRoute() {
   const queryClient = useQueryClient();
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
   const orgName = meQuery.data?.user?.memberships?.[0]?.name;
+  // Collection is platform-wide and spends shared API quota, so the trigger is
+  // operator work. Showing it to tenants only bought them a 403.
+  const canTriggerScrape = isPlatformOperator(meQuery.data?.user);
   const opsLabel = orgName ? `EPAIL Intelligence · ${orgName}` : "EPAIL Intelligence";
   const today = todayISO();
   const [[from, to], setRange] = useState(() => rangeForMode("today", today));
@@ -726,16 +730,21 @@ export function OperationsRoute() {
           )}
         </div>
 
-        <div className="border-t border-white/10 p-3.5">
-          <button
-            className="flex w-full items-center justify-center gap-2 rounded border border-ops-line bg-red-500/10 p-2 text-[10px] font-bold text-ops-red hover:bg-red-500/20 disabled:opacity-40"
-            disabled={scrapeMutation.isPending}
-            onClick={() => scrapeMutation.mutate()}
-          >
-            <RefreshCw size={13} className={scrapeMutation.isPending ? "animate-spin" : ""} />
-            Trigger Manual Scrape
-          </button>
-        </div>
+        {canTriggerScrape ? (
+          <div className="border-t border-white/10 p-3.5">
+            <button
+              className="flex w-full items-center justify-center gap-2 rounded border border-ops-line bg-red-500/10 p-2 text-[10px] font-bold text-ops-red hover:bg-red-500/20 disabled:opacity-40"
+              disabled={scrapeMutation.isPending}
+              onClick={() => scrapeMutation.mutate()}
+            >
+              <RefreshCw size={13} className={scrapeMutation.isPending ? "animate-spin" : ""} />
+              Trigger Manual Scrape
+            </button>
+            {scrapeMutation.error ? (
+              <p className="mt-2 text-[10px] text-ops-red">{scrapeMutation.error.message}</p>
+            ) : null}
+          </div>
+        ) : null}
       </aside>
 
       {selectedIncident ? (

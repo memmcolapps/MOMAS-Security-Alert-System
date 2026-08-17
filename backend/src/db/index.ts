@@ -1147,6 +1147,32 @@ async function getById(id) {
   return rows[0] ?? null;
 }
 
+/**
+ * An incident, but only when it falls inside the caller's state scope.
+ *
+ * getById stays unscoped for internal callers - evidence confidence refresh,
+ * OSINT promotion - which act on an incident they already resolved. Route
+ * handlers must use this instead: incident ids are SERIAL, so a detail read
+ * that skips the same predicate the list applies lets any tenant walk the
+ * entire corpus by counting upwards.
+ */
+async function getIncidentInScope(id, scope: any = {}) {
+  const { allStates = true, allowedStates } = scope || {};
+  const values: any[] = [id];
+  let condition = "";
+  if (!allStates) {
+    const states = Array.isArray(allowedStates) ? allowedStates.filter(Boolean) : [];
+    if (!states.length) return null;
+    values.push(states);
+    condition = " AND state = ANY($2)";
+  }
+  const { rows } = await pool.query(
+    `SELECT * FROM incidents WHERE id = $1${condition}`,
+    values,
+  );
+  return rows[0] ?? null;
+}
+
 async function getIncidentEvidence(incidentId) {
   const { rows } = await queryWithRetry(
     `SELECT si.*, u.email AS reviewed_by_email
@@ -3825,6 +3851,16 @@ async function listAuditLogs(organizationId, limit = 100) {
   return rows;
 }
 
+/** What a purge would destroy. Recorded in the audit entry, since afterwards
+ *  there is nothing left to count. */
+async function countAllIncidents() {
+  const { rows } = await pool.query(
+    `SELECT (SELECT COUNT(*)::int FROM incidents)   AS incidents,
+            (SELECT COUNT(*)::int FROM scrape_logs) AS scrape_logs`,
+  );
+  return rows[0] ?? { incidents: 0, scrape_logs: 0 };
+}
+
 /** Clear all incidents and scrape logs. */
 async function clearAll() {
   await pool.query("DELETE FROM incidents");
@@ -3853,6 +3889,7 @@ export {
   mergeIntoIncident,
   getStats,
   getById,
+  getIncidentInScope,
   getIncidentEvidence,
   refreshSourceItemConfidence,
   refreshIncidentConfidence,
@@ -3874,6 +3911,7 @@ export {
   getAdvancedSourceAnalytics,
   getOsintGraph,
   clearAll,
+  countAllIncidents,
   listDevices,
   upsertDevice,
   upsertPocstarsDevice,
