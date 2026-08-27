@@ -309,6 +309,11 @@ textarea {
   line-height: 30px;
 }
 
+/* Paired with DARK_TILES in lib/basemaps.js - see the note there. */
+.basemap-dark {
+  filter: brightness(0.45) contrast(1.1);
+}
+
 .leaflet-control-scale-line {
   background: rgba(0, 0, 0, 0.88);
   border: 1px solid rgba(255, 68, 68, 0.4);

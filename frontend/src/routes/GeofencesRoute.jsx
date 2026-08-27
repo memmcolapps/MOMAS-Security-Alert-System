@@ -30,6 +30,7 @@ import {
   saveGeofence,
   searchPlaces,
 } from "../lib/api";
+import { DARK_TILES, IMAGERY_LABEL_TILES } from "../lib/basemaps";
 import { isPlatformOperator, isPlatformStaff } from "../lib/platform-roles";
 import {
   bufferRing,
@@ -62,7 +63,7 @@ const BASEMAPS = {
     label: "Satellite",
     url: "https://clarity.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
     options: { maxZoom: 21, maxNativeZoom: 19, attribution: "Tiles &copy; Esri Clarity" },
-    labels: "https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png",
+    labels: IMAGERY_LABEL_TILES,
   },
   streets: {
     label: "Streets",
@@ -71,8 +72,8 @@ const BASEMAPS = {
   },
   dark: {
     label: "Dark",
-    url: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-    options: { maxZoom: 21, maxNativeZoom: 20, attribution: "&copy; OpenStreetMap &copy; CARTO" },
+    url: DARK_TILES.url,
+    options: DARK_TILES.options,
   },
 };
 
@@ -153,7 +154,7 @@ function FenceEditorMap({ fences, form, assets, basemap, onBasemapChange, onMapC
     labelRef.current?.remove();
     baseRef.current = L.tileLayer(config.url, config.options).addTo(map);
     labelRef.current = config.labels
-      ? L.tileLayer(config.labels, { maxZoom: 21, maxNativeZoom: 20, opacity: 0.9 }).addTo(map)
+      ? L.tileLayer(config.labels.url, config.labels.options).addTo(map)
       : null;
     baseRef.current.bringToBack();
   }, [basemap]);

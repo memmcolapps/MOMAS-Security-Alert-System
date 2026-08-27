@@ -2,6 +2,7 @@ import L from "leaflet";
 import "leaflet.heat";
 import "leaflet.markercluster";
 import { useEffect, useRef } from "react";
+import { DARK_TILES } from "../lib/basemaps";
 import { deviceTypeGlyph, escapeHtml, severityColors, severityLabels, typeIcons } from "../lib/domain";
 
 const NIGERIA_BOUNDS = L.latLngBounds([4.3, 2.7], [13.9, 14.7]);
@@ -160,11 +161,7 @@ export function OperationsMap({
     }).setView(NIGERIA_CENTER, 6);
 
     const baseLayers = {
-      dark: L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-        attribution: "&copy; OpenStreetMap &copy; CARTO",
-        maxZoom: 21,
-        maxNativeZoom: 20,
-      }),
+      dark: L.tileLayer(DARK_TILES.url, DARK_TILES.options),
       streets: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: "&copy; OpenStreetMap",
         maxZoom: 21,

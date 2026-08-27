@@ -1,6 +1,8 @@
 import L from "leaflet";
 import { useEffect, useRef } from "react";
 
+import { DARK_TILES } from "../lib/basemaps";
+
 /**
  * A static locator map for a single alarm. An alarm's most important fact is
  * where it is, so the drawer shows the position rather than asking the operator
@@ -21,10 +23,7 @@ export function AlarmMiniMap({ lat, lon, label, accent = "#ff4444" }) {
       scrollWheelZoom: false,
       dragging: true,
     }).setView([lat, lon], 15);
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-      maxZoom: 21,
-      maxNativeZoom: 20,
-    }).addTo(map);
+    L.tileLayer(DARK_TILES.url, DARK_TILES.options).addTo(map);
     L.control.zoom({ position: "bottomright" }).addTo(map);
     mapRef.current = map;
     return () => {
