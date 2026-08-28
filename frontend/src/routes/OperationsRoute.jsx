@@ -140,7 +140,7 @@ export function OperationsRoute() {
   // them again all shift.
   const [panelOpen, setPanelOpen] = usePersistentFlag("momas_ops_feed_open", false);
   const [statsMinimized, setStatsMinimized] = usePersistentFlag("momas_ops_stats_min", true);
-  const [basemap, setBasemap] = useState("dark");
+  const [basemap, setBasemap] = useState("satellite");
   const [activeLayers, setActiveLayers] = useState({ live: true, heat: false, devices: true, drones: true, fences: true });
   const [openRadios, setOpenRadios] = useState([]);
   const { target: followTarget, position: followPosition } = useFollow();

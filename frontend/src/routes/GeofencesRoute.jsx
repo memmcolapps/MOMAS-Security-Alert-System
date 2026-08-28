@@ -30,7 +30,7 @@ import {
   saveGeofence,
   searchPlaces,
 } from "../lib/api";
-import { DARK_TILES, IMAGERY_LABEL_TILES } from "../lib/basemaps";
+import { DARK_TILES, IMAGERY_LABEL_TILES, SATELLITE_TILES } from "../lib/basemaps";
 import { isPlatformOperator, isPlatformStaff } from "../lib/platform-roles";
 import {
   bufferRing,
@@ -61,8 +61,8 @@ const EMPTY = {
 const BASEMAPS = {
   satellite: {
     label: "Satellite",
-    url: "https://clarity.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    options: { maxZoom: 21, maxNativeZoom: 19, attribution: "Tiles &copy; Esri Clarity" },
+    url: SATELLITE_TILES.url,
+    options: SATELLITE_TILES.options,
     labels: IMAGERY_LABEL_TILES,
   },
   streets: {

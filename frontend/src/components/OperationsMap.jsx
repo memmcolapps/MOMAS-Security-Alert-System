@@ -2,7 +2,7 @@ import L from "leaflet";
 import "leaflet.heat";
 import "leaflet.markercluster";
 import { useEffect, useRef } from "react";
-import { DARK_TILES } from "../lib/basemaps";
+import { DARK_TILES, IMAGERY_LABEL_TILES, LABELLED_BASEMAPS, SATELLITE_TILES } from "../lib/basemaps";
 import { deviceTypeGlyph, escapeHtml, severityColors, severityLabels, typeIcons } from "../lib/domain";
 
 const NIGERIA_BOUNDS = L.latLngBounds([4.3, 2.7], [13.9, 14.7]);
@@ -167,11 +167,9 @@ export function OperationsMap({
         maxZoom: 21,
         maxNativeZoom: 19,
       }),
-      satellite: L.tileLayer(
-        "https://clarity.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        { attribution: "Tiles &copy; Esri Clarity", maxZoom: 21, maxNativeZoom: 19 },
-      ),
+      satellite: L.tileLayer(SATELLITE_TILES.url, SATELLITE_TILES.options),
     };
+    const labelLayer = L.tileLayer(IMAGERY_LABEL_TILES.url, IMAGERY_LABEL_TILES.options);
 
     const incidentLayer = L.markerClusterGroup({ maxClusterRadius: 46 });
     const heatLayer = L.heatLayer([], {
@@ -190,7 +188,8 @@ export function OperationsMap({
     const geofenceLayer = L.layerGroup();
     const followLayer = L.layerGroup();
 
-    baseLayers.dark.addTo(map);
+    baseLayers.satellite.addTo(map);
+    labelLayer.addTo(map);
     incidentLayer.addTo(map);
     geofenceLayer.addTo(map);
     followLayer.addTo(map);
@@ -219,7 +218,8 @@ export function OperationsMap({
 
     layersRef.current = {
       baseLayers,
-      activeBase: baseLayers.dark,
+      labelLayer,
+      activeBase: baseLayers.satellite,
       incidentLayer,
       heatLayer,
       deviceLayer,
@@ -253,13 +253,21 @@ export function OperationsMap({
     const map = mapRef.current;
     const layers = layersRef.current;
     if (!map || !layers.baseLayers) return;
-    const next = layers.baseLayers[basemap] || layers.baseLayers.dark;
+    // Resolved once, so an unknown key falls back to satellite *and* its labels
+    // rather than landing on bare imagery with nothing named on it.
+    const key = layers.baseLayers[basemap] ? basemap : "satellite";
+    const next = layers.baseLayers[key];
     if (layers.activeBase !== next) {
       if (layers.activeBase) map.removeLayer(layers.activeBase);
       next.addTo(map);
       layers.activeBase = next;
       next.bringToBack();
     }
+    // Labels ride above the imagery but stay inside the tile pane, so every
+    // marker, cluster and fence still draws over them.
+    const wantsLabels = LABELLED_BASEMAPS.has(key);
+    if (wantsLabels && !map.hasLayer(layers.labelLayer)) layers.labelLayer.addTo(map);
+    else if (!wantsLabels && map.hasLayer(layers.labelLayer)) map.removeLayer(layers.labelLayer);
   }, [basemap]);
 
   useEffect(() => {
