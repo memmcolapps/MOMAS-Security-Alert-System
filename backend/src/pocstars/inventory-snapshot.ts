@@ -60,6 +60,9 @@ export function shapeDatabaseInventory(companySnapshots: CompanySnapshot[]) {
         role: 0,
         departmentId: null,
         name: String(radio.name || radio.account || `Radio ${uid}`),
+        // The vendor account is the IMEI printed on the handset (provisioning
+        // registers the radio under it), so it is what device search matches on.
+        imei: radio.account ? String(radio.account).trim() : null,
       });
       for (const groupId of radio.groupIds || []) {
         const id = positiveInteger(groupId);

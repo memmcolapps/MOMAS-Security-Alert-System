@@ -27,6 +27,14 @@ describe("database inventory snapshot", () => {
     expect(snapshot.radios[1].name).toBe("Radio 8");
   });
 
+  test("carries the vendor account through as the IMEI so device search matches it", () => {
+    const snapshot = shapeDatabaseInventory([
+      { radios: [{ uid: 100, account: "352000123456789", name: "Radio A" }, { uid: 101, name: "Radio B" }] },
+    ]);
+    expect(snapshot.radios[0].imei).toBe("352000123456789");
+    expect(snapshot.radios[1].imei).toBeNull();
+  });
+
   test("drops temporary call groups but keeps their radios", () => {
     const snapshot = shapeDatabaseInventory([
       {

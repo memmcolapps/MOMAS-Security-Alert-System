@@ -132,8 +132,9 @@ export function DevicesRoute() {
     }
     if (!term) return list;
     // Search covers what people actually know: the IMEI printed on the handset,
-    // the radio name, who carries it, and which company owns it.
+    // the network uid, the radio name, who carries it, and which company owns it.
     return list.filter((device) => [
+      device.imei,
       device.device_id,
       device.name,
       device.operator,
@@ -203,6 +204,7 @@ export function DevicesRoute() {
     setEditingId(device.device_id);
     setForm({
       device_id: device.device_id || "",
+      imei: device.imei || "",
       name: device.name || "",
       organization_id: device.organization_id ? String(device.organization_id) : "",
       unit_id: device.unit_id ? String(device.unit_id) : "",
@@ -305,9 +307,14 @@ export function DevicesRoute() {
           </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
             {editingId ? (
-              <Field label="Device ID">
-                <input className="field-input font-mono" value={form.device_id} disabled />
-              </Field>
+              <>
+                <Field label="Device ID">
+                  <input className="field-input font-mono" value={form.device_id} disabled />
+                </Field>
+                <Field label="IMEI">
+                  <input className="field-input font-mono" value={form.imei || "—"} disabled />
+                </Field>
+              </>
             ) : (
               <Field label="IMEI" required>
                 <input className="field-input font-mono" value={form.imei} onChange={(event) => updateField("imei", event.target.value)} placeholder="15 digits, printed on the handset" />

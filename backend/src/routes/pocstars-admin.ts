@@ -101,6 +101,7 @@ router.post("/radios", requireOps, async (c) => {
       operator: body.operator || null,
       device_type: body.device_type || "handheld",
       notes: body.notes || null,
+      imei,
     });
 
     await db.createAuditLog({

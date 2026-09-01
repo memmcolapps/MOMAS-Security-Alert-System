@@ -115,6 +115,10 @@ async function init() {
     CREATE TABLE IF NOT EXISTS devices (
       device_id   TEXT PRIMARY KEY,
       organization_id INTEGER,
+      -- The IMEI printed on the handset. The radio network assigns the
+      -- device_id (uid); the IMEI is the number an operator actually reads off
+      -- the radio, so it is what the device search is expected to match on.
+      imei        TEXT,
       name        TEXT,
       company     TEXT,
       operator    TEXT,
@@ -462,6 +466,7 @@ async function init() {
       ALTER TABLE osint_alerts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS organization_id INTEGER;
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS unit_id INTEGER;
+      ALTER TABLE devices ADD COLUMN IF NOT EXISTS imei TEXT;
       ALTER TABLE organization_memberships ADD COLUMN IF NOT EXISTS unit_id INTEGER;
       ALTER TABLE organization_memberships ADD COLUMN IF NOT EXISTS scope_level TEXT NOT NULL DEFAULT 'organization';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false;
@@ -2665,13 +2670,13 @@ async function syncPocstarsPlatformInventory(inventory: any) {
         `INSERT INTO devices (
            device_id, organization_id, unit_id, name, company, operator,
            device_type, active, pocstars_managed, pocstars_online,
-           pocstars_last_seen_at, pocstars_source_dispatcher_uid
+           pocstars_last_seen_at, pocstars_source_dispatcher_uid, imei
          )
          VALUES (
            $1,$2,$3,$4,NULL,NULL,'handheld',true,true,
            CASE WHEN $7::boolean THEN $5::boolean ELSE NULL END,
            CASE WHEN $7::boolean THEN NOW() ELSE NULL END,
-           $6
+           $6, $8
          )
          ON CONFLICT (device_id) DO UPDATE SET
            organization_id = EXCLUDED.organization_id,
@@ -2683,7 +2688,10 @@ async function syncPocstarsPlatformInventory(inventory: any) {
            pocstars_managed = true,
            pocstars_online = CASE WHEN $7::boolean THEN EXCLUDED.pocstars_online ELSE devices.pocstars_online END,
            pocstars_last_seen_at = CASE WHEN $7::boolean THEN NOW() ELSE devices.pocstars_last_seen_at END,
-           pocstars_source_dispatcher_uid = EXCLUDED.pocstars_source_dispatcher_uid`,
+           pocstars_source_dispatcher_uid = EXCLUDED.pocstars_source_dispatcher_uid,
+           -- Only the database plane carries the IMEI (the voice plane's contact
+           -- list has no account), so keep the known value when a sync omits it.
+           imei = COALESCE(EXCLUDED.imei, devices.imei)`,
         [
           radioId,
           organizationId,
@@ -2692,6 +2700,7 @@ async function syncPocstarsPlatformInventory(inventory: any) {
           Boolean(radio.online),
           dispatcherUid,
           presenceKnown,
+          radio.imei ? String(radio.imei).trim() : null,
         ],
       );
       seenRadioIds.push(radioId);
@@ -3037,14 +3046,14 @@ async function upsertDevice({ device_id, name, company, operator, device_type, n
 // marks the row pocstars_managed, so the inventory sync reconciles it like any
 // other radio instead of leaving it as a hand-entered row that never resolves.
 async function upsertPocstarsDevice({
-  device_id, organization_id, unit_id, name, operator, device_type, notes,
+  device_id, organization_id, unit_id, name, operator, device_type, notes, imei,
 }) {
   const { rows } = await pool.query(
     `INSERT INTO devices (
        device_id, organization_id, unit_id, name, operator, device_type, notes,
-       active, pocstars_managed, pocstars_online
+       imei, active, pocstars_managed, pocstars_online
      )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,true,true,NULL)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,true,NULL)
      ON CONFLICT (device_id) DO UPDATE SET
        organization_id = EXCLUDED.organization_id,
        unit_id         = EXCLUDED.unit_id,
@@ -3052,11 +3061,13 @@ async function upsertPocstarsDevice({
        operator        = EXCLUDED.operator,
        device_type     = EXCLUDED.device_type,
        notes           = EXCLUDED.notes,
+       imei            = COALESCE(EXCLUDED.imei, devices.imei),
        active          = true,
        pocstars_managed = true
      RETURNING *`,
     [device_id, organization_id || null, unit_id || null, name || null,
-     operator || null, device_type || "handheld", notes || null],
+     operator || null, device_type || "handheld", notes || null,
+     imei ? String(imei).trim() : null],
   );
   return rows[0];
 }
