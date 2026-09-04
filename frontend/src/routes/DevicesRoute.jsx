@@ -29,7 +29,6 @@ const emptyForm = {
   device_type: "",
   active: "true",
   notes: "",
-  channel_id: "",
   service_ends_at: defaultServiceEnd(),
   gps_enabled: "true",
   gps_frequency: "30",
@@ -143,22 +142,6 @@ export function DevicesRoute() {
   }, [channelFilter, organizationDevices, search]);
   const activeCount = useMemo(() => devices.filter((device) => device.active).length, [devices]);
 
-  // Channels a new radio can be put on: those of the organization chosen in the
-  // form. Derived from radios already on the network, so a channel nobody is on
-  // yet will not appear - it can be assigned from the channel screen afterwards.
-  const orgChannels = useMemo(() => {
-    if (!form.organization_id) return [];
-    const seen = new Map();
-    for (const device of allDevices) {
-      if (String(device.organization_id) !== String(form.organization_id)) continue;
-      for (const channel of device.channels || []) {
-        if (!seen.has(String(channel.id))) seen.set(String(channel.id), { id: String(channel.id), name: channel.name });
-      }
-    }
-    return [...seen.values()];
-  }, [allDevices, form.organization_id]);
-
-
   useEffect(() => {
     setChannelFilter("all");
   }, [orgFilter]);
@@ -248,8 +231,6 @@ export function DevicesRoute() {
         // normal case: handsets are bought before anyone is given one.
         organization_id: form.organization_id ? Number(form.organization_id) : null,
         unit_id: form.unit_id ? Number(form.unit_id) : null,
-        channel_ids: form.channel_id ? [Number(form.channel_id)] : [],
-        default_channel_id: form.channel_id ? Number(form.channel_id) : null,
         service_ends_at: `${form.service_ends_at} 00:00:00`,
         gps_enabled: form.gps_enabled === "true",
         gps_frequency: Number(form.gps_frequency) || 30,
@@ -365,14 +346,6 @@ export function DevicesRoute() {
             ) : null}
             {!editingId ? (
               <>
-                <Field label="Channel">
-                  <select className="field-input" value={form.channel_id} onChange={(event) => updateField("channel_id", event.target.value)}>
-                    <option value="">No channel yet</option>
-                    {orgChannels.map((channel) => (
-                      <option value={channel.id} key={channel.id}>{channel.name}</option>
-                    ))}
-                  </select>
-                </Field>
                 <Field label="Service expires">
                   <input type="date" className="field-input" value={form.service_ends_at} onChange={(event) => updateField("service_ends_at", event.target.value)} />
                 </Field>

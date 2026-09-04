@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { requirePlatform } from "../auth";
 import * as db from "../db";
 import { liveRadioConfigured, provisionOnNetwork, queryPocstarsInventory } from "../pocstars/live-gateway";
+import { freshRadioProvisioningPayload } from "../pocstars/radio-onboarding";
 
 const router = new Hono();
 
@@ -78,17 +79,13 @@ router.post("/radios", requireOps, async (c) => {
     }
 
     // A null company sends the radio to the pool, where it is inventoried but
-    // reaches nobody until it is allocated.
-    const radio: any = await provisionOnNetwork("provision.radio.create", {
-      companyId,
-      imei,
-      name,
-      channelIds: Array.isArray(body.channel_ids) ? body.channel_ids : [],
-      defaultChannelId: body.default_channel_id ?? null,
-      serviceEndsAt: body.service_ends_at || "2030-01-01 00:00:00",
-      gpsEnabled: body.gps_enabled !== false,
-      gpsFrequency: Number(body.gps_frequency || 30),
-    });
+    // reaches nobody until it is allocated. A newly onboarded radio never has
+    // a channel: the organization creates its channels and adds the handset
+    // through channel management after the radio exists.
+    const radio: any = await provisionOnNetwork(
+      "provision.radio.create",
+      freshRadioProvisioningPayload({ body, companyId, imei, name }),
+    );
 
     // The network is the source of truth for identity, so the uid it assigned
     // becomes the device_id here. Marked pocstars_managed so the inventory sync
