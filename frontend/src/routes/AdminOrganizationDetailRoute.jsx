@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   addOrganizationUser,
   attachDeviceToOrganization,
+  createPlatformChannel,
   deleteOrganization,
   detachDeviceFromOrganization,
   getMe,
@@ -301,6 +302,16 @@ function RadioSection({ organization, channels, onSaved, onDirtyChange }) {
     mutationFn: () => provisionOrganizationRadio(organization.id),
     onSuccess: onSaved,
   });
+  const [channelName, setChannelName] = useState("");
+  const [channelWarning, setChannelWarning] = useState("");
+  const channelMutation = useMutation({
+    mutationFn: (payload) => createPlatformChannel(payload),
+    onSuccess: (result) => {
+      setChannelName("");
+      setChannelWarning(result?.warning || "");
+      onSaved();
+    },
+  });
   const dirty = changed(draft);
 
   return (
@@ -367,6 +378,44 @@ function RadioSection({ organization, channels, onSaved, onDirtyChange }) {
           deniedNote="Only a platform owner can change seat counts."
         />
       </div>
+
+      {canWrite && organization.pocstars_company_id ? (
+        <form
+          className="glass-panel rounded-lg p-5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setChannelWarning("");
+            channelMutation.reset();
+            channelMutation.mutate({ organization_id: organization.id, name: channelName.trim() });
+          }}
+        >
+          <h2 className="mb-1 flex items-center gap-2 text-[13px] font-bold text-ops-red">
+            <RadioTower size={15} /> New channel
+          </h2>
+          <p className="mb-4 text-[11px] text-neutral-500">
+            Created for the whole organization on the radio network. It is live straight away.
+          </p>
+          <div className="flex flex-wrap items-end gap-3">
+            <Field label="Channel name">
+              <input
+                className="field-input"
+                value={channelName}
+                onChange={(event) => setChannelName(event.target.value)}
+                placeholder="e.g. Lagos Patrol"
+              />
+            </Field>
+            <button
+              className="inline-flex items-center gap-2 rounded bg-ops-red px-4 py-2 text-xs font-bold text-black disabled:opacity-50"
+              disabled={channelMutation.isPending || !channelName.trim()}
+            >
+              <Plus size={14} /> {channelMutation.isPending ? "Creating…" : "Create channel"}
+            </button>
+          </div>
+          {channelMutation.error ? <p className="mt-2 text-xs text-ops-red">{channelMutation.error.message}</p> : null}
+          {channelWarning ? <p className="mt-2 text-xs text-amber-300/90">{channelWarning}</p> : null}
+          {channelMutation.isSuccess && !channelWarning ? <p className="mt-2 text-xs text-ops-green">Channel created and live</p> : null}
+        </form>
+      ) : null}
 
       <div className="glass-panel overflow-hidden rounded-lg">
         <div className="border-b border-white/10 px-4 py-3 text-[11px] text-neutral-500">

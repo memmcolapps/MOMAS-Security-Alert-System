@@ -177,6 +177,13 @@ export function assignPocstarsGroup(groupId, payload) {
   });
 }
 
+export function createPlatformChannel(payload) {
+  return request("/api/pocstars/admin/channels", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getOrganization(id) {
   return request(`/api/organizations/${id}`);
 }

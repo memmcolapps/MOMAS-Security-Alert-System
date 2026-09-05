@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import {
   assignPocstarsGroup,
   createOrganization,
+  createPlatformChannel,
   getMe,
   getPocstarsRegistry,
   listOrganizations,
@@ -308,6 +309,8 @@ function RadioNetworkPanel({ organizations }) {
         </p>
       ) : null}
 
+      {canWrite ? <CreateChannelForm organizations={organizations} onCreated={refresh} /> : null}
+
       {groups.length ? (
         <div className="mt-4 overflow-x-auto">
           <table className="w-full text-left text-[11px]">
@@ -408,6 +411,78 @@ function RadioNetworkPanel({ organizations }) {
         </div>
       ) : null}
     </section>
+  );
+}
+
+// Create a channel from the platform side. The company picker only enables
+// organizations already on the radio network - the backend refuses the rest
+// with a 409 pointing at the company's Radio tab setup, so the form disables
+// them up front with the same explanation rather than letting the click fail.
+function CreateChannelForm({ organizations, onCreated }) {
+  const [organizationId, setOrganizationId] = useState("");
+  const [name, setName] = useState("");
+  const [warning, setWarning] = useState("");
+  const createMutation = useMutation({
+    mutationFn: (payload) => createPlatformChannel(payload),
+    onSuccess: (result) => {
+      setName("");
+      setWarning(result?.warning || "");
+      onCreated();
+    },
+  });
+  const eligible = useMemo(
+    () => (organizations || []).filter((org) => org.pocstars_company_id),
+    [organizations],
+  );
+  const ineligibleCount = (organizations || []).length - eligible.length;
+
+  return (
+    <form
+      className="mt-4 rounded border border-white/10 bg-white/[0.03] p-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        setWarning("");
+        createMutation.reset();
+        createMutation.mutate({ organization_id: Number(organizationId), name: name.trim() });
+      }}
+    >
+      <h3 className="flex items-center gap-2 text-[12px] font-bold text-neutral-200">
+        <Plus size={13} /> New channel
+      </h3>
+      <p className="mt-1 text-[11px] text-neutral-500">
+        Created for the whole company on the radio network. It is live straight away.
+        {ineligibleCount ? ` ${ineligibleCount} compan${ineligibleCount === 1 ? "y is" : "ies are"} not on the radio network yet and cannot receive channels.` : ""}
+      </p>
+      <div className="mt-3 grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+        <Field label="Company">
+          <select className="field-input" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
+            <option value="">Choose a company…</option>
+            {eligible.map((org) => (
+              <option key={org.id} value={org.id}>{org.name}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Channel name">
+          <input
+            className="field-input"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="e.g. Lagos Patrol"
+          />
+        </Field>
+        <div className="flex items-end pb-3">
+          <button
+            className="inline-flex items-center gap-2 rounded bg-ops-green px-4 py-2 text-xs font-bold text-black disabled:opacity-50"
+            disabled={createMutation.isPending || !organizationId || !name.trim()}
+          >
+            <Plus size={13} /> {createMutation.isPending ? "Creating…" : "Create"}
+          </button>
+        </div>
+      </div>
+      {createMutation.error ? <p className="mt-2 text-xs text-ops-red">{createMutation.error.message}</p> : null}
+      {warning ? <p className="mt-2 text-xs text-amber-300/90">{warning}</p> : null}
+      {createMutation.isSuccess && !warning ? <p className="mt-2 text-xs text-ops-green">Channel created and live</p> : null}
+    </form>
   );
 }
 

@@ -172,6 +172,67 @@ async function poolCompanyId() {
   return Number(result?.companyId);
 }
 
+router.post("/channels", requireOps, async (c) => {
+  const user = (c as any).get("user");
+  const body = await c.req.json().catch(() => ({}));
+  const organizationId = Number(body.organization_id);
+  const name = String(body.name || "").trim();
+  if (!Number.isSafeInteger(organizationId) || organizationId <= 0) {
+    return c.json({ error: "Choose the company this channel belongs to." }, 400);
+  }
+  if (!name) return c.json({ error: "Enter a channel name." }, 400);
+  try {
+    const organization = await db.getOrganization(organizationId);
+    if (!organization) return c.json({ error: "That organization could not be found." }, 404);
+    // Platform-created channels are always whole-organization. Unit pinning is
+    // left to the org admins in their own console.
+    const companyId = Number(organization.pocstars_company_id);
+    if (!Number.isSafeInteger(companyId) || companyId <= 0) {
+      return c.json({
+        error: "That organization has no company on the radio network yet, so a channel cannot be created for it. Set it up on the radio network first.",
+      }, 409);
+    }
+    // Refuse to provision into a vendor company another tenant already owns:
+    // seats are shared per company, so that tenant's dispatchers would see
+    // everything created here.
+    const shared = await db.organizationsSharingCompanyId(companyId, organizationId);
+    if (shared.length) {
+      return c.json({
+        error: `This organization shares a radio-network company with ${shared[0].name}. A platform owner must give it its own company before channels can be created.`,
+      }, 409);
+    }
+    const channel = await db.createChannel({
+      organization_id: organizationId,
+      name,
+      unit_id: null,
+    });
+    try {
+      const created: any = await provisionOnNetwork("provision.channel.create", {
+        companyId,
+        name: channel.name,
+      });
+      const groupId = Number(created?.groupId || 0);
+      if (groupId) Object.assign(channel, await db.markChannelProvisioned(channel.id, groupId));
+    } catch (error) {
+      return c.json({
+        channel,
+        warning: error instanceof Error ? error.message : "The channel is not live on the radio network yet.",
+      }, 201);
+    }
+    await db.createAuditLog({
+      organization_id: organizationId,
+      actor_user_id: user?.id || null,
+      action: "channel.create",
+      target_type: "channel",
+      target_id: channel.id,
+      metadata: { name: channel.name, via: "platform" },
+    });
+    return c.json({ channel }, 201);
+  } catch (error) {
+    return c.json(jsonError(error), 500);
+  }
+});
+
 router.post("/groups/:group_id/assign", requireOps, async (c) => {
   const user = (c as any).get("user");
   const body = await c.req.json().catch(() => ({}));
