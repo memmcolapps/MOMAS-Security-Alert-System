@@ -634,6 +634,42 @@ export class PocstarsProvisioning {
     }
   }
 
+  // Retire rather than delete: the vendor keeps recordings and SOS history
+  // pointing at the radio id. A retired handset is invisible to the inventory
+  // (listRadios only sees IsActive = 1) and its IMEI is free to onboard again.
+  async retireRadio({ uid, companyId }: { uid: number; companyId: number | null }) {
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const args: any[] = [uid];
+      let scope = "";
+      if (Number.isSafeInteger(companyId) && Number(companyId) > 0) {
+        scope = " AND User_CompanyID = ?";
+        args.push(Number(companyId));
+      }
+      const [result]: any = await connection.query(
+        `UPDATE tb_User
+            SET IsActive = 0, User_Enable = 0,
+                User_UpdateTime = NOW(), Last_Update_Time = NOW()
+          WHERE User_ID = ? AND User_Type = 0 AND IsActive = 1${scope}`,
+        args,
+      );
+      if (!result.affectedRows) throw new Error(`Radio ${uid} could not be found on the radio network.`);
+      await connection.query(
+        `UPDATE tb_UserOfGroup SET IsActive = 0, Last_Update_Time = NOW()
+          WHERE UOG_UserId = ? AND IsActive = 1`,
+        [uid],
+      );
+      await connection.commit();
+      return { uid };
+    } catch (error) {
+      await connection.rollback().catch(() => {});
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
   // Put a radio on (or take it off) one of its organization's channels. The
   // radio and the channel must belong to the same company.
   async setRadioOnChannel({ companyId, groupId, radioUid, member }: {

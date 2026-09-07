@@ -142,10 +142,13 @@ export function setOrgChannelDevice(channelId, deviceId, member) {
   });
 }
 
-export function allocateRadioToOrganization(deviceId, organizationId) {
-  return request(`/api/pocstars/admin/devices/${deviceId}/allocate`, {
+export function allocateRadioToOrganization(deviceId, organizationId, channelIds) {
+  return request(`/api/pocstars/admin/devices/${encodeURIComponent(deviceId)}/allocate`, {
     method: "POST",
-    body: JSON.stringify({ organization_id: organizationId }),
+    body: JSON.stringify({
+      organization_id: organizationId,
+      ...(channelIds === undefined ? {} : { channel_ids: channelIds }),
+    }),
   });
 }
 

@@ -2412,6 +2412,78 @@ async function allocateDeviceToOrganization(deviceId: string, organizationId: nu
   }
 }
 
+// Vendor group ids a radio currently carries in MOMAS. Needed when a platform
+// admin rewrites memberships: the network move only adds, so channels dropped
+// from the same company have to be left explicitly afterwards.
+async function getDeviceChannelGroups(deviceId: string) {
+  const { rows } = await pool.query(
+    `SELECT c.id AS channel_id, c.pocstars_group_id
+       FROM channel_devices cd
+       JOIN channels c ON c.id = cd.channel_id
+      WHERE cd.device_id = $1`,
+    [deviceId],
+  );
+  return rows as Array<{ channel_id: number; pocstars_group_id: string | null }>;
+}
+
+// A platform picker hands back MOMAS channel ids. They must all belong to the
+// target organization and already be live on the radio network - a pending
+// channel has no vendor group to put the radio on.
+async function validateOrganizationChannels(channelIds: number[], organizationId: number) {
+  const ids = [...new Set(channelIds.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))];
+  if (!ids.length) return [];
+  const { rows } = await pool.query(
+    "SELECT id, name, organization_id, pocstars_group_id FROM channels WHERE id = ANY($1)",
+    [ids],
+  );
+  if (rows.length !== ids.length) throw new Error("One of the selected channels could not be found.");
+  const foreign = rows.find((row: any) => Number(row.organization_id) !== Number(organizationId));
+  if (foreign) throw new Error(`Channel ${foreign.name} belongs to a different organization.`);
+  const pending = rows.find((row: any) => !row.pocstars_group_id);
+  if (pending) throw new Error(`Channel ${pending.name} is not live on the radio network yet.`);
+  return rows as Array<{ id: number; name: string; pocstars_group_id: string }>;
+}
+
+// Rewrite a radio's memberships to exactly the picked set. The radio must
+// already sit in the organization the channels belong to - allocate first.
+async function setDeviceChannels(deviceId: string, channelIds: number[]) {
+  const ids = [...new Set(channelIds.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))];
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: devices } = await client.query(
+      "SELECT organization_id FROM devices WHERE device_id = $1",
+      [deviceId],
+    );
+    if (!devices[0]) throw new Error("That radio could not be found.");
+    if (ids.length) {
+      const { rows: channels } = await client.query(
+        "SELECT id, organization_id FROM channels WHERE id = ANY($1)",
+        [ids],
+      );
+      if (channels.length !== ids.length) throw new Error("One of the selected channels could not be found.");
+      const foreign = channels.find(
+        (row: any) => Number(row.organization_id) !== Number(devices[0].organization_id),
+      );
+      if (foreign) throw new Error("That radio belongs to a different organization.");
+    }
+    await client.query("DELETE FROM channel_devices WHERE device_id = $1", [deviceId]);
+    for (const id of ids) {
+      await client.query(
+        "INSERT INTO channel_devices (channel_id, device_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+        [id, deviceId],
+      );
+    }
+    await client.query("COMMIT");
+    return ids;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function hasPocstarsDispatchers() {
   const { rows } = await pool.query("SELECT 1 FROM pocstars_dispatchers LIMIT 1");
   return Boolean(rows[0]);
@@ -3972,6 +4044,9 @@ export {
   deleteChannel,
   listChannelDevices,
   setChannelDevice,
+  getDeviceChannelGroups,
+  validateOrganizationChannels,
+  setDeviceChannels,
   allocateDeviceToOrganization,
   syncPocstarsPlatformInventory,
   assignPocstarsGroupToOrganization,

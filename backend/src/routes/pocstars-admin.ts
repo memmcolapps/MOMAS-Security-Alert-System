@@ -117,6 +117,10 @@ router.post("/radios", requireOps, async (c) => {
 
 // Allocation is a platform-admin act: a handset is physical and belongs to
 // exactly one organization. Orgs arrange their allocated radios themselves.
+// `channel_ids` are MOMAS channel ids from the platform picker (not vendor
+// group ids): they are validated against the target organization, resolved to
+// vendor groups for the network call, and mirrored into channel_devices after
+// the move. Absent means "no channels", which is the historic behavior.
 router.post("/devices/:device_id/allocate", requireOps, async (c) => {
   const user = (c as any).get("user");
   const body = await c.req.json().catch(() => ({}));
@@ -124,15 +128,38 @@ router.post("/devices/:device_id/allocate", requireOps, async (c) => {
   if (organizationId !== null && (!Number.isSafeInteger(organizationId) || organizationId <= 0)) {
     return c.json({ error: "Choose the organization this radio belongs to." }, 400);
   }
+  const rawChannelIds = body.channel_ids === undefined ? [] : body.channel_ids;
+  if (!Array.isArray(rawChannelIds)) {
+    return c.json({ error: "Channels must be a list." }, 400);
+  }
+  const channelIds = [...new Set(rawChannelIds.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))];
+  if (channelIds.length !== rawChannelIds.length) {
+    return c.json({ error: "One of the selected channels is not valid." }, 400);
+  }
+  if (organizationId === null && channelIds.length) {
+    return c.json({ error: "Unallocated radios cannot be on any channel." }, 400);
+  }
   const deviceId = c.req.param("device_id");
   try {
+    const existing = await db.getDevice(deviceId);
+    if (!existing) return c.json({ error: "That radio could not be found." }, 404);
+    let picked: Array<{ id: number; name: string; pocstars_group_id: string }> = [];
+    if (organizationId !== null) {
+      const organization = await db.getOrganization(organizationId);
+      if (!organization) return c.json({ error: "That organization could not be found." }, 404);
+      try {
+        picked = await db.validateOrganizationChannels(channelIds, organizationId);
+      } catch (error) {
+        return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+      }
+    }
+    const vendorGroupIds = picked.map((row) => Number(row.pocstars_group_id));
     // Allocation has to happen on the radio network first. Recording it here
     // alone would leave MOMAS asserting an ownership the network disagrees
     // with: the receiving organization's dispatcher seats lease against their
     // own company, so a radio still filed under the old one is invisible to
     // them however confidently this console lists it.
     let network: any = null;
-    const existing = await db.getDevice(deviceId);
     if (existing?.pocstars_managed) {
       const companyId = organizationId
         ? Number((await db.getOrganization(organizationId))?.pocstars_company_id)
@@ -142,24 +169,45 @@ router.post("/devices/:device_id/allocate", requireOps, async (c) => {
           error: "That organization has no company on the radio network yet, so a radio cannot be allocated to it.",
         }, 409);
       }
+      // The move only adds memberships, so channels dropped within the same
+      // company are left explicitly first, while the radio is still there to
+      // be removed: the bridge refuses the call once the radio has moved.
+      // Across companies the move itself deactivates the stale rows below.
+      const orgChanged = Number(existing.organization_id) !== Number(organizationId);
+      if (!orgChanged && organizationId !== null) {
+        const current = await db.getDeviceChannelGroups(deviceId);
+        const wanted = new Set(vendorGroupIds);
+        const removed = current
+          .map((row) => Number(row.pocstars_group_id))
+          .filter((groupId) => Number.isSafeInteger(groupId) && groupId > 0 && !wanted.has(groupId));
+        for (const groupId of removed) {
+          await provisionOnNetwork("provision.radio.channel", {
+            companyId,
+            groupId,
+            radioUid: Number(deviceId),
+            member: false,
+          });
+        }
+      }
       network = await provisionOnNetwork("provision.radio.reassign", {
         companyId,
         uid: Number(deviceId),
-        channelIds: Array.isArray(body.channel_ids) ? body.channel_ids : [],
-        defaultChannelId: body.default_channel_id ?? null,
+        channelIds: vendorGroupIds,
+        defaultChannelId: null,
       });
     }
 
     const device = await db.allocateDeviceToOrganization(deviceId, organizationId);
+    if (channelIds.length) await db.setDeviceChannels(deviceId, channelIds);
     await db.createAuditLog({
       organization_id: organizationId,
       actor_user_id: user?.id || null,
       action: organizationId ? "radio.allocate" : "radio.deallocate",
       target_type: "device",
       target_id: device.device_id,
-      metadata: { organization_id: organizationId, network },
+      metadata: { organization_id: organizationId, channel_ids: channelIds, network },
     });
-    return c.json({ device, network });
+    return c.json({ device, network, channels: channelIds });
   } catch (error) {
     return c.json(jsonError(error), 409);
   }

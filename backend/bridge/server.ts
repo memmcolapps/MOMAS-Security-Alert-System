@@ -341,6 +341,15 @@ async function handleProvisioning(ws: ServerWebSocket<BridgeSession>, message: a
           result: await provisioning.renewSeat({ uid: Number(message.uid), until: String(message.until) }),
         });
       }
+      case "provision.radio.retire": {
+        return send(ws, {
+          type: "provision.result", requestId, ok: true,
+          result: await provisioning.retireRadio({
+            uid: Number(message.uid),
+            companyId: Number(message.companyId) || null,
+          }),
+        });
+      }
       default:
         return fail(`Unknown provisioning command ${message.type}.`);
     }

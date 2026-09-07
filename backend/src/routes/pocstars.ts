@@ -14,6 +14,7 @@ import { env } from "../config";
 import * as db from "../db";
 import { bus } from "../events";
 import { fetchLastLocations } from "../pocstars/locations";
+import { provisionOnNetwork } from "../pocstars/live-gateway";
 import { actionMessage, describeSyncFailure } from "../pocstars/messages";
 
 type SseClient = {
@@ -601,11 +602,36 @@ router.delete("/devices/:device_id", async (c) => {
   const user = (c as any).get("user");
   if (!isPlatformOperator(user)) return c.json({ error: "forbidden" }, 403);
   try {
-    const deleted = await db.deleteDevice(c.req.param("device_id"));
+    const deviceId = c.req.param("device_id");
+    const existing = await db.getDevice(deviceId);
+    if (!existing) return c.json({ error: "Device not found" }, 404);
+    // Retire on the radio network first: the vendor row owns the IMEI, and a
+    // MOMAS-only delete leaves an active handset that the next inventory sync
+    // re-imports and that blocks the IMEI from being onboarded again.
+    let network: any = null;
+    if (existing.pocstars_managed) {
+      const uid = Number(deviceId);
+      if (!Number.isSafeInteger(uid) || uid <= 0) {
+        return c.json({ error: "That radio has no network identity to retire." }, 400);
+      }
+      const companyId = existing.organization_id
+        ? Number((await db.getOrganization(Number(existing.organization_id)))?.pocstars_company_id) || null
+        : Number((await provisionOnNetwork("provision.pool", {}) as any)?.companyId) || null;
+      network = await provisionOnNetwork("provision.radio.retire", { companyId, uid });
+    }
+    const deleted = await db.deleteDevice(deviceId);
     if (!deleted) return c.json({ error: "Device not found" }, 404);
+    await db.createAuditLog({
+      organization_id: existing.organization_id ? Number(existing.organization_id) : null,
+      actor_user_id: user?.id,
+      action: "radio.retire",
+      target_type: "device",
+      target_id: deviceId,
+      metadata: { name: existing.name, imei: existing.imei, network },
+    });
     return c.json({ ok: true });
   } catch (error) {
-    return c.json(jsonError(error), 500);
+    return c.json(jsonError(error), 409);
   }
 });
 

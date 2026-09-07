@@ -2,10 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, MessageSquare, Plus, Radio, Save, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
+  allocateRadioToOrganization,
   deleteDevice,
   getLocations,
   getMe,
   getOrgAdmin,
+  getOrganization,
   listDevices,
   listOrganizations,
   onboardRadio,
@@ -24,6 +26,7 @@ const emptyForm = {
   imei: "",
   name: "",
   organization_id: "",
+  channel_ids: [],
   unit_id: "",
   operator: "",
   device_type: "",
@@ -57,6 +60,10 @@ export function DevicesRoute() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(emptyForm);
+  // Snapshot of the radio before editing: company/channel changes are applied
+  // through the allocate call (network move + memberships), while plain field
+  // edits go through saveDevice against the original company.
+  const [editingOriginal, setEditingOriginal] = useState(null);
   const [selectedRadio, setSelectedRadio] = useState(null);
   const { toast, notify, dismiss: dismissToast } = useToast();
 
@@ -156,6 +163,58 @@ export function DevicesRoute() {
     onError: (error) => notify(error.message, "error"),
   });
 
+  // Platform edit of a radio handset: plain fields go through saveDevice
+  // against the original company, then a company and/or channel change goes
+  // through allocate, which moves the radio on the radio network and mirrors
+  // the picked channels there and in channel_devices together.
+  const editSaveMutation = useMutation({
+    mutationFn: async (snapshot) => {
+      const saved = await saveDevice({
+        device_id: snapshot.device_id,
+        name: snapshot.name,
+        organization_id: snapshot.originalOrgId ? Number(snapshot.originalOrgId) : null,
+        unit_id: snapshot.originalUnitId ? Number(snapshot.originalUnitId) : null,
+        operator: snapshot.operator,
+        device_type: snapshot.device_type,
+        notes: snapshot.notes,
+        active: snapshot.active,
+      });
+      if (snapshot.orgChanged || snapshot.channelsChanged) {
+        await allocateRadioToOrganization(
+          snapshot.device_id,
+          snapshot.newOrgId ? Number(snapshot.newOrgId) : null,
+          snapshot.channelIds.map(Number),
+        );
+      }
+      return saved;
+    },
+    onSuccess: async () => {
+      notify("Device updated", "success");
+      closeForm();
+      await queryClient.invalidateQueries({ queryKey: ["devices"] });
+      await queryClient.invalidateQueries({ queryKey: ["organizations"] });
+      await queryClient.invalidateQueries({ queryKey: ["organization"] });
+    },
+    onError: (error) => notify(error.message, "error"),
+  });
+
+  // Channels of the company picked in the edit form. The picker stays
+  // unpickable until a company is chosen; changing company drops the
+  // selection (see updateField).
+  const pickedOrgId = form.organization_id || "";
+  const showChannelPicker = Boolean(
+    isPlatformAdmin && formOpen && editingId && editingOriginal?.pocstars_managed && pickedOrgId,
+  );
+  const orgChannelsQuery = useQuery({
+    queryKey: ["organization", pickedOrgId ? Number(pickedOrgId) : "none"],
+    queryFn: () => getOrganization(Number(pickedOrgId)),
+    enabled: showChannelPicker,
+  });
+  const pickedOrgChannels = useMemo(
+    () => orgChannelsQuery.data?.channels || [],
+    [orgChannelsQuery.data?.channels],
+  );
+
   const onboardMutation = useMutation({
     mutationFn: onboardRadio,
     onSuccess: async (result) => {
@@ -179,17 +238,26 @@ export function DevicesRoute() {
 
   function openAdd() {
     setEditingId(null);
+    setEditingOriginal(null);
     setForm(emptyForm);
     setFormOpen(true);
   }
 
   function openEdit(device) {
     setEditingId(device.device_id);
+    const channelIds = (device.channels || []).map((channel) => String(channel.id));
+    setEditingOriginal({
+      organization_id: device.organization_id ? String(device.organization_id) : "",
+      channel_ids: channelIds,
+      unit_id: device.unit_id ? String(device.unit_id) : "",
+      pocstars_managed: Boolean(device.pocstars_managed),
+    });
     setForm({
       device_id: device.device_id || "",
       imei: device.imei || "",
       name: device.name || "",
       organization_id: device.organization_id ? String(device.organization_id) : "",
+      channel_ids: channelIds,
       unit_id: device.unit_id ? String(device.unit_id) : "",
       operator: device.operator || "",
       device_type: device.device_type || "",
@@ -201,12 +269,30 @@ export function DevicesRoute() {
 
   function closeForm() {
     setEditingId(null);
+    setEditingOriginal(null);
     setForm(emptyForm);
     setFormOpen(false);
   }
 
   function updateField(field, value) {
+    // Channels belong to one company, so picking another company drops the
+    // channel selection (and the unit, which lives under the old company).
+    // The channel picker stays unpickable until a company is chosen.
+    if (field === "organization_id") {
+      setForm((current) => ({ ...current, organization_id: value, channel_ids: [], unit_id: "" }));
+      return;
+    }
     setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function toggleFormChannel(channelId) {
+    const id = String(channelId);
+    setForm((current) => ({
+      ...current,
+      channel_ids: current.channel_ids.includes(id)
+        ? current.channel_ids.filter((entry) => entry !== id)
+        : [...current.channel_ids, id],
+    }));
   }
 
   function submitForm(event) {
@@ -244,6 +330,30 @@ export function DevicesRoute() {
     const deviceId = form.device_id.trim();
     if (!deviceId) {
       notify("Device ID is required", "error");
+      return;
+    }
+    // Radio handsets edited by platform staff save in two steps: fields first,
+    // then the company/channel move with its network mirror. Anything else
+    // (trackers, org admins) keeps the single saveDevice call.
+    if (isPlatformAdmin && editingOriginal?.pocstars_managed) {
+      const originalOrgId = editingOriginal.organization_id || "";
+      const newOrgId = form.organization_id || "";
+      const before = [...(editingOriginal.channel_ids || [])].map(String).sort().join("|");
+      const after = [...(form.channel_ids || [])].map(String).sort().join("|");
+      editSaveMutation.mutate({
+        device_id: deviceId,
+        name: form.name.trim() || null,
+        originalOrgId,
+        originalUnitId: editingOriginal.unit_id || "",
+        newOrgId,
+        orgChanged: originalOrgId !== newOrgId,
+        channelsChanged: before !== after,
+        channelIds: form.channel_ids || [],
+        operator: form.operator.trim() || null,
+        device_type: form.device_type || null,
+        notes: form.notes.trim() || null,
+        active: form.active === "true",
+      });
       return;
     }
     saveMutation.mutate({
@@ -314,6 +424,54 @@ export function DevicesRoute() {
                 </select>
               </Field>
             ) : null}
+            {isPlatformAdmin && editingId && editingOriginal?.pocstars_managed ? (
+              <Field label="Channels" wide>
+                {!pickedOrgId ? (
+                  <p className="rounded border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-neutral-500">
+                    Pick a company first — channels unlock once the radio has an owner.
+                  </p>
+                ) : orgChannelsQuery.isLoading ? (
+                  <p className="px-1 py-2 text-[11px] text-neutral-500">Loading channels…</p>
+                ) : orgChannelsQuery.error ? (
+                  <p className="px-1 py-2 text-[11px] text-ops-red">Could not load channels: {orgChannelsQuery.error.message}</p>
+                ) : !pickedOrgChannels.length ? (
+                  <p className="rounded border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-neutral-500">
+                    This company has no channels yet. Create one from the Companies page first.
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {pickedOrgChannels.map((channel) => {
+                      const id = String(channel.id);
+                      const checked = form.channel_ids.includes(id);
+                      const live = Boolean(channel.pocstars_group_id);
+                      return (
+                        <label
+                          key={channel.id}
+                          title={live ? channel.name : `${channel.name} · not live on the radio network yet`}
+                          className={`inline-flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-[11px] ${
+                            !live
+                              ? "cursor-not-allowed border border-white/5 text-neutral-600"
+                              : checked
+                                ? "bg-ops-green font-bold text-black"
+                                : "border border-white/10 text-neutral-400 hover:border-ops-green hover:text-ops-green"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="sr-only"
+                            checked={checked}
+                            disabled={!live}
+                            onChange={() => toggleFormChannel(id)}
+                          />
+                          {channel.name}
+                          {!live ? <span className="text-[9px] uppercase">not live</span> : null}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </Field>
+            ) : null}
             {!isPlatformAdmin && canManageDevices ? (
               <Field label="Unit">
                 <select className="field-input" value={form.unit_id} onChange={(event) => updateField("unit_id", event.target.value)}>
@@ -365,10 +523,10 @@ export function DevicesRoute() {
             <button type="button" className="rounded bg-white/10 px-4 py-2 text-xs text-neutral-400 hover:text-neutral-100" onClick={closeForm}>
               Cancel
             </button>
-            <button type="submit" disabled={saveMutation.isPending || onboardMutation.isPending} className="inline-flex items-center gap-2 rounded bg-ops-green px-4 py-2 text-xs font-bold text-black disabled:opacity-50">
+            <button type="submit" disabled={saveMutation.isPending || editSaveMutation.isPending || onboardMutation.isPending} className="inline-flex items-center gap-2 rounded bg-ops-green px-4 py-2 text-xs font-bold text-black disabled:opacity-50">
               <Save size={14} />
               {editingId
-                ? (saveMutation.isPending ? "Saving..." : "Save device")
+                ? (saveMutation.isPending || editSaveMutation.isPending ? "Saving..." : "Save device")
                 : (onboardMutation.isPending ? "Onboarding on the radio network..." : "Onboard radio")}
             </button>
           </div>
