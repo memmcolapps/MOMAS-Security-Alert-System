@@ -12,6 +12,12 @@ import { startPresenceWatcher } from "../pocstars/presence-watcher";
 
 const router = new Hono();
 
+// Hono's context is untyped for route variables in this router, the same way
+// the drones router reaches the authenticated user.
+function currentUser(c: any) {
+  return c.get("user");
+}
+
 function jsonError(error: unknown) {
   return { error: error instanceof Error ? error.message : String(error) };
 }
@@ -96,6 +102,81 @@ async function provisionCompanyOnNetwork(organization: any) {
     };
   }
 }
+
+// Bring a company's dispatcher seats up to what MOMAS has allocated it. It
+// provisions the shortfall rather than a fixed number, so it is idempotent:
+// calling it on a company that already has enough does nothing, which also
+// makes it the retry for a promotion whose own attempt failed.
+async function topUpSeatsOnNetwork(organization: any) {
+  const companyId = Number(organization?.pocstars_company_id);
+  if (!Number.isSafeInteger(companyId) || companyId <= 0) {
+    return { seats: null, warning: undefined };
+  }
+  const wanted = Math.max(1, Number(organization.radio_seats) || 1)
+    + Math.max(0, Number(organization.platform_radio_seats) || 0);
+  try {
+    const existing: any = await provisionOnNetwork("provision.seats", { companyId });
+    const have = Array.isArray(existing) ? existing.length : 0;
+    if (have >= wanted) return { seats: null, warning: undefined };
+    const seats = await provisionOnNetwork("provision.seats.add", {
+      companyId, count: wanted - have, slug: organization.slug,
+    });
+    return { seats, warning: undefined };
+  } catch (error) {
+    return {
+      seats: null,
+      warning: error instanceof Error
+        ? `The organization is live, but adding dispatcher seats failed: ${error.message}`
+        : "The organization is live, but adding dispatcher seats failed.",
+    };
+  }
+}
+
+// Take on an organization the radio-network sync discovered. Promotion is the
+// line between a company MOMAS can see and one it runs, so it is the owner's
+// call alone - the same tier that deletes an organization or changes what it
+// pays for.
+//
+// The status flips before the seats are provisioned, in that order on purpose:
+// the seat write is refused while the organization is still discovered, and a
+// failure here leaves a live organization that is merely short of seats, which
+// POST /:id/radio/seats fixes. The reverse order would leave vendor seats
+// belonging to a company nobody had agreed to operate.
+router.post("/:id/promote", requireOwner, async (c) => {
+  const user = currentUser(c);
+  const id = Number(c.req.param("id"));
+  const body = await c.req.json().catch(() => ({}));
+  try {
+    const organization = await db.promoteDiscoveredOrganization(id, {
+      radio_seats: body.radio_seats === undefined ? undefined : Number(body.radio_seats),
+      platform_radio_seats: body.platform_radio_seats === undefined
+        ? undefined
+        : Number(body.platform_radio_seats),
+      actorUserId: user?.id ?? null,
+    });
+    if (!organization) return c.json({ error: "That organization no longer exists." }, 404);
+
+    const { seats, warning } = await topUpSeatsOnNetwork(organization);
+    return c.json({ organization, seats, warning });
+  } catch (error) {
+    const next = clientError(error);
+    return c.json(next.body, next.status);
+  }
+});
+
+// Retry, or a top-up after somebody raised the seat allowance.
+router.post("/:id/radio/seats", requireOps, async (c) => {
+  const id = Number(c.req.param("id"));
+  try {
+    const organization = await db.getOrganization(id);
+    if (!organization) return c.json({ error: "That organization no longer exists." }, 404);
+    const { seats, warning } = await topUpSeatsOnNetwork(organization);
+    return c.json({ organization, seats, warning });
+  } catch (error) {
+    const next = clientError(error);
+    return c.json(next.body, next.status);
+  }
+});
 
 // Retry for a company whose radio provisioning failed at creation. Without this
 // the only record of the failure was a warning line that disappeared on the

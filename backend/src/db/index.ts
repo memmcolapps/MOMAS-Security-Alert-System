@@ -1,3 +1,9 @@
+// A company the radio-network sync found and landed as an organization, which
+// is not the same as one MOMAS operates. The whole estate is readable at this
+// status; what it gates is the three things that would let us act on a tenant
+// we have taken no responsibility for - see assertOrganizationAcceptsUsers,
+// claimSeatSlot and the provisioning guard in live-gateway.
+import { DISCOVERED_STATUS } from "../pocstars/vendor-companies";
 import { Pool } from "pg";
 import { env } from "../config";
 import { bus } from "../events";
@@ -505,6 +511,38 @@ async function init() {
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS pocstars_online BOOLEAN;
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS pocstars_last_seen_at TIMESTAMPTZ;
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS pocstars_source_dispatcher_uid TEXT;
+      -- The vendor company a radio belongs to. Group membership was the only
+      -- handle on ownership before companies were imported, which left a radio
+      -- in no group unattributable however well we knew its company.
+      ALTER TABLE devices ADD COLUMN IF NOT EXISTS pocstars_company_id TEXT;
+      -- Where a handset went when the vendor re-registered it under a new uid.
+      -- The row is kept rather than deleted: its locations, recordings and SOS
+      -- history all key on the old device_id and are still true of that period.
+      ALTER TABLE devices ADD COLUMN IF NOT EXISTS pocstars_superseded_by TEXT;
+      -- The inventory sync used to file the vendor account in the IMEI column
+      -- unconditionally, but 174 of this install's radios are smartphone app
+      -- accounts shaped pttN@REALM.TSY. Those are not IMEIs and must not be
+      -- matched on as though an operator could read one off a handset.
+      UPDATE devices SET imei = NULL
+       WHERE imei IS NOT NULL AND imei !~ '^[0-9]{14,16}$';
+      -- Defensive: an IMEI identifies one handset, so a duplicate is a
+      -- re-registration nobody reconciled. Keep it on the most recently seen
+      -- row - the live handset - and clear the rest, so the index below can be
+      -- created on an install that already carries one.
+      UPDATE devices SET imei = NULL
+       WHERE imei IS NOT NULL
+         AND device_id NOT IN (
+           SELECT DISTINCT ON (imei) device_id FROM devices
+            WHERE imei IS NOT NULL
+            ORDER BY imei, pocstars_last_seen_at DESC NULLS LAST, created_at DESC
+         );
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_devices_imei
+        ON devices(imei) WHERE imei IS NOT NULL;
+      -- Set once, when a company is first imported, so a later rename in MOMAS
+      -- is never mistaken for a hand-created organization.
+      ALTER TABLE organizations ADD COLUMN IF NOT EXISTS pocstars_imported_at TIMESTAMPTZ;
+      CREATE INDEX IF NOT EXISTS idx_devices_pocstars_company
+        ON devices(pocstars_company_id);
       CREATE UNIQUE INDEX IF NOT EXISTS uq_organizations_pocstars_company
         ON organizations(pocstars_company_id)
         WHERE pocstars_company_id IS NOT NULL;
@@ -2501,6 +2539,89 @@ async function listOrganizationCompanyIds() {
   return rows.map((row: any) => Number(row.company_id));
 }
 
+// Every slug already spoken for. The company import needs these before it can
+// derive slugs of its own, because a vendor company named after an
+// organization somebody already created by hand is the ordinary case, not the
+// exceptional one.
+async function listOrganizationSlugs() {
+  const { rows } = await pool.query("SELECT slug FROM organizations");
+  return rows.map((row: any) => String(row.slug));
+}
+
+// A vendor company IS an organization on this platform, so discovery writes the
+// organizations table directly rather than a shadow registry that would then
+// have to be kept in step with it. Landing them here also closes the
+// enumeration loop: listOrganizationCompanyIds feeds the next sync, so a
+// company only has to be discovered once.
+//
+// Two rules make this safe to run on every sync:
+//   - It only ever inserts. Once a company is an organization here, its name,
+//     seats and status are things a human sets in MOMAS, and the vendor is not
+//     the authority on any of them - a rename in our UI must not be reverted by
+//     a five-minute sync.
+//   - It lands the organization as 'discovered', never 'active'. Importing a
+//     company is not the same as taking responsibility for operating it.
+async function importPocstarsCompanies(companies: Array<{
+  companyId: number;
+  name: string;
+  slug: string;
+  radioSeats: number;
+  platformRadioSeats: number;
+}>) {
+  const imported: any[] = [];
+  let skipped = 0;
+  if (!Array.isArray(companies) || !companies.length) return { imported, skipped };
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const company of companies) {
+      // ON CONFLICT carries no target on purpose: the company id and the slug
+      // both have unique indexes, and either one already being taken means the
+      // same thing here - somebody got there first, leave their row alone.
+      const { rows } = await client.query(
+        `INSERT INTO organizations (
+           name, slug, status, all_states, pocstars_company_id, pocstars_company_name,
+           radio_seats, platform_radio_seats, pocstars_imported_at
+         )
+         VALUES ($1,$2,'discovered',false,$3,$4,$5,$6,NOW())
+         ON CONFLICT DO NOTHING
+         RETURNING *`,
+        [
+          company.name,
+          company.slug,
+          String(company.companyId),
+          company.name,
+          Math.max(1, Number(company.radioSeats) || 2),
+          Math.max(0, Number(company.platformRadioSeats) || 0),
+        ],
+      );
+      if (rows[0]) imported.push(rows[0]);
+      else skipped += 1;
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  return { imported, skipped };
+}
+
+// Which organization owns each vendor company, for attributing a radio that
+// sits in no group at all.
+async function organizationIdsByCompanyId() {
+  const { rows } = await pool.query(
+    `SELECT id, pocstars_company_id AS company_id
+       FROM organizations
+      WHERE pocstars_company_id ~ '^[0-9]+$'`,
+  );
+  return new Map<string, number>(
+    rows.map((row: any) => [String(row.company_id), Number(row.id)]),
+  );
+}
+
 // Group ids the registry has seen. Their vendor company is the only handle we
 // have on a company no organization records.
 async function listRegistryGroupIds() {
@@ -2681,8 +2802,14 @@ async function syncPocstarsPlatformInventory(inventory: any) {
       membershipsByRadio.set(radioId, current);
     }
 
+    // Which organization owns each vendor company. A radio that sits in no
+    // claimed group used to be unattributable however well we knew its company;
+    // now that companies are organizations here, it is not.
+    const organizationByCompany = await organizationIdsByCompanyId();
+
     let radiosCreated = 0;
     let radiosUpdated = 0;
+    let radiosSuperseded = 0;
     let pooled = 0;
     let dispatchersSkipped = 0;
     const seenRadioIds: string[] = [];
@@ -2702,11 +2829,38 @@ async function syncPocstarsPlatformInventory(inventory: any) {
       );
       const existing = existingDevices[0];
       const membershipIds = membershipsByRadio.get(radioId) || [];
-
-      let organizationId: number | null = existing?.organization_id
-        ? Number(existing.organization_id)
+      const radioCompanyId = /^\d+$/.test(String(radio.companyId || ""))
+        ? String(radio.companyId)
         : null;
-      let unitId: number | null = existing?.unit_id ? Number(existing.unit_id) : null;
+      const radioImei = radio.imei ? String(radio.imei).trim() : null;
+
+      // IMEI-first reconciliation. The vendor issues a fresh uid when a handset
+      // is re-flashed or re-provisioned, and the uid is what every MOMAS row
+      // keys on - so without this the same physical radio arrives as a brand
+      // new pool device while its old row goes stale, and an organization
+      // silently loses a handset it is still holding in its hand.
+      //
+      // Only the MOMAS-side facts move across. The history stays with the old
+      // device_id, which is the honest record: the vendor considers it a
+      // different user, and those locations and recordings really were made
+      // under it. The uid remains the storage key; the IMEI is how we recognise
+      // the hardware behind two of them.
+      let predecessor: any = null;
+      if (!existing && radioImei) {
+        const { rows: predecessors } = await client.query(
+          `SELECT * FROM devices
+            WHERE imei = $1 AND device_id <> $2 AND pocstars_managed = true
+            FOR UPDATE`,
+          [radioImei, radioId],
+        );
+        predecessor = predecessors[0] || null;
+      }
+      const prior = existing || predecessor;
+
+      let organizationId: number | null = prior?.organization_id
+        ? Number(prior.organization_id)
+        : null;
+      let unitId: number | null = prior?.unit_id ? Number(prior.unit_id) : null;
 
       if (organizationId) {
         // Assigned radio: keep its organization. Re-derive the unit only from
@@ -2734,21 +2888,49 @@ async function syncPocstarsPlatformInventory(inventory: any) {
           organizationId = target.organizationId;
           unitId = target.unitId;
         } else {
-          pooled += 1;
+          // The vendor company, second and not first. A claimed channel is a
+          // decision somebody made here, and it must keep outranking the
+          // company the radio happens to sit in - otherwise importing a company
+          // would quietly pull radios back off the channels an operator had
+          // already given them away on.
+          //
+          // Where it does apply, this is what stops another tenant's handsets
+          // from sitting in our allocatable pool looking like spare hardware.
+          const companyOrganizationId = radioCompanyId
+            ? organizationByCompany.get(radioCompanyId)
+            : undefined;
+          if (companyOrganizationId) organizationId = companyOrganizationId;
+          else pooled += 1;
         }
+      }
+
+      // An IMEI identifies one handset, so it has to be released by the old row
+      // before the new one can take it. Retiring the predecessor here rather
+      // than afterwards also means a failure leaves the old row intact and
+      // still owning the radio, instead of two rows owning it or neither.
+      if (predecessor) {
+        await client.query(
+          `UPDATE devices
+              SET imei = NULL, active = false, pocstars_online = false,
+                  pocstars_superseded_by = $2
+            WHERE device_id = $1`,
+          [String(predecessor.device_id), radioId],
+        );
+        radiosSuperseded += 1;
       }
 
       await client.query(
         `INSERT INTO devices (
            device_id, organization_id, unit_id, name, company, operator,
-           device_type, active, pocstars_managed, pocstars_online,
-           pocstars_last_seen_at, pocstars_source_dispatcher_uid, imei
+           device_type, notes, active, pocstars_managed, pocstars_online,
+           pocstars_last_seen_at, pocstars_source_dispatcher_uid, imei,
+           pocstars_company_id
          )
          VALUES (
-           $1,$2,$3,$4,NULL,NULL,'handheld',true,true,
+           $1,$2,$3,$4,NULL,$10,COALESCE($11,'handheld'),$12,true,true,
            CASE WHEN $7::boolean THEN $5::boolean ELSE NULL END,
            CASE WHEN $7::boolean THEN NOW() ELSE NULL END,
-           $6, $8
+           $6, $8, $9
          )
          ON CONFLICT (device_id) DO UPDATE SET
            organization_id = EXCLUDED.organization_id,
@@ -2763,7 +2945,10 @@ async function syncPocstarsPlatformInventory(inventory: any) {
            pocstars_source_dispatcher_uid = EXCLUDED.pocstars_source_dispatcher_uid,
            -- Only the database plane carries the IMEI (the voice plane's contact
            -- list has no account), so keep the known value when a sync omits it.
-           imei = COALESCE(EXCLUDED.imei, devices.imei)`,
+           imei = COALESCE(EXCLUDED.imei, devices.imei),
+           -- A radio's company changes when a platform admin reassigns it, and
+           -- the vendor is the authority on where it ended up.
+           pocstars_company_id = COALESCE(EXCLUDED.pocstars_company_id, devices.pocstars_company_id)`,
         [
           radioId,
           organizationId,
@@ -2772,7 +2957,14 @@ async function syncPocstarsPlatformInventory(inventory: any) {
           Boolean(radio.online),
           dispatcherUid,
           presenceKnown,
-          radio.imei ? String(radio.imei).trim() : null,
+          radioImei,
+          radioCompanyId,
+          // Inherited only when this row is replacing a re-registered handset;
+          // null on an ordinary radio, where the ON CONFLICT clause preserves
+          // whatever an operator has already typed here.
+          predecessor?.operator || null,
+          predecessor?.device_type || null,
+          predecessor?.notes || null,
         ],
       );
       seenRadioIds.push(radioId);
@@ -2838,8 +3030,12 @@ async function syncPocstarsPlatformInventory(inventory: any) {
       radiosCreated,
       radiosUpdated,
       radiosMarkedInactive: staleResult.rowCount,
+      // Handsets the vendor re-registered under a new uid, recognised by IMEI
+      // and carried across rather than left behind as a stale row.
+      radiosSuperseded,
       dispatchersSkipped,
       pooled,
+      companiesImported: inventory.companiesImported || [],
       source: String(inventory.source || "voice"),
       presenceKnown,
       observedAt: inventory.observedAt || new Date().toISOString(),
@@ -3423,6 +3619,19 @@ async function updateOrganizationAccess(id, {
   radio_seats,
   platform_radio_seats,
 }) {
+  // Promotion is the only way out of 'discovered'. Without this an operator
+  // could set the status here instead and take on another operator's company
+  // without the owner's decision, the audit row, or the seats that make the
+  // company usable - every guard bypassed by editing one dropdown.
+  if (status !== undefined && status !== null && String(status) !== DISCOVERED_STATUS) {
+    const current = await getOrganization(id);
+    if (current && String(current.status) === DISCOVERED_STATUS) {
+      throw new Error(
+        `${current.name} was discovered on the radio network. Promote it rather than changing its status.`,
+      );
+    }
+  }
+
   const { rows } = await pool.query(
     `UPDATE organizations
         SET all_states = COALESCE($2, all_states),
@@ -3452,6 +3661,84 @@ async function updateOrganizationAccess(id, {
   );
   if (!rows[0]) return null;
   if (states !== undefined) await setOrganizationStates(id, states);
+  return getOrganization(id);
+}
+
+
+function isDiscoveredOrganization(organization: any) {
+  return String(organization?.status || "") === DISCOVERED_STATUS;
+}
+
+async function getOrganizationByCompanyId(companyId: number | string) {
+  const { rows } = await pool.query(
+    "SELECT * FROM organizations WHERE pocstars_company_id = $1",
+    [String(companyId)],
+  );
+  return rows[0] ?? null;
+}
+
+// Chokepoint one of three. No membership means no login, which forecloses the
+// whole external-admin question until somebody has deliberately promoted the
+// organization - and it does so in one place rather than in every route that
+// can reach a user.
+async function assertOrganizationAcceptsUsers(organizationId: number) {
+  const organization = await getOrganization(organizationId);
+  if (organization && isDiscoveredOrganization(organization)) {
+    throw new Error(
+      `${organization.name} was discovered on the radio network and is not operated by MOMAS yet. `
+      + "Promote it before adding users.",
+    );
+  }
+}
+
+// Taking responsibility for a discovered organization. This is the line between
+// "a company we can see" and "a company we run": it is the moment its seat
+// count stops being a record of what the vendor gave them and becomes an
+// allocation we own, so the seat decision is made here rather than at import.
+async function promoteDiscoveredOrganization(id: number, {
+  radio_seats,
+  platform_radio_seats,
+  actorUserId = null,
+}: {
+  radio_seats?: number;
+  platform_radio_seats?: number;
+  actorUserId?: number | null;
+} = {}) {
+  const organization = await getOrganization(id);
+  if (!organization) return null;
+  if (!isDiscoveredOrganization(organization)) {
+    throw new Error(`${organization.name} is already operated by MOMAS.`);
+  }
+
+  const tenantSeats = radio_seats === undefined
+    ? Math.max(1, Number(organization.radio_seats) || 1)
+    : Math.max(1, Number(radio_seats) || 1);
+  const platformSeats = platform_radio_seats === undefined
+    ? 0
+    : Math.max(0, Number(platform_radio_seats) || 0);
+
+  const { rows } = await pool.query(
+    `UPDATE organizations
+        SET status = 'active', radio_seats = $2, platform_radio_seats = $3, updated_at = NOW()
+      WHERE id = $1 AND status = $4
+      RETURNING *`,
+    [id, tenantSeats, platformSeats, DISCOVERED_STATUS],
+  );
+  if (!rows[0]) throw new Error("That organization was promoted by somebody else already.");
+
+  await createAuditLog({
+    organization_id: id,
+    actor_user_id: actorUserId,
+    action: "organization.promoted",
+    target_type: "organization",
+    target_id: String(id),
+    metadata: {
+      pocstars_company_id: organization.pocstars_company_id || null,
+      seats_before: Number(organization.radio_seats) || null,
+      radio_seats: tenantSeats,
+      platform_radio_seats: platformSeats,
+    },
+  });
   return getOrganization(id);
 }
 
@@ -3692,6 +3979,7 @@ function assertCanJoinOrganization(user) {
 }
 
 async function addOrganizationUser({ organization_id, email, name, password, role = "viewer" }) {
+  await assertOrganizationAcceptsUsers(organization_id);
   let user = await getUserByEmail(email);
   if (!user) {
     user = await createUser({ email, name, password, platform_role: "none" });
@@ -3717,6 +4005,7 @@ async function upsertOrganizationUser({
   scope_level = "organization",
   allowCrossOrganization = false,
 }) {
+  await assertOrganizationAcceptsUsers(organization_id);
   let user = await getUserByEmail(email);
   if (!user) {
     if (!password) throw new Error("Enter a temporary password for new users.");
@@ -4027,6 +4316,12 @@ export {
   assignDeviceToUnit,
   hasPocstarsDispatchers,
   listOrganizationCompanyIds,
+  listOrganizationSlugs,
+  getOrganizationByCompanyId,
+  promoteDiscoveredOrganization,
+  DISCOVERED_STATUS,
+  importPocstarsCompanies,
+  organizationIdsByCompanyId,
   listRegistryGroupIds,
   getPocstarsDispatcherName,
   refreshPocstarsPresence,

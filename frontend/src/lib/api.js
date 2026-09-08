@@ -96,6 +96,23 @@ export function provisionOrganizationRadio(id) {
   return request(`/api/organizations/${id}/radio/provision`, { method: "POST" });
 }
 
+// Take on a company the radio-network sync discovered. The seat counts are sent
+// with it because promotion is where they stop describing what the vendor gave
+// the company and start being an allocation MOMAS owns.
+export function promoteOrganization(id, payload) {
+  return request(`/api/organizations/${id}/promote`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+// Bring the radio network's dispatcher seats up to the allowance. Idempotent,
+// so it is both the retry when promotion's own attempt failed and the way to
+// apply a raised allowance.
+export function topUpOrganizationSeats(id) {
+  return request(`/api/organizations/${id}/radio/seats`, { method: "POST" });
+}
+
 export function getOrganizationDeletionImpact(id) {
   return request(`/api/organizations/${id}/deletion-impact`);
 }

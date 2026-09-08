@@ -5,6 +5,12 @@ import { env } from "../config";
 import * as db from "../db";
 import { PocstarsBridgeClient } from "./bridge-client";
 import { type CompanySnapshot, shapeDatabaseInventory } from "./inventory-snapshot";
+import {
+  DISCOVERED_STATUS,
+  isReadOnlyProvisionCommand,
+  refuseDiscoveredWrite,
+  shapeVendorCompanies,
+} from "./vendor-companies";
 
 type ActiveSession = {
   ws: WSContext;
@@ -54,6 +60,18 @@ async function claimSeatSlot(user: any, organizationId: number | null) {
   reapDeadSessions();
   const isPlatform = isPlatformStaff(user);
   const organization = organizationId ? await db.getOrganization(organizationId) : null;
+  // Chokepoint three. A discovered organization's seats belong to a control
+  // room that is not ours - most of them have exactly one - so leasing one
+  // would take another operator's console off them mid-shift to serve a
+  // channel we only have permission to look at.
+  if (organization && String(organization.status) === DISCOVERED_STATUS) {
+    return {
+      ok: false as const,
+      message: `${organization.name} was discovered on the radio network and is not operated by MOMAS yet. `
+        + "Promote it before opening a radio console.",
+      busyBy: null,
+    };
+  }
   const limit = isPlatform
     ? Number(organization?.platform_radio_seats ?? 1)
     : Number(organization?.radio_seats ?? 2);
@@ -161,6 +179,45 @@ export function knownCompanyIds() {
   return [...lastCompanyIds];
 }
 
+// Discovery. Every other handle MOMAS has on a company - an organization's
+// recorded id, the owner of a claimed group - can only find a company MOMAS
+// already knew about, which left the rest of this shared install invisible to
+// us. Asking the vendor outright is the only way to see a company nobody here
+// has ever mentioned.
+//
+// This runs before enumeration on purpose: a company landed as an organization
+// is picked up by listOrganizationCompanyIds on this very sync, so a newly
+// discovered company brings its radios along the same run rather than the next.
+async function importVendorCompanies(client: PocstarsBridgeClient) {
+  const companies = await client.provision("provision.companies").catch((error) => {
+    // Discovery is additive, and the sync it precedes works without it. A
+    // bridge too old to answer this command must not cost us the inventory.
+    console.warn(
+      "The radio network could not be asked for its companies:",
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  });
+  if (!Array.isArray(companies) || !companies.length) return { imported: [], skipped: 0 };
+
+  // Companies MOMAS already holds are dropped before shaping rather than after,
+  // so an existing organization's slug is never treated as a collision with
+  // itself and handed the fallback form.
+  const known = new Set((await db.listOrganizationCompanyIds()).map(String));
+  const fresh = companies.filter((company: any) => !known.has(String(company?.companyId)));
+  if (!fresh.length) return { imported: [], skipped: 0 };
+
+  const taken = new Set(await db.listOrganizationSlugs());
+  const result = await db.importPocstarsCompanies(shapeVendorCompanies(fresh, taken));
+  if (result.imported.length) {
+    console.log(
+      `Radio network discovery: imported ${result.imported.length} companies as organizations ` +
+      `(${result.imported.map((organization: any) => organization.slug).join(", ")}).`,
+    );
+  }
+  return result;
+}
+
 // Every vendor company MOMAS should enumerate: the ones organizations record
 // for themselves, plus whichever company owns a group already in the registry.
 // The second half is what finds the platform's original company, which predates
@@ -216,6 +273,8 @@ async function queryInventoryFromDatabase() {
       return null;
     }
 
+    const discovery = await importVendorCompanies(client);
+
     const companyIds = await resolveCompanyIds(client);
     // Nothing to enumerate yet: a first-ever sync, before any group or
     // organization has given us a company to ask about. The voice plane can
@@ -225,20 +284,24 @@ async function queryInventoryFromDatabase() {
 
     // Past this point the database plane is known to work, so a failure is a
     // real one and belongs to the caller rather than to a silent fallback.
-    return await buildDatabaseInventory(client, companyIds);
+    return await buildDatabaseInventory(client, companyIds, discovery.imported);
   } finally {
     await client.close().catch(() => {});
   }
 }
 
-async function buildDatabaseInventory(client: PocstarsBridgeClient, companyIds: number[]) {
+async function buildDatabaseInventory(
+  client: PocstarsBridgeClient,
+  companyIds: number[],
+  companiesImported: any[] = [],
+) {
   const companySnapshots: CompanySnapshot[] = [];
   for (const companyId of companyIds) {
     const [groups, radios] = await Promise.all([
       client.provision("provision.groups", { companyId }),
       client.provision("provision.radios", { companyId }),
     ]);
-    companySnapshots.push({ groups, radios });
+    companySnapshots.push({ companyId, groups, radios });
   }
 
   // Keep reporting the configured dispatcher as the source. It is what the
@@ -251,10 +314,36 @@ async function buildDatabaseInventory(client: PocstarsBridgeClient, companyIds: 
       id: dispatcherUid,
       name: (await db.getPocstarsDispatcherName(dispatcherUid)) || `Dispatcher ${dispatcherUid}`,
     },
+    // Carried so the operator who pressed Sync can see what discovery did on
+    // this run, rather than having to notice new rows in the organization list.
+    companiesImported: companiesImported.map((organization: any) => ({
+      id: Number(organization.id),
+      name: String(organization.name),
+      slug: String(organization.slug),
+      companyId: String(organization.pocstars_company_id),
+    })),
     source: "database",
     presenceKnown: false,
     observedAt: new Date().toISOString(),
   };
+}
+
+// Chokepoint two, and the one that prevents real-world damage: a write into a
+// company we do not own, on a platform whose vendor is discontinued and has no
+// support path if it goes wrong. It sits inside provisionOnNetwork rather than
+// in the thirteen routes that call it, so a route added later is guarded by
+// default instead of by remembering.
+//
+// A company with no organization behind it - the unallocated pool, or one this
+// install carries that MOMAS has never imported - is left alone: it is not a
+// tenant, and the pool in particular has to stay writable for allocation.
+async function assertCompanyIsOperated(command: string, payload: Record<string, unknown>) {
+  if (isReadOnlyProvisionCommand(command)) return;
+  const companyId = Number(payload.companyId);
+  if (!Number.isSafeInteger(companyId) || companyId <= 0) return;
+  const organization = await db.getOrganizationByCompanyId(companyId).catch(() => null);
+  const refusal = refuseDiscoveredWrite(command, organization);
+  if (refusal) throw new Error(refusal);
 }
 
 // Provisioning opens its own short-lived bridge connection. It never leases a
@@ -262,6 +351,10 @@ async function buildDatabaseInventory(client: PocstarsBridgeClient, companyIds: 
 // vendor database, without touching the voice session - so it runs alongside
 // live audio instead of waiting for it.
 export async function provisionOnNetwork(command: string, payload: Record<string, unknown> = {}) {
+  // Permission before capability: whether we are allowed to touch this company
+  // does not depend on whether the link happens to be up, and checking it first
+  // means the refusal is the same either way.
+  await assertCompanyIsOperated(command, payload);
   if (!liveRadioConfigured()) {
     throw new Error("The radio network link is not configured on this MOMAS server.");
   }

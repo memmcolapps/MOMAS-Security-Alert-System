@@ -18,11 +18,24 @@ import { isPlatformOperator } from "../lib/platform-roles";
 // three states an admin scans this list for, and none of them were visible:
 // every row rendered identically whether it was ready to use or half-built.
 function companyIssues(org) {
+  // A discovered company has none of these by definition - it is another
+  // operator's, found by the radio-network sync, and MOMAS has deliberately not
+  // given it channels or admins. Flagging that as "needs setup" would put an
+  // amber warning on most of the list and hide the companies that really are
+  // half-built.
+  if (isDiscovered(org)) return [];
   const issues = [];
   if (!org.pocstars_company_id) issues.push("not on the radio network");
   if (!org.channel_count) issues.push("no channels");
   if (!org.user_count) issues.push("no admins");
   return issues;
+}
+
+// A company the radio-network sync found and landed here, which is not the same
+// as one MOMAS operates. Visible to everybody, actionable by nobody until an
+// owner promotes it.
+function isDiscovered(org) {
+  return org?.status === "discovered";
 }
 
 const emptyOrg = {
@@ -41,6 +54,10 @@ export function AdminOrganizationsRoute() {
   const [creating, setCreating] = useState(false);
   const [orgForm, setOrgForm] = useState(emptyOrg);
   const [search, setSearch] = useState("");
+  // The sync brings in every company on the shared radio network - dozens of
+  // them, most belonging to other operators - so the companies MOMAS actually
+  // runs have to stay findable. Operated is the default view for that reason.
+  const [scope, setScope] = useState("operated");
 
   const orgsQuery = useQuery({
     queryKey: ["organizations"],
@@ -59,13 +76,16 @@ export function AdminOrganizationsRoute() {
   });
 
   const organizations = useMemo(() => orgsQuery.data?.organizations || [], [orgsQuery.data?.organizations]);
+  const discoveredCount = useMemo(() => organizations.filter(isDiscovered).length, [organizations]);
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
-    if (!term) return organizations;
-    return organizations.filter((org) =>
-      [org.name, org.slug].filter(Boolean).some((value) => value.toLowerCase().includes(term)),
-    );
-  }, [organizations, search]);
+    return organizations.filter((org) => {
+      if (scope === "operated" && isDiscovered(org)) return false;
+      if (scope === "discovered" && !isDiscovered(org)) return false;
+      if (!term) return true;
+      return [org.name, org.slug].filter(Boolean).some((value) => value.toLowerCase().includes(term));
+    });
+  }, [organizations, search, scope]);
 
   return (
     <main className="device-page bg-ops-bg px-6 pb-8 pt-20 text-neutral-200">
@@ -160,6 +180,33 @@ export function AdminOrganizationsRoute() {
         </form>
       ) : null}
 
+      {discoveredCount ? (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          {[
+            { key: "operated", label: `Operated (${organizations.length - discoveredCount})` },
+            { key: "discovered", label: `Discovered (${discoveredCount})` },
+            { key: "all", label: `All (${organizations.length})` },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setScope(tab.key)}
+              className={`rounded-full border px-3 py-1 text-[11px] font-bold transition ${
+                scope === tab.key
+                  ? "border-ops-red/50 bg-ops-red/15 text-ops-red"
+                  : "border-white/10 bg-white/[0.03] text-neutral-400 hover:text-neutral-200"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+          <p className="basis-full text-[10px] text-neutral-600">
+            Discovered companies were found on the shared radio network. MOMAS can see their radios but
+            cannot add users, change their channels or use their consoles until an owner promotes them.
+          </p>
+        </div>
+      ) : null}
+
       <div className="mb-4 flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-3 py-2">
         <Search size={14} className="text-neutral-500" />
         <input
@@ -177,7 +224,8 @@ export function AdminOrganizationsRoute() {
         <div className="divide-y divide-white/5">
           {filtered.map((org) => {
             const issues = companyIssues(org);
-            const suspended = org.status !== "active";
+            const discovered = isDiscovered(org);
+            const suspended = !discovered && org.status !== "active";
             return (
               <Link
                 key={org.id}
@@ -187,13 +235,26 @@ export function AdminOrganizationsRoute() {
               >
                 <span
                   className={`mt-1.5 h-2 w-2 shrink-0 self-start rounded-full ${
-                    issues.length ? "bg-amber-400" : suspended ? "bg-neutral-600" : "bg-ops-green"
+                    issues.length ? "bg-amber-400"
+                      : discovered ? "bg-sky-400"
+                      : suspended ? "bg-neutral-600"
+                      : "bg-ops-green"
                   }`}
-                  title={issues.length ? `Needs setup: ${issues.join(", ")}` : suspended ? "Suspended" : "Ready"}
+                  title={
+                    issues.length ? `Needs setup: ${issues.join(", ")}`
+                      : discovered ? "Discovered on the radio network - not operated by MOMAS"
+                      : suspended ? "Suspended"
+                      : "Ready"
+                  }
                 />
                 <div className="min-w-0 flex-1">
                   <h3 className="flex items-center gap-2 text-sm font-bold text-neutral-100">
                     {org.name}
+                    {discovered ? (
+                      <span className="rounded-full border border-sky-400/30 bg-sky-400/10 px-2 py-0.5 text-[9px] font-bold uppercase text-sky-300">
+                        Discovered
+                      </span>
+                    ) : null}
                     {suspended ? (
                       <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[9px] font-bold uppercase text-neutral-400">
                         Suspended
@@ -219,7 +280,11 @@ export function AdminOrganizationsRoute() {
           {!orgsQuery.isLoading && !filtered.length ? (
             <div className="px-4 py-12 text-center text-[12px] text-neutral-500">
               <Building2 className="mx-auto mb-2" size={28} />
-              {search ? "No companies match your search" : "No companies yet"}
+              {search
+                ? "No companies match your search"
+                : scope === "discovered"
+                  ? "No companies discovered on the radio network yet"
+                  : "No companies yet"}
             </div>
           ) : null}
         </div>

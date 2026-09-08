@@ -216,6 +216,112 @@ export class PocstarsProvisioning {
     }
   }
 
+  // Extra dispatcher seats for a company that already exists. This is the only
+  // write MOMAS makes into a company it did not create, and it happens exactly
+  // once per organization, at promotion - the moment somebody decided we
+  // operate them. Most companies on this install were sold a single seat, and a
+  // single seat goes deaf to its own channel for the duration of any private
+  // call, so a control room MOMAS runs needs more than the vendor left behind.
+  async addSeats({ companyId, count, slug, serviceEndsAt }: {
+    companyId: number; count: number; slug?: string; serviceEndsAt: string;
+  }) {
+    const wanted = Math.max(1, Math.min(50, Math.floor(count)));
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      const [companies]: any = await connection.query(
+        "SELECT Corg_ID, Corg_Name, Aorg_ID, Dis_Size FROM tb_ComOrg WHERE Corg_ID = ? AND IsActive = 1 FOR UPDATE",
+        [companyId],
+      );
+      if (!companies.length) throw new Error(`Unknown or inactive company ${companyId}.`);
+      const company = companies[0];
+
+      // Follow the company's own naming rather than inventing a second scheme:
+      // a vendor-created company's seats are already dpN@THEIRREALM.TSY, and a
+      // console operator reading two different realms in one company would have
+      // no way to tell which accounts are theirs.
+      const [seats]: any = await connection.query(
+        "SELECT User_Account FROM tb_User WHERE User_CompanyID = ? AND User_Type = 3",
+        [companyId],
+      );
+      const realm = this.realmFromSeats(seats.map((seat: any) => String(seat.User_Account)))
+        || this.realmFor(slug || String(company.Corg_Name || ""));
+
+      const taken = new Set(seats.map((seat: any) => String(seat.User_Account).toUpperCase()));
+      const created: Array<{ uid: number; account: string }> = [];
+      let index = 1;
+      while (created.length < wanted) {
+        if (index > 200) throw new Error(`No free dispatcher account name for company ${companyId}.`);
+        const account = `dp${index}@${realm}.TSY`;
+        index += 1;
+        if (taken.has(account.toUpperCase())) continue;
+        // The account name may also be held by another company on this shared
+        // install, which the local set above cannot see.
+        const [clash]: any = await connection.query(
+          "SELECT User_ID FROM tb_User WHERE User_Account = ?",
+          [account],
+        );
+        if (clash.length) continue;
+        created.push({ uid: await this.insertSeat(connection, {
+          account, companyId, agentOrgId: company.Aorg_ID, serviceEndsAt,
+        }), account });
+      }
+
+      // The size cap is what the vendor console shows an administrator. Leaving
+      // it behind would make the company look over-provisioned to anyone
+      // reading the vendor UI. Last_Update_Time is explicit because nothing in
+      // this schema sets it for us.
+      await connection.query(
+        "UPDATE tb_ComOrg SET Dis_Size = ?, Last_Update_Time = NOW() WHERE Corg_ID = ?",
+        [Math.max(Number(company.Dis_Size || 0), seats.length + created.length), companyId],
+      );
+
+      await connection.commit();
+      return { companyId, realm, seats: created };
+    } catch (error) {
+      await connection.rollback().catch(() => {});
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  // dp3@EPAIL.TSY -> EPAIL. Only a name the company already uses counts, so a
+  // stray account cannot rename the realm for every seat added afterwards.
+  private realmFromSeats(accounts: string[]) {
+    const counts = new Map<string, number>();
+    for (const account of accounts) {
+      const match = /^dp\d+@([A-Za-z0-9]+)\.TSY$/.exec(String(account).trim());
+      if (!match) continue;
+      const realm = match[1].toUpperCase();
+      counts.set(realm, (counts.get(realm) || 0) + 1);
+    }
+    let best: string | null = null;
+    for (const [realm, count] of counts) {
+      if (!best || count > (counts.get(best) || 0)) best = realm;
+    }
+    return best;
+  }
+
+  private async insertSeat(connection: any, { account, companyId, agentOrgId, serviceEndsAt }: {
+    account: string; companyId: number; agentOrgId: number | null; serviceEndsAt: string;
+  }) {
+    const [seat]: any = await connection.query(
+      `INSERT INTO tb_User
+         (User_Account, User_Password, User_Name, User_CompanyID, User_AgentID,
+          User_Type, User_AudioStatus, User_Enable, IsActive, User_Back,
+          Parent_CompanyID, User_Banned, User_Encrypt, network_type, chargeType,
+          User_GPSswitch, User_GPSfrequency, sort,
+          User_CreateTime, User_UpdateTime, User_ServiceBeginTime, User_ServiceEndTime,
+          Creation_Time, Last_Update_Time)
+       VALUES (?, ?, ?, ?, ?, 3, 1, 1, 1, 1, ?, 0, 0, 1, 1, 1, 30, 99,
+               NOW(), NOW(), NOW(), ?, NOW(), NOW())`,
+      [account, this.newSeatPasswordHash(), account, companyId, agentOrgId, companyId, serviceEndsAt],
+    );
+    return Number(seat.insertId);
+  }
+
   // echat compares against the stored value, so a random hash is a password
   // nobody knows and nobody needs to know.
   private newSeatPasswordHash() {
@@ -302,6 +408,43 @@ export class PocstarsProvisioning {
     const companyId = Number(created.insertId);
     if (!companyId) throw new Error("The radio network did not return a pool company id.");
     return companyId;
+  }
+
+  // Every company on this install. This is the only way MOMAS can learn about a
+  // company nobody has told it about: every other handle it has - an
+  // organization's recorded id, the owner of a claimed group - can only find a
+  // company MOMAS already knew. The counts ride along because the caller sizes
+  // an imported organization's seats from them, and asking per company would be
+  // one round trip each over the tunnel for what a single join answers.
+  async listCompanies() {
+    const [rows]: any = await this.pool.query(
+      `SELECT c.Corg_ID AS companyId, c.Corg_Name AS name,
+              c.Corg_Parent AS parentId, c.Dis_Size AS seatCap,
+              COUNT(DISTINCT CASE WHEN u.User_Type = 0 THEN u.User_ID END) AS radios,
+              COUNT(DISTINCT CASE WHEN u.User_Type = 3 AND u.User_Enable = 1
+                                    AND u.User_Banned = 0 THEN u.User_ID END) AS seats
+         FROM tb_ComOrg c
+         LEFT JOIN tb_User u ON u.User_CompanyID = c.Corg_ID AND u.IsActive = 1
+        WHERE c.IsActive = 1
+        GROUP BY c.Corg_ID, c.Corg_Name, c.Corg_Parent, c.Dis_Size
+        ORDER BY c.Corg_ID`,
+    );
+    return rows.map((row: any) => ({
+      companyId: Number(row.companyId),
+      name: String(row.name || `Company ${row.companyId}`),
+      parentId: row.parentId === null ? null : Number(row.parentId),
+      seatCap: Number(row.seatCap || 0),
+      radios: Number(row.radios || 0),
+      // Banned and disabled seats are excluded for the same reason listSeats
+      // excludes them: they cannot be leased, so counting them would size an
+      // organization for capacity it does not have.
+      seats: Number(row.seats || 0),
+      // The pool has to be enumerated - its radios are real handsets and would
+      // be swept as stale if the sync stopped seeing them - but it must never
+      // become an organization. An owner is precisely what a pooled radio does
+      // not have.
+      isPool: String(row.name || "") === PocstarsProvisioning.POOL_COMPANY_NAME,
+    }));
   }
 
   // Move a handset to another organization. The uid does not change, which is

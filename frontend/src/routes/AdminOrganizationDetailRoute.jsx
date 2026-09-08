@@ -12,8 +12,10 @@ import {
   getOrganization,
   getOrganizationDeletionImpact,
   listDevices,
+  promoteOrganization,
   provisionOrganizationRadio,
   removeOrganizationUser,
+  topUpOrganizationSeats,
   updateOrganizationAccess,
 } from "../lib/api";
 import { NIGERIAN_STATES, ORG_ROLES, deviceTypeLabel, orgRoleLabel } from "../lib/domain";
@@ -89,6 +91,7 @@ export function AdminOrganizationDetailRoute() {
         <p className="mt-1 text-[11px] text-neutral-500">
           {organization.slug} · {devices.length} radio{devices.length === 1 ? "" : "s"} · {channels.length} channel{channels.length === 1 ? "" : "s"} · {users.length} admin{users.length === 1 ? "" : "s"}
         </p>
+        {organization.status === "discovered" ? <PromotePanel organization={organization} /> : null}
         {!organization.pocstars_company_id ? (
           <p className="mt-2 inline-flex items-center gap-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-200">
             <AlertTriangle size={12} /> This company is not on the radio network yet.
@@ -350,8 +353,8 @@ function RadioSection({ organization, channels, onSaved, onDirtyChange }) {
         <h2 className="mb-1 text-[13px] font-bold text-ops-red">Seats</h2>
         <p className="mb-4 text-[11px] text-neutral-500">
           How many audio sessions can run at once. Platform seats are reserved for us, so our
-          monitoring never consumes theirs. Changing these does not resize the company on the
-          radio network — that is done there.
+          monitoring never consumes theirs. Saving here changes the allowance in MOMAS only; use
+          the button below to create the matching dispatcher seats on the radio network.
         </p>
         <div className="grid gap-3 md:grid-cols-2">
           <Field label="Radio seats (their concurrent audio sessions)">
@@ -377,6 +380,12 @@ function RadioSection({ organization, channels, onSaved, onDirtyChange }) {
           allowed={canOwn}
           deniedNote="Only a platform owner can change seat counts."
         />
+        {/* Raising the allowance above is a MOMAS number; the radio network only
+            hands out consoles it actually has. This provisions the shortfall,
+            and does nothing when there isn't one. */}
+        {canWrite && organization.pocstars_company_id ? (
+          <SeatTopUpButton organization={organization} />
+        ) : null}
       </div>
 
       {canWrite && organization.pocstars_company_id ? (
@@ -872,6 +881,133 @@ function StatePicker({ value, onChange }) {
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// Taking on a company the radio-network sync discovered. It sits at the top of
+// the page because until it is answered every other tab on this page is
+// read-only: MOMAS can see the company's radios but must not add users, touch
+// its channels, or lease its consoles.
+//
+// The seat question is asked here rather than assumed, because this is the
+// moment the number stops describing what the vendor sold the company and
+// starts being an allocation MOMAS owns and must provision.
+function PromotePanel({ organization }) {
+  const { canOwn } = usePlatformTier();
+  const queryClient = useQueryClient();
+  const vendorSeats = Math.max(1, Number(organization.radio_seats) || 1);
+  const [tenantSeats, setTenantSeats] = useState(String(Math.max(2, vendorSeats)));
+  const [platformSeats, setPlatformSeats] = useState("1");
+  const [result, setResult] = useState(null);
+
+  const promoteMutation = useMutation({
+    mutationFn: () => promoteOrganization(organization.id, {
+      radio_seats: Number(tenantSeats),
+      platform_radio_seats: Number(platformSeats),
+    }),
+    onSuccess: (response) => {
+      setResult(response || null);
+      queryClient.invalidateQueries({ queryKey: ["organization", String(organization.id)] });
+      queryClient.invalidateQueries({ queryKey: ["organizations"] });
+    },
+  });
+
+  return (
+    <section className="mt-3 rounded-lg border border-sky-400/30 bg-sky-400/[0.06] p-4">
+      <h2 className="flex items-center gap-2 text-[13px] font-bold text-sky-200">
+        <RadioTower size={14} /> Discovered on the radio network
+      </h2>
+      <p className="mt-1 max-w-3xl text-[11px] leading-relaxed text-neutral-400">
+        The sync found this company on the shared radio network and imported its radios so you can see
+        them. MOMAS does not operate it: nobody can be given a login here, its channels cannot be
+        changed, and its dispatcher consoles cannot be used. Promoting it says MOMAS runs this company
+        from now on.
+      </p>
+      <p className="mt-2 max-w-3xl text-[11px] leading-relaxed text-neutral-500">
+        The radio network gave it <strong className="text-neutral-300">{vendorSeats}</strong>{" "}
+        dispatcher seat{vendorSeats === 1 ? "" : "s"}. A seat is taken for the whole of a private call,
+        so a control room on one seat is deaf to its own channel while calling. Any extra seats you ask
+        for here are created on the radio network as part of promoting.
+      </p>
+
+      {canOwn ? (
+        <>
+          <div className="mt-3 grid max-w-lg gap-3 sm:grid-cols-2">
+            <Field label="Control room seats">
+              <input
+                className="field-input" type="number" min="1" value={tenantSeats}
+                onChange={(event) => setTenantSeats(event.target.value)}
+              />
+            </Field>
+            <Field label="Platform seats">
+              <input
+                className="field-input" type="number" min="0" value={platformSeats}
+                onChange={(event) => setPlatformSeats(event.target.value)}
+              />
+            </Field>
+          </div>
+          <button
+            className="mt-3 inline-flex items-center gap-2 rounded-md bg-sky-400/90 px-4 py-2 text-xs font-bold text-black hover:opacity-85 disabled:opacity-50"
+            disabled={promoteMutation.isPending}
+            onClick={() => { setResult(null); promoteMutation.mutate(); }}
+          >
+            <RadioTower size={14} />
+            {promoteMutation.isPending ? "Promoting…" : `Promote ${organization.name}`}
+          </button>
+        </>
+      ) : (
+        <p className="mt-3 text-[11px] text-neutral-500">Only a platform owner can promote a company.</p>
+      )}
+
+      {promoteMutation.error ? (
+        <p className="mt-2 text-[11px] text-ops-red">{promoteMutation.error.message}</p>
+      ) : null}
+      {result?.warning ? (
+        // The status change succeeded and the seat provisioning did not. Saying
+        // so plainly matters: the company is live but short of seats, and the
+        // Radio tab's top-up is the retry.
+        <p className="mt-2 flex items-center gap-2 text-[11px] text-amber-300">
+          <AlertTriangle size={12} className="shrink-0" /> {result.warning}
+        </p>
+      ) : null}
+      {result && !result.warning ? (
+        <p className="mt-2 text-[11px] text-ops-green">
+          Promoted.{result.seats?.seats?.length
+            ? ` ${result.seats.seats.length} dispatcher seat${result.seats.seats.length === 1 ? "" : "s"} added on the radio network.`
+            : " The radio network already had enough dispatcher seats."}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+// Retry or top-up after the allowance was raised. Idempotent on the server, so
+// pressing it when nothing is missing is harmless.
+function SeatTopUpButton({ organization }) {
+  const queryClient = useQueryClient();
+  const [message, setMessage] = useState("");
+  const mutation = useMutation({
+    mutationFn: () => topUpOrganizationSeats(organization.id),
+    onSuccess: (response) => {
+      setMessage(response?.warning
+        || (response?.seats?.seats?.length
+          ? `${response.seats.seats.length} seat(s) added on the radio network.`
+          : "The radio network already has enough dispatcher seats."));
+      queryClient.invalidateQueries({ queryKey: ["organization", String(organization.id)] });
+    },
+  });
+  return (
+    <div className="mt-2">
+      <button
+        className="rounded-md border border-white/15 px-3 py-1.5 text-[11px] font-bold text-neutral-200 hover:bg-white/5 disabled:opacity-50"
+        disabled={mutation.isPending}
+        onClick={() => { setMessage(""); mutation.mutate(); }}
+      >
+        {mutation.isPending ? "Checking…" : "Match seats on the radio network"}
+      </button>
+      {message ? <p className="mt-1 text-[11px] text-neutral-400">{message}</p> : null}
+      {mutation.error ? <p className="mt-1 text-[11px] text-ops-red">{mutation.error.message}</p> : null}
     </div>
   );
 }

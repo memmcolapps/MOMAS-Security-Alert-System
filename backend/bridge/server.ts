@@ -253,6 +253,29 @@ async function handleProvisioning(ws: ServerWebSocket<BridgeSession>, message: a
           result: { companyId: await provisioning.companyForGroup(Number(message.groupId)) },
         });
       }
+      case "provision.seats.add": {
+        const count = Number(message.count);
+        if (!Number.isSafeInteger(count) || count <= 0) return fail("A seat count is required.");
+        const added = await provisioning.addSeats({
+          companyId, count,
+          slug: message.slug ? String(message.slug) : undefined,
+          serviceEndsAt: String(message.serviceEndsAt || "2035-01-01 00:00:00"),
+        });
+        // The accounts are named, never their passwords: the bridge signs in
+        // with the stored hash and nothing else ever needs them.
+        return send(ws, {
+          type: "provision.result", requestId, ok: true,
+          result: { companyId: added.companyId, realm: added.realm, seats: added.seats },
+        });
+      }
+      case "provision.companies": {
+        // Read-only discovery. It enumerates companies MOMAS does not own, so
+        // it is deliberately the one company command that writes nothing.
+        return send(ws, {
+          type: "provision.result", requestId, ok: true,
+          result: await provisioning.listCompanies(),
+        });
+      }
       case "provision.pool": {
         // Reads look the pool up; only an allocation creates it.
         const poolId = message.create

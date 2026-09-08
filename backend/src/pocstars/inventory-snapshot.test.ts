@@ -27,6 +27,27 @@ describe("database inventory snapshot", () => {
     expect(snapshot.radios[1].name).toBe("Radio 8");
   });
 
+  test("refuses to file an app account as an IMEI", () => {
+    // 174 of this install's 726 radios are smartphone app users shaped
+    // pttN@REALM.TSY, and NCS's whole fleet is one. An IMEI is what an operator
+    // reads off a handset, so an app account must leave the column empty rather
+    // than fill it with something no hardware carries.
+    const snapshot = shapeDatabaseInventory([
+      {
+        radios: [
+          { uid: 200, account: "867539051234567", name: "Handset" },
+          { uid: 201, account: "ptt1@NCS.TSY", name: "App user" },
+          { uid: 202, account: "epail103", name: "Legacy" },
+        ],
+      },
+    ]);
+    expect(snapshot.radios[0].imei).toBe("867539051234567");
+    expect(snapshot.radios[1].imei).toBeNull();
+    expect(snapshot.radios[2].imei).toBeNull();
+    // The radio itself is still inventoried; only its IMEI is unknown.
+    expect(snapshot.radios.map((radio) => radio.id)).toEqual([200, 201, 202]);
+  });
+
   test("carries the vendor account through as the IMEI so device search matches it", () => {
     const snapshot = shapeDatabaseInventory([
       { radios: [{ uid: 100, account: "352000123456789", name: "Radio A" }, { uid: 101, name: "Radio B" }] },
