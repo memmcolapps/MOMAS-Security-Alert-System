@@ -11,6 +11,7 @@ export type VendorCompany = {
   seatCap?: number | string | null;
   radios?: number | string | null;
   seats?: number | string | null;
+  seatRows?: number | string | null;
   isPool?: boolean;
 };
 
@@ -99,9 +100,15 @@ export function shapeVendorCompanies(companies: VendorCompany[], taken: Set<stri
     // (ACP01, DCP04, DSP03) and vendor junk (test, ceshi, tttt, whx). Importing
     // them would bury the six organizations that matter in a list of empties.
     // Flip this one condition if an empty company should still appear.
+    //
+    // Emptiness is judged on dispatcher rows rather than leasable seats: a
+    // company whose licences have merely lapsed is still a real company that
+    // somebody set up, and dropping it would hide a tenant whose seats need
+    // renewing. Sizing, below, uses the leasable count instead.
     const radios = Math.max(0, Number(company.radios || 0));
     const seats = Number(company.seats || 0);
-    if (!radios && !seats) continue;
+    const seatRows = Number(company.seatRows ?? company.seats ?? 0);
+    if (!radios && !seatRows) continue;
 
     seen.add(companyId);
 
@@ -109,9 +116,10 @@ export function shapeVendorCompanies(companies: VendorCompany[], taken: Set<stri
     const slug = slugForCompany(name, companyId, taken);
     taken.add(slug);
 
-    // Prefer what the company actually has over what its size cap says it may
-    // have: the cap is an administrative number the vendor console writes and
-    // is routinely larger than the seats that exist.
+    // Prefer what the company can actually use over what its size cap says it
+    // may have: the cap is an administrative number the vendor console writes
+    // and is routinely larger than the seats that exist, and larger still than
+    // the seats that are leasable today.
     shaped.push({
       companyId,
       name,

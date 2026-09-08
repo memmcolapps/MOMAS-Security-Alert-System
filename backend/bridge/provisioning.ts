@@ -421,13 +421,20 @@ export class PocstarsProvisioning {
       `SELECT c.Corg_ID AS companyId, c.Corg_Name AS name,
               c.Corg_Parent AS parentId, c.Dis_Size AS seatCap,
               COUNT(DISTINCT CASE WHEN u.User_Type = 0 THEN u.User_ID END) AS radios,
-              COUNT(DISTINCT CASE WHEN u.User_Type = 3 AND u.User_Enable = 1
-                                    AND u.User_Banned = 0 THEN u.User_ID END) AS seats
+              COUNT(DISTINCT CASE WHEN u.User_Type = 3 THEN u.User_ID END) AS seatRows,
+              COUNT(DISTINCT CASE WHEN u.User_Type = 3
+                                    AND u.User_Enable = 1
+                                    AND COALESCE(u.User_Banned, 0) = 0
+                                    AND u.User_Account NOT LIKE CONCAT(?, '%')
+                                    AND u.User_ServiceEndTime IS NOT NULL
+                                    AND u.User_ServiceEndTime > NOW()
+                                   THEN u.User_ID END) AS seats
          FROM tb_ComOrg c
          LEFT JOIN tb_User u ON u.User_CompanyID = c.Corg_ID AND u.IsActive = 1
         WHERE c.IsActive = 1
         GROUP BY c.Corg_ID, c.Corg_Name, c.Corg_Parent, c.Dis_Size
         ORDER BY c.Corg_ID`,
+      [PocstarsProvisioning.RESERVED_ACCOUNT_PREFIX],
     );
     return rows.map((row: any) => ({
       companyId: Number(row.companyId),
@@ -435,10 +442,17 @@ export class PocstarsProvisioning {
       parentId: row.parentId === null ? null : Number(row.parentId),
       seatCap: Number(row.seatCap || 0),
       radios: Number(row.radios || 0),
-      // Banned and disabled seats are excluded for the same reason listSeats
-      // excludes them: they cannot be leased, so counting them would size an
-      // organization for capacity it does not have.
+      // Counted with listSeats' own predicate, not an approximation of it. The
+      // difference is not cosmetic: on this install NCS has three dispatcher
+      // rows and zero leasable seats, because one is MOMAS's reserved presence
+      // account and the rest have expired service dates. Sizing an imported
+      // organization from the row count would promise it consoles that echat
+      // refuses to sign in.
       seats: Number(row.seats || 0),
+      // Every dispatcher row, leasable or not. Kept beside the usable figure so
+      // an operator can see that a company has seats which merely need renewing
+      // rather than seats that do not exist.
+      seatRows: Number(row.seatRows || 0),
       // The pool has to be enumerated - its radios are real handsets and would
       // be swept as stale if the sync stopped seeing them - but it must never
       // become an organization. An owner is precisely what a pooled radio does

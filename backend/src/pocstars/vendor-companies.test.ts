@@ -78,6 +78,20 @@ describe("shaping vendor companies into organizations", () => {
     expect(shaped[0].slug).toBe("epail-13");
   });
 
+  test("sizes from leasable seats but judges emptiness on dispatcher rows", () => {
+    // NCS on the live install has three dispatcher rows and zero leasable
+    // seats: one is MOMAS's reserved presence account and the rest have expired
+    // service dates. It is plainly a real company, so it must be imported - but
+    // sized as though it had none, because echat refuses to sign those in.
+    const shaped = shapeVendorCompanies([
+      { companyId: 14, name: "NCS", radios: 92, seats: 0, seatRows: 3 },
+      { companyId: 60, name: "Lapsed", radios: 0, seats: 0, seatRows: 2 },
+      { companyId: 61, name: "Hollow", radios: 0, seats: 0, seatRows: 0 },
+    ]);
+    expect(shaped.map((company) => company.companyId)).toEqual([14, 60]);
+    expect(shaped[0].radioSeats).toBe(2);
+  });
+
   test("sizes seats from what the company has, not from its size cap", () => {
     // Dis_Size is an administrative number the vendor console writes and is
     // routinely larger than the seats that actually exist.
