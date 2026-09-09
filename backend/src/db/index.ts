@@ -519,6 +519,13 @@ async function init() {
       -- The row is kept rather than deleted: its locations, recordings and SOS
       -- history all key on the old device_id and are still true of that period.
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS pocstars_superseded_by TEXT;
+      -- When the inventory sync stopped finding this radio on the network. A
+      -- managed radio that vanishes is not the same thing as one that is
+      -- switched off, and the console used to show them identically - so an
+      -- orphan looked like a working handset somebody ought to re-save, which
+      -- is exactly what operators did, fighting the sync in a loop. Set on the
+      -- first sync that misses it, cleared the moment it is seen again.
+      ALTER TABLE devices ADD COLUMN IF NOT EXISTS pocstars_missing_since TIMESTAMPTZ;
       -- The inventory sync used to file the vendor account in the IMEI column
       -- unconditionally, but 174 of this install's radios are smartphone app
       -- accounts shaped pttN@REALM.TSY. Those are not IMEIs and must not be
@@ -2211,6 +2218,13 @@ async function listDevices(scope: any = {}) {
   }
   const { rows } = await pool.query(
     `SELECT d.*,
+            -- A radio the network no longer lists and that was never traced to
+            -- a replacement uid. Superseded rows are excluded deliberately:
+            -- those handsets are still in service under a new id, and their old
+            -- row is history rather than something to go and clean up.
+            (d.pocstars_managed
+              AND d.pocstars_missing_since IS NOT NULL
+              AND d.pocstars_superseded_by IS NULL) AS pocstars_orphaned,
             o.name AS organization_name,
             o.pocstars_company_id,
             o.pocstars_company_name,
@@ -2939,6 +2953,9 @@ async function syncPocstarsPlatformInventory(inventory: any) {
            operator = devices.operator,
            device_type = COALESCE(devices.device_type, EXCLUDED.device_type),
            active = true,
+           -- Seen again: whatever made it disappear before, it is back, and a
+           -- stale marker here would keep flagging a working radio as an orphan.
+           pocstars_missing_since = NULL,
            pocstars_managed = true,
            pocstars_online = CASE WHEN $7::boolean THEN EXCLUDED.pocstars_online ELSE devices.pocstars_online END,
            pocstars_last_seen_at = CASE WHEN $7::boolean THEN NOW() ELSE devices.pocstars_last_seen_at END,
@@ -3012,7 +3029,12 @@ async function syncPocstarsPlatformInventory(inventory: any) {
     let staleSql = `
       UPDATE devices
          SET active = false,
-             pocstars_online = false
+             pocstars_online = false,
+             -- COALESCE, so this records when the radio first went missing
+             -- rather than when the most recent sync noticed it again. The
+             -- console reports the age of the disappearance, and a radio that
+             -- has been gone a week should not look like it went this minute.
+             pocstars_missing_since = COALESCE(pocstars_missing_since, NOW())
        WHERE pocstars_managed = true
          AND pocstars_source_dispatcher_uid = $1`;
     if (seenRadioIds.length) {
@@ -3303,7 +3325,14 @@ async function upsertDevice({ device_id, name, company, operator, device_type, n
        operator    = EXCLUDED.operator,
        device_type = EXCLUDED.device_type,
        notes       = EXCLUDED.notes,
-       active      = EXCLUDED.active
+       -- On a radio the network owns, "active" means "the vendor still lists
+       -- it", which is not something a person editing a form can know. Letting
+       -- the form write it produced a fight nobody could win: the sync marked a
+       -- vanished radio inactive, saving any other field on it set active back
+       -- to true, and the next sync marked it inactive again. Hand-created
+       -- devices have no such authority behind them and stay editable.
+       active      = CASE WHEN devices.pocstars_managed THEN devices.active
+                          ELSE EXCLUDED.active END
      RETURNING *`,
     [device_id, organization_id || null, unit_id || null, name || null, company || null, operator || null, device_type || null, notes || null, active ?? true],
   );
@@ -3352,7 +3381,9 @@ async function updateDeviceFields(device_id, { name, operator, device_type, note
        operator    = COALESCE($3, operator),
        device_type = COALESCE($4, device_type),
        notes       = COALESCE($5, notes),
-       active      = COALESCE($6, active)
+       -- Same rule as upsertDevice: the sync owns "active" on a managed radio.
+       active      = CASE WHEN pocstars_managed THEN active
+                          ELSE COALESCE($6, active) END
      WHERE device_id = $1
      RETURNING *`,
     [device_id, name ?? null, operator ?? null, device_type ?? null, notes ?? null, active ?? null],

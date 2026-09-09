@@ -148,6 +148,7 @@ export function DevicesRoute() {
     ].filter(Boolean).some((value) => String(value).toLowerCase().includes(term)));
   }, [channelFilter, organizationDevices, search]);
   const activeCount = useMemo(() => devices.filter((device) => device.active).length, [devices]);
+  const orphanCount = useMemo(() => devices.filter((device) => device.pocstars_orphaned).length, [devices]);
 
   useEffect(() => {
     setChannelFilter("all");
@@ -495,12 +496,27 @@ export function DevicesRoute() {
               </select>
             </Field>
             {editingId ? (
-              <Field label="Status">
-                <select className="field-input" value={form.active} onChange={(event) => updateField("active", event.target.value)}>
-                  <option value="true">Active</option>
-                  <option value="false">Inactive (hidden from map)</option>
-                </select>
-              </Field>
+              editingOriginal?.pocstars_managed ? (
+                // On a radio the network owns, status is an observation, not a
+                // setting. Offering the dropdown invited operators to "fix" a
+                // radio the sync had marked inactive, which the next sync
+                // undid; the honest answer is to say who decides.
+                <Field label="Status">
+                  <p className="field-input flex items-center text-neutral-500">
+                    {form.active === "true" ? "Active" : "Not on the radio network"}
+                  </p>
+                  <span className="text-[10px] text-neutral-600">
+                    Set by the radio network, not editable here.
+                  </span>
+                </Field>
+              ) : (
+                <Field label="Status">
+                  <select className="field-input" value={form.active} onChange={(event) => updateField("active", event.target.value)}>
+                    <option value="true">Active</option>
+                    <option value="false">Inactive (hidden from map)</option>
+                  </select>
+                </Field>
+              )
             ) : null}
             {!editingId ? (
               <>
@@ -584,6 +600,11 @@ export function DevicesRoute() {
       <section className="glass-panel overflow-hidden rounded-lg border-green-500/25">
         <div className="border-b border-white/10 px-4 py-3 text-[11px] text-neutral-500">
           {devicesQuery.isLoading ? "Loading..." : `${devices.length} device${devices.length === 1 ? "" : "s"} · ${activeCount} active`}
+          {!devicesQuery.isLoading && orphanCount ? (
+            <span className="text-amber-300">
+              {" · "}{orphanCount} not on network
+            </span>
+          ) : null}
         </div>
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-left text-xs">
@@ -633,17 +654,30 @@ export function DevicesRoute() {
                     </td>
                     <td className="px-4 py-3">{device.device_type ? deviceTypeLabel(device.device_type) : <Muted />}</td>
                     <td className="px-4 py-3">
-                      <span className={`rounded-full border px-2 py-0.5 text-[9px] font-bold ${
-                        device.active && (!device.pocstars_managed || device.pocstars_online)
-                          ? "border-green-500/30 bg-green-500/10 text-ops-green"
-                          : "border-white/10 bg-white/5 text-neutral-500"
-                      }`}>
-                        {!device.active
-                          ? "Inactive"
-                          : device.pocstars_managed
-                            ? (device.pocstars_online ? "Online" : "Offline")
-                            : "Active"}
-                      </span>
+                      {/* A radio the network has dropped reads as its own state.
+                          Shown as plain "Inactive" it was indistinguishable
+                          from a handset that is merely switched off, so nobody
+                          could tell there was anything to clean up. */}
+                      {device.pocstars_orphaned ? (
+                        <span
+                          className="rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[9px] font-bold text-amber-300"
+                          title={`Not listed by the radio network since ${formatDate(device.pocstars_missing_since)}. The handset was retired on the network, or re-registered under a new id.`}
+                        >
+                          Not on network
+                        </span>
+                      ) : (
+                        <span className={`rounded-full border px-2 py-0.5 text-[9px] font-bold ${
+                          device.active && (!device.pocstars_managed || device.pocstars_online)
+                            ? "border-green-500/30 bg-green-500/10 text-ops-green"
+                            : "border-white/10 bg-white/5 text-neutral-500"
+                        }`}>
+                          {!device.active
+                            ? "Inactive"
+                            : device.pocstars_managed
+                              ? (device.pocstars_online ? "Online" : "Offline")
+                              : "Active"}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-[11px] text-neutral-600">{formatDate(device.created_at)}</td>
                     <td className="px-4 py-3">
@@ -657,10 +691,23 @@ export function DevicesRoute() {
                         </button>
                         ) : null}
                         {isPlatformAdmin ? (
-                          <button className="inline-flex items-center gap-1 rounded border border-red-500/20 px-2 py-1 text-[10px] text-red-400/70 hover:border-ops-red hover:text-ops-red" onClick={() => {
-                            if (window.confirm(`Remove device ${device.device_id}?`)) deleteMutation.mutate(device.device_id);
-                          }}>
-                            <Trash2 size={11} /> Remove
+                          <button
+                            className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-[10px] ${
+                              device.pocstars_orphaned
+                                ? "border-amber-400/40 text-amber-300 hover:bg-amber-400/10"
+                                : "border-red-500/20 text-red-400/70 hover:border-ops-red hover:text-ops-red"
+                            }`}
+                            onClick={() => {
+                              // The orphan case is the safe one and says so: the
+                              // network has already let this radio go, so there
+                              // is nothing left here to take out of service.
+                              const prompt = device.pocstars_orphaned
+                                ? `Retire ${device.name || device.device_id}? The radio network no longer lists it, so this only clears the record here.`
+                                : `Remove device ${device.device_id}?`;
+                              if (window.confirm(prompt)) deleteMutation.mutate(device.device_id);
+                            }}
+                          >
+                            <Trash2 size={11} /> {device.pocstars_orphaned ? "Retire" : "Remove"}
                           </button>
                         ) : null}
                       </div>

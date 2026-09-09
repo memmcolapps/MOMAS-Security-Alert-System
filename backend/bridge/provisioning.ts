@@ -79,7 +79,12 @@ export class PocstarsProvisioning {
         ORDER BY User_ID`,
       [companyId, PocstarsProvisioning.RESERVED_ACCOUNT_PREFIX],
     );
-    return rows as Array<{ uid: number; account: string; password: string; serviceEndsAt: Date }>;
+    return rows as Array<{
+      uid: number;
+      account: string;
+      password: string;
+      serviceEndsAt: Date;
+    }>;
   }
 
   // The seat the presence watcher signs in on, created on first use. It is a
@@ -156,8 +161,18 @@ export class PocstarsProvisioning {
   // and never leave this method: echat authenticates with the stored hash
   // verbatim, so the bridge can sign in later without anyone keeping the
   // plaintext. Nothing outside this host ever sees a credential.
-  async createCompany({ name, slug, seats, agentOrgId = 11, serviceEndsAt }: {
-    name: string; slug: string; seats: number; agentOrgId?: number; serviceEndsAt: string;
+  async createCompany({
+    name,
+    slug,
+    seats,
+    agentOrgId = 11,
+    serviceEndsAt,
+  }: {
+    name: string;
+    slug: string;
+    seats: number;
+    agentOrgId?: number;
+    serviceEndsAt: string;
   }) {
     const seatCount = Math.max(1, Math.min(50, Math.floor(seats)));
     const connection = await this.pool.getConnection();
@@ -168,7 +183,10 @@ export class PocstarsProvisioning {
         "SELECT Corg_ID FROM tb_ComOrg WHERE Corg_Name = ? AND IsActive = 1",
         [name],
       );
-      if (clash.length) throw new Error(`The radio network already has a company named ${name}.`);
+      if (clash.length)
+        throw new Error(
+          `The radio network already has a company named ${name}.`,
+        );
 
       const [company]: any = await connection.query(
         `INSERT INTO tb_ComOrg
@@ -178,7 +196,8 @@ export class PocstarsProvisioning {
         [agentOrgId, name, seatCount],
       );
       const companyId = Number(company.insertId);
-      if (!companyId) throw new Error("The radio network did not return a company id.");
+      if (!companyId)
+        throw new Error("The radio network did not return a company id.");
 
       const realm = this.realmFor(slug);
       const created: Array<{ uid: number; account: string }> = [];
@@ -189,7 +208,9 @@ export class PocstarsProvisioning {
           [account],
         );
         if (existing.length) {
-          throw new Error(`Dispatcher account ${account} already exists on the radio network.`);
+          throw new Error(
+            `Dispatcher account ${account} already exists on the radio network.`,
+          );
         }
         const [seat]: any = await connection.query(
           `INSERT INTO tb_User
@@ -201,7 +222,15 @@ export class PocstarsProvisioning {
               Creation_Time, Last_Update_Time)
            VALUES (?, ?, ?, ?, ?, 3, 1, 1, 1, 1, ?, 0, 0, 1, 1, 1, 30, 99,
                    NOW(), NOW(), NOW(), ?, NOW(), NOW())`,
-          [account, this.newSeatPasswordHash(), account, companyId, agentOrgId, companyId, serviceEndsAt],
+          [
+            account,
+            this.newSeatPasswordHash(),
+            account,
+            companyId,
+            agentOrgId,
+            companyId,
+            serviceEndsAt,
+          ],
         );
         created.push({ uid: Number(seat.insertId), account });
       }
@@ -222,8 +251,16 @@ export class PocstarsProvisioning {
   // operate them. Most companies on this install were sold a single seat, and a
   // single seat goes deaf to its own channel for the duration of any private
   // call, so a control room MOMAS runs needs more than the vendor left behind.
-  async addSeats({ companyId, count, slug, serviceEndsAt }: {
-    companyId: number; count: number; slug?: string; serviceEndsAt: string;
+  async addSeats({
+    companyId,
+    count,
+    slug,
+    serviceEndsAt,
+  }: {
+    companyId: number;
+    count: number;
+    slug?: string;
+    serviceEndsAt: string;
   }) {
     const wanted = Math.max(1, Math.min(50, Math.floor(count)));
     const connection = await this.pool.getConnection();
@@ -234,7 +271,8 @@ export class PocstarsProvisioning {
         "SELECT Corg_ID, Corg_Name, Aorg_ID, Dis_Size FROM tb_ComOrg WHERE Corg_ID = ? AND IsActive = 1 FOR UPDATE",
         [companyId],
       );
-      if (!companies.length) throw new Error(`Unknown or inactive company ${companyId}.`);
+      if (!companies.length)
+        throw new Error(`Unknown or inactive company ${companyId}.`);
       const company = companies[0];
 
       // Follow the company's own naming rather than inventing a second scheme:
@@ -245,14 +283,21 @@ export class PocstarsProvisioning {
         "SELECT User_Account FROM tb_User WHERE User_CompanyID = ? AND User_Type = 3",
         [companyId],
       );
-      const realm = this.realmFromSeats(seats.map((seat: any) => String(seat.User_Account)))
-        || this.realmFor(slug || String(company.Corg_Name || ""));
+      const realm =
+        this.realmFromSeats(
+          seats.map((seat: any) => String(seat.User_Account)),
+        ) || this.realmFor(slug || String(company.Corg_Name || ""));
 
-      const taken = new Set(seats.map((seat: any) => String(seat.User_Account).toUpperCase()));
+      const taken = new Set(
+        seats.map((seat: any) => String(seat.User_Account).toUpperCase()),
+      );
       const created: Array<{ uid: number; account: string }> = [];
       let index = 1;
       while (created.length < wanted) {
-        if (index > 200) throw new Error(`No free dispatcher account name for company ${companyId}.`);
+        if (index > 200)
+          throw new Error(
+            `No free dispatcher account name for company ${companyId}.`,
+          );
         const account = `dp${index}@${realm}.TSY`;
         index += 1;
         if (taken.has(account.toUpperCase())) continue;
@@ -263,9 +308,15 @@ export class PocstarsProvisioning {
           [account],
         );
         if (clash.length) continue;
-        created.push({ uid: await this.insertSeat(connection, {
-          account, companyId, agentOrgId: company.Aorg_ID, serviceEndsAt,
-        }), account });
+        created.push({
+          uid: await this.insertSeat(connection, {
+            account,
+            companyId,
+            agentOrgId: company.Aorg_ID,
+            serviceEndsAt,
+          }),
+          account,
+        });
       }
 
       // The size cap is what the vendor console shows an administrator. Leaving
@@ -274,7 +325,13 @@ export class PocstarsProvisioning {
       // this schema sets it for us.
       await connection.query(
         "UPDATE tb_ComOrg SET Dis_Size = ?, Last_Update_Time = NOW() WHERE Corg_ID = ?",
-        [Math.max(Number(company.Dis_Size || 0), seats.length + created.length), companyId],
+        [
+          Math.max(
+            Number(company.Dis_Size || 0),
+            seats.length + created.length,
+          ),
+          companyId,
+        ],
       );
 
       await connection.commit();
@@ -304,9 +361,20 @@ export class PocstarsProvisioning {
     return best;
   }
 
-  private async insertSeat(connection: any, { account, companyId, agentOrgId, serviceEndsAt }: {
-    account: string; companyId: number; agentOrgId: number | null; serviceEndsAt: string;
-  }) {
+  private async insertSeat(
+    connection: any,
+    {
+      account,
+      companyId,
+      agentOrgId,
+      serviceEndsAt,
+    }: {
+      account: string;
+      companyId: number;
+      agentOrgId: number | null;
+      serviceEndsAt: string;
+    },
+  ) {
     const [seat]: any = await connection.query(
       `INSERT INTO tb_User
          (User_Account, User_Password, User_Name, User_CompanyID, User_AgentID,
@@ -317,7 +385,15 @@ export class PocstarsProvisioning {
           Creation_Time, Last_Update_Time)
        VALUES (?, ?, ?, ?, ?, 3, 1, 1, 1, 1, ?, 0, 0, 1, 1, 1, 30, 99,
                NOW(), NOW(), NOW(), ?, NOW(), NOW())`,
-      [account, this.newSeatPasswordHash(), account, companyId, agentOrgId, companyId, serviceEndsAt],
+      [
+        account,
+        this.newSeatPasswordHash(),
+        account,
+        companyId,
+        agentOrgId,
+        companyId,
+        serviceEndsAt,
+      ],
     );
     return Number(seat.insertId);
   }
@@ -327,12 +403,20 @@ export class PocstarsProvisioning {
   private newSeatPasswordHash() {
     const bytes = new Uint8Array(16);
     crypto.getRandomValues(bytes);
-    return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+    return [...bytes]
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("")
+      .toUpperCase();
   }
 
   private realmFor(slug: string) {
-    const cleaned = String(slug || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-    if (!cleaned) throw new Error("An organization slug is required to name dispatcher accounts.");
+    const cleaned = String(slug || "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "");
+    if (!cleaned)
+      throw new Error(
+        "An organization slug is required to name dispatcher accounts.",
+      );
     return cleaned.slice(0, 12);
   }
 
@@ -372,7 +456,10 @@ export class PocstarsProvisioning {
       name: row.name || row.account,
       enabled: Number(row.enabled) === 1,
       serviceEndsAt: row.serviceEndsAt,
-      groupIds: String(row.groupIds || "").split(",").filter(Boolean).map(Number),
+      groupIds: String(row.groupIds || "")
+        .split(",")
+        .filter(Boolean)
+        .map(Number),
     }));
   }
 
@@ -406,7 +493,8 @@ export class PocstarsProvisioning {
       [PocstarsProvisioning.POOL_COMPANY_NAME],
     );
     const companyId = Number(created.insertId);
-    if (!companyId) throw new Error("The radio network did not return a pool company id.");
+    if (!companyId)
+      throw new Error("The radio network did not return a pool company id.");
     return companyId;
   }
 
@@ -465,7 +553,12 @@ export class PocstarsProvisioning {
   // what makes this safe: MOMAS's device_id, the radio's location history, its
   // recordings and its terminal status all key off the uid and survive intact.
   // Only ownership and reachability move.
-  async reassignRadio({ uid, toCompanyId, channelIds, defaultChannelId }: {
+  async reassignRadio({
+    uid,
+    toCompanyId,
+    channelIds,
+    defaultChannelId,
+  }: {
     uid: number;
     toCompanyId: number;
     channelIds: number[];
@@ -480,7 +573,10 @@ export class PocstarsProvisioning {
            FROM tb_User WHERE User_ID = ? AND User_Type = 0 AND IsActive = 1`,
         [uid],
       );
-      if (!radios.length) throw new Error(`Radio ${uid} could not be found on the radio network.`);
+      if (!radios.length)
+        throw new Error(
+          `Radio ${uid} could not be found on the radio network.`,
+        );
       const radio = radios[0];
       const fromCompanyId = Number(radio.User_CompanyID);
 
@@ -488,9 +584,16 @@ export class PocstarsProvisioning {
         "SELECT Corg_ID FROM tb_ComOrg WHERE Corg_ID = ? AND IsActive = 1",
         [toCompanyId],
       );
-      if (!companies.length) throw new Error(`Unknown or inactive company ${toCompanyId}.`);
+      if (!companies.length)
+        throw new Error(`Unknown or inactive company ${toCompanyId}.`);
 
-      const requested = [...new Set(channelIds.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))];
+      const requested = [
+        ...new Set(
+          channelIds
+            .map(Number)
+            .filter((id) => Number.isSafeInteger(id) && id > 0),
+        ),
+      ];
       let channels: number[] = [];
       if (requested.length) {
         const [rows]: any = await connection.query(
@@ -500,12 +603,15 @@ export class PocstarsProvisioning {
         channels = rows.map((row: any) => Number(row.Cg_ID));
         const rejected = requested.filter((id) => !channels.includes(id));
         if (rejected.length) {
-          throw new Error(`Channel ${rejected[0]} does not belong to the receiving organization.`);
+          throw new Error(
+            `Channel ${rejected[0]} does not belong to the receiving organization.`,
+          );
         }
       }
-      const bootChannel = defaultChannelId && channels.includes(Number(defaultChannelId))
-        ? Number(defaultChannelId)
-        : channels[0] ?? null;
+      const bootChannel =
+        defaultChannelId && channels.includes(Number(defaultChannelId))
+          ? Number(defaultChannelId)
+          : (channels[0] ?? null);
 
       // Leaving the old owner's channels is the part that must not be skipped.
       // The vendor does not enforce that a radio's channels belong to its own
@@ -555,8 +661,13 @@ export class PocstarsProvisioning {
 
       await connection.commit();
       return {
-        uid, account: radio.User_Account, name: radio.User_Name,
-        fromCompanyId, toCompanyId, channels, defaultChannelId: bootChannel,
+        uid,
+        account: radio.User_Account,
+        name: radio.User_Name,
+        fromCompanyId,
+        toCompanyId,
+        channels,
+        defaultChannelId: bootChannel,
         leftChannels: stale.length,
       };
     } catch (error) {
@@ -576,7 +687,14 @@ export class PocstarsProvisioning {
   // insert, which is why it cannot be supplied by the caller: MOMAS learns the
   // radio's identity from this call rather than the other way round.
   async createRadio({
-    companyId, imei, name, channelIds, defaultChannelId, serviceEndsAt, gpsEnabled, gpsFrequency,
+    companyId,
+    imei,
+    name,
+    channelIds,
+    defaultChannelId,
+    serviceEndsAt,
+    gpsEnabled,
+    gpsFrequency,
   }: {
     companyId: number;
     imei: string;
@@ -592,7 +710,8 @@ export class PocstarsProvisioning {
     if (!/^\d{10,20}$/.test(account)) {
       throw new Error("A radio's IMEI is the digits printed on the handset.");
     }
-    if (!String(name || "").trim()) throw new Error("A radio name is required.");
+    if (!String(name || "").trim())
+      throw new Error("A radio name is required.");
 
     const connection = await this.pool.getConnection();
     try {
@@ -602,7 +721,8 @@ export class PocstarsProvisioning {
         "SELECT Corg_ID FROM tb_ComOrg WHERE Corg_ID = ? AND IsActive = 1",
         [companyId],
       );
-      if (!companies.length) throw new Error(`Unknown or inactive company ${companyId}.`);
+      if (!companies.length)
+        throw new Error(`Unknown or inactive company ${companyId}.`);
 
       // An IMEI is one handset. The vendor schema does not enforce this, and a
       // duplicate would give two rows the same identity on the network.
@@ -620,7 +740,13 @@ export class PocstarsProvisioning {
 
       // A radio may only sit on its own organization's channels. Without this a
       // caller could put a handset into another tenant's talk group.
-      const requested = [...new Set(channelIds.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))];
+      const requested = [
+        ...new Set(
+          channelIds
+            .map(Number)
+            .filter((id) => Number.isSafeInteger(id) && id > 0),
+        ),
+      ];
       let channels: number[] = [];
       if (requested.length) {
         const [rows]: any = await connection.query(
@@ -631,12 +757,15 @@ export class PocstarsProvisioning {
         channels = rows.map((row: any) => Number(row.Cg_ID));
         const rejected = requested.filter((id) => !channels.includes(id));
         if (rejected.length) {
-          throw new Error(`Channel ${rejected[0]} does not belong to this organization.`);
+          throw new Error(
+            `Channel ${rejected[0]} does not belong to this organization.`,
+          );
         }
       }
-      const bootChannel = defaultChannelId && channels.includes(Number(defaultChannelId))
-        ? Number(defaultChannelId)
-        : channels[0] ?? null;
+      const bootChannel =
+        defaultChannelId && channels.includes(Number(defaultChannelId))
+          ? Number(defaultChannelId)
+          : (channels[0] ?? null);
 
       const [result]: any = await connection.query(
         `INSERT INTO tb_User
@@ -675,7 +804,13 @@ export class PocstarsProvisioning {
       // Without this the row is correct and the network never notices it.
       await this.touchUsers(connection, [uid]);
       await connection.commit();
-      return { uid, account, name: String(name).trim(), channels, defaultChannelId: bootChannel };
+      return {
+        uid,
+        account,
+        name: String(name).trim(),
+        channels,
+        defaultChannelId: bootChannel,
+      };
     } catch (error) {
       await connection.rollback().catch(() => {});
       throw error;
@@ -705,7 +840,13 @@ export class PocstarsProvisioning {
 
   // Create a talk group for an organization and give every one of that
   // organization's seats membership of it, so any leased seat can carry it.
-  async createChannel({ companyId, name }: { companyId: number; name: string }) {
+  async createChannel({
+    companyId,
+    name,
+  }: {
+    companyId: number;
+    name: string;
+  }) {
     const connection = await this.pool.getConnection();
     try {
       await connection.beginTransaction();
@@ -714,13 +855,17 @@ export class PocstarsProvisioning {
         "SELECT Corg_ID FROM tb_ComOrg WHERE Corg_ID = ? AND IsActive = 1",
         [companyId],
       );
-      if (!companies.length) throw new Error(`Unknown or inactive company ${companyId}.`);
+      if (!companies.length)
+        throw new Error(`Unknown or inactive company ${companyId}.`);
 
       const [clash]: any = await connection.query(
         "SELECT Cg_ID FROM tb_ChatGroup WHERE Cg_ComID = ? AND Cg_Name = ? AND IsActive = 1",
         [companyId, name],
       );
-      if (clash.length) throw new Error(`This organization already has a channel named ${name}.`);
+      if (clash.length)
+        throw new Error(
+          `This organization already has a channel named ${name}.`,
+        );
 
       const [result]: any = await connection.query(
         `INSERT INTO tb_ChatGroup
@@ -731,7 +876,8 @@ export class PocstarsProvisioning {
         [name, companyId],
       );
       const groupId = Number(result.insertId);
-      if (!groupId) throw new Error("The radio network did not return a channel id.");
+      if (!groupId)
+        throw new Error("The radio network did not return a channel id.");
 
       const seats = await this.seatIdsForCompany(connection, companyId);
       for (const seatId of seats) {
@@ -754,20 +900,35 @@ export class PocstarsProvisioning {
     }
   }
 
-  async renameChannel({ groupId, companyId, name }: { groupId: number; companyId: number; name: string }) {
+  async renameChannel({
+    groupId,
+    companyId,
+    name,
+  }: {
+    groupId: number;
+    companyId: number;
+    name: string;
+  }) {
     const [result]: any = await this.pool.query(
       `UPDATE tb_ChatGroup
           SET Cg_Name = ?, Last_Update_Time = NOW()
         WHERE Cg_ID = ? AND Cg_ComID = ?`,
       [name, groupId, companyId],
     );
-    if (!result.affectedRows) throw new Error("That channel does not belong to this organization.");
+    if (!result.affectedRows)
+      throw new Error("That channel does not belong to this organization.");
     return { groupId };
   }
 
   // Retire rather than delete: the vendor keeps recordings and SOS history
   // pointing at the group id.
-  async retireChannel({ groupId, companyId }: { groupId: number; companyId: number }) {
+  async retireChannel({
+    groupId,
+    companyId,
+  }: {
+    groupId: number;
+    companyId: number;
+  }) {
     const connection = await this.pool.getConnection();
     try {
       await connection.beginTransaction();
@@ -776,7 +937,8 @@ export class PocstarsProvisioning {
           WHERE Cg_ID = ? AND Cg_ComID = ?`,
         [groupId, companyId],
       );
-      if (!result.affectedRows) throw new Error("That channel does not belong to this organization.");
+      if (!result.affectedRows)
+        throw new Error("That channel does not belong to this organization.");
       await connection.query(
         `UPDATE tb_UserOfGroup SET IsActive = 0, Last_Update_Time = NOW() WHERE UOG_Cgid = ?`,
         [groupId],
@@ -794,31 +956,60 @@ export class PocstarsProvisioning {
   // Retire rather than delete: the vendor keeps recordings and SOS history
   // pointing at the radio id. A retired handset is invisible to the inventory
   // (listRadios only sees IsActive = 1) and its IMEI is free to onboard again.
-  async retireRadio({ uid, companyId }: { uid: number; companyId: number | null }) {
+  async retireRadio({
+    uid,
+    companyId,
+  }: {
+    uid: number;
+    companyId: number | null;
+  }) {
     const connection = await this.pool.getConnection();
     try {
       await connection.beginTransaction();
-      const args: any[] = [uid];
-      let scope = "";
-      if (Number.isSafeInteger(companyId) && Number(companyId) > 0) {
-        scope = " AND User_CompanyID = ?";
-        args.push(Number(companyId));
+      const [rows]: any = await connection.query(
+        "SELECT User_ID, User_CompanyID, IsActive FROM tb_User WHERE User_ID = ? AND User_Type = 0 LIMIT 1",
+        [uid],
+      );
+      const radio = rows[0];
+
+      // Already gone from the network - retired here before, or retired in the
+      // vendor console, or re-registered under a fresh uid. There is nothing to
+      // retire and nothing for the inventory sync to re-import, so this is a
+      // success, not a failure. Refusing here used to strand the MOMAS row: the
+      // caller retires on the network first, so a radio the vendor had already
+      // dropped could never be deleted from the console at all.
+      if (!radio || Number(radio.IsActive) !== 1) {
+        await connection.commit();
+        return { uid, alreadyRetired: true, found: Boolean(radio) };
       }
-      const [result]: any = await connection.query(
+
+      // Scope is checked against the row rather than folded into the UPDATE, so
+      // a live radio belonging to someone else reports that plainly instead of
+      // looking like a radio that is already gone.
+      if (
+        Number.isSafeInteger(companyId) &&
+        Number(companyId) > 0 &&
+        Number(radio.User_CompanyID) !== Number(companyId)
+      ) {
+        throw new Error(
+          `Radio ${uid} belongs to another organization on the radio network.`,
+        );
+      }
+
+      await connection.query(
         `UPDATE tb_User
             SET IsActive = 0, User_Enable = 0,
                 User_UpdateTime = NOW(), Last_Update_Time = NOW()
-          WHERE User_ID = ? AND User_Type = 0 AND IsActive = 1${scope}`,
-        args,
+          WHERE User_ID = ?`,
+        [uid],
       );
-      if (!result.affectedRows) throw new Error(`Radio ${uid} could not be found on the radio network.`);
       await connection.query(
         `UPDATE tb_UserOfGroup SET IsActive = 0, Last_Update_Time = NOW()
           WHERE UOG_UserId = ? AND IsActive = 1`,
         [uid],
       );
       await connection.commit();
-      return { uid };
+      return { uid, alreadyRetired: false, found: true };
     } catch (error) {
       await connection.rollback().catch(() => {});
       throw error;
@@ -829,8 +1020,16 @@ export class PocstarsProvisioning {
 
   // Put a radio on (or take it off) one of its organization's channels. The
   // radio and the channel must belong to the same company.
-  async setRadioOnChannel({ companyId, groupId, radioUid, member }: {
-    companyId: number; groupId: number; radioUid: number; member: boolean;
+  async setRadioOnChannel({
+    companyId,
+    groupId,
+    radioUid,
+    member,
+  }: {
+    companyId: number;
+    groupId: number;
+    radioUid: number;
+    member: boolean;
   }) {
     const connection = await this.pool.getConnection();
     try {
@@ -839,12 +1038,14 @@ export class PocstarsProvisioning {
         "SELECT Cg_ID FROM tb_ChatGroup WHERE Cg_ID = ? AND Cg_ComID = ? AND IsActive = 1",
         [groupId, companyId],
       );
-      if (!groups.length) throw new Error("That channel does not belong to this organization.");
+      if (!groups.length)
+        throw new Error("That channel does not belong to this organization.");
       const [radios]: any = await connection.query(
         "SELECT User_ID FROM tb_User WHERE User_ID = ? AND User_CompanyID = ? AND User_Type = 0",
         [radioUid, companyId],
       );
-      if (!radios.length) throw new Error("That radio does not belong to this organization.");
+      if (!radios.length)
+        throw new Error("That radio does not belong to this organization.");
 
       const [existing]: any = await connection.query(
         "SELECT UOG_ID FROM tb_UserOfGroup WHERE UOG_Cgid = ? AND UOG_UserId = ?",
@@ -884,11 +1085,15 @@ export class PocstarsProvisioning {
         WHERE User_ID = ? AND User_Type = 3`,
       [until, uid],
     );
-    if (!result.affectedRows) throw new Error("That dispatcher seat could not be found.");
+    if (!result.affectedRows)
+      throw new Error("That dispatcher seat could not be found.");
     return { uid, until };
   }
 
-  private async seatIdsForCompany(connection: mysql.PoolConnection, companyId: number) {
+  private async seatIdsForCompany(
+    connection: mysql.PoolConnection,
+    companyId: number,
+  ) {
     const [rows]: any = await connection.query(
       `SELECT User_ID FROM tb_User
         WHERE User_CompanyID = ? AND User_Type = 3 AND User_Enable = 1 AND IsActive = 1`,
