@@ -1,9 +1,18 @@
 import L from "leaflet";
 import "leaflet.heat";
 import "leaflet.markercluster";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DARK_TILES, IMAGERY_LABEL_TILES, LABELLED_BASEMAPS, SATELLITE_TILES } from "../lib/basemaps";
 import { deviceTypeGlyph, escapeHtml, severityColors, severityLabels, typeIcons } from "../lib/domain";
+
+// The radio fleet is mostly switched-off handsets at any hour, so the map
+// reads as a field of grey pins unless an operator can narrow it to the ones
+// that can actually answer a call - or to the ones that have gone quiet.
+const RADIO_FILTERS = [
+  { key: "all", label: "ALL", title: "Show every radio" },
+  { key: "online", label: "ONLINE", title: "Only radios the network is hearing from" },
+  { key: "offline", label: "OFFLINE", title: "Only radios that are offline" },
+];
 
 const NIGERIA_BOUNDS = L.latLngBounds([4.3, 2.7], [13.9, 14.7]);
 const NIGERIA_CENTER = [9.0, 8.5];
@@ -149,6 +158,8 @@ export function OperationsMap({
   const mapNode = useRef(null);
   const mapRef = useRef(null);
   const layersRef = useRef({});
+  const radioFilterRef = useRef(null);
+  const [radioFilter, setRadioFilter] = useState("all");
 
   useEffect(() => {
     if (!mapNode.current || mapRef.current) return;
@@ -215,6 +226,28 @@ export function OperationsMap({
       },
     });
     map.addControl(new recenter());
+
+    const radioFilterControl = L.Control.extend({
+      options: { position: "topleft" },
+      onAdd() {
+        const container = L.DomUtil.create("div", "leaflet-bar map-filter-bar");
+        for (const option of RADIO_FILTERS) {
+          const button = L.DomUtil.create("button", "map-utility-btn map-filter-btn", container);
+          button.type = "button";
+          button.textContent = option.label;
+          button.title = option.title;
+          button.dataset.filter = option.key;
+          L.DomEvent.on(button, "click", (event) => {
+            L.DomEvent.stop(event);
+            setRadioFilter(option.key);
+          });
+        }
+        L.DomEvent.disableClickPropagation(container);
+        radioFilterRef.current = container;
+        return container;
+      },
+    });
+    map.addControl(new radioFilterControl());
 
     layersRef.current = {
       baseLayers,
@@ -337,12 +370,21 @@ export function OperationsMap({
       const sos = location.processStatus === 1;
       const row = registry.get(String(location.Uid));
       const label = row?.name || location.Uid;
+      // A radio the network is not hearing from goes grey, matching the
+      // tooltip below. An SOS stays red whatever the handset's last check-in.
+      const offline = !sos && !row?.pocstars_online;
+      // An SOS is never filtered away. Whichever slice the operator is looking
+      // at, a handset in alarm is the one pin they cannot afford to miss.
+      if (!sos) {
+        if (radioFilter === "online" && offline) continue;
+        if (radioFilter === "offline" && !offline) continue;
+      }
       const icon = L.divIcon({
         className: "",
         // A vehicle tracker and a handheld should not look identical on a map.
         // An SOS keeps the alarm glyph whatever the device is - what it is
         // matters less than that it is shouting.
-        html: `<div class="device-pin ${sos ? "sos" : ""}">${sos ? '<i class="fas fa-triangle-exclamation"></i>' : deviceTypeGlyph(row?.device_type)}</div><div class="device-label ${sos ? "sos" : ""}">${escapeHtml(label)}</div>`,
+        html: `<div class="device-pin ${sos ? "sos" : ""} ${offline ? "offline" : ""}">${sos ? '<i class="fas fa-triangle-exclamation"></i>' : deviceTypeGlyph(row?.device_type)}</div><div class="device-label ${sos ? "sos" : ""} ${offline ? "offline" : ""}">${escapeHtml(label)}</div>`,
         iconSize: [26, 42],
         iconAnchor: [13, 13],
       });
@@ -360,7 +402,19 @@ export function OperationsMap({
     }
     // One bulk insert rather than one reflow per radio.
     deviceClusterLayer.addLayers(clustered);
-  }, [devices, locations, onRadioSelect]);
+  }, [devices, locations, onRadioSelect, radioFilter]);
+
+  // The bar is only meaningful while radios are on the map, and its buttons
+  // have to show which slice is live - neither is something Leaflet's control
+  // knows, since it is built once outside React.
+  useEffect(() => {
+    const container = radioFilterRef.current;
+    if (!container) return;
+    container.classList.toggle("map-filter-bar-off", !activeLayers.devices);
+    for (const button of container.querySelectorAll("button")) {
+      button.classList.toggle("active", button.dataset.filter === radioFilter);
+    }
+  }, [radioFilter, activeLayers.devices]);
 
   useEffect(() => {
     const map = mapRef.current;

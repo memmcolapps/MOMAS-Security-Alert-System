@@ -118,18 +118,30 @@ export function deviceTypeLabel(type) {
   );
 }
 
-// Armoured vehicle: sloped nose, hull, roof hatch, three road wheels. Drawn
+// Armoured vehicle, posterized from a side-on photograph of the patrol
+// vehicles this fleet actually runs: blunt nose, high hull on wheel arches,
+// raked windscreen, armoured greenhouse with vision blocks, roof mast. Drawn
 // here because Font Awesome free has no armoured vehicle - its nearest is a
 // military supply truck, which reads as logistics rather than a protected
-// patrol unit. No weapon on it: these are escort and cash-in-transit vehicles,
-// not military ones, and a gun barrel would say the wrong thing about the
-// operation. Inherits the pin's colour through currentColor.
+// patrol unit. Four flat tones instead of a single silhouette (roof lightest
+// through tyres solid), because at 15px a one-tone shape loses the greenhouse
+// entirely and reads as a van. Tones are fill-opacity on currentColor rather
+// than fixed greys, so the whole icon still takes the pin's colour - including
+// the grey an offline radio gets. The roof station - pedestal, barrel, muzzle -
+// carries the solid tone against the light roof plate, which is the only way it
+// survives at pin size; the whip antenna aft of it stays mid-tone so the two do
+// not merge into one shape.
 const ARMOURED_VEHICLE_SVG = `<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-  <rect x="8.4" y="5.2" width="5" height="2.6" rx="0.6"/>
-  <path d="M3.4 7.8h11.4l4.3 3.4v4.1H3.4z"/>
-  <circle cx="7" cy="17.6" r="2.3"/>
-  <circle cx="12" cy="17.6" r="2.3"/>
-  <circle cx="17" cy="17.6" r="2.3"/>
+  <path fill-opacity=".82" fill-rule="evenodd" d="M2.9 12.6 L9.1 11.2 H23 V16 H21.8 A3.3 3.3 0 0 0 15.2 16 H10.5 A3.3 3.3 0 0 0 3.9 16 H2.9 Z M3.6 13.2 h1.8 v1.7 H3.6 Z"/>
+  <path fill-opacity=".55" fill-rule="evenodd" d="M9 11.2 L11.5 6.2 H23 V11.2 Z M10.5 10.5 L12.2 7.1 H13.7 V10.5 Z M15.2 7.2 h2.1 v2.3 h-2.1 Z M18.7 7.2 h2.1 v2.3 h-2.1 Z"/>
+  <path fill-opacity=".32" d="M11.1 5.4 H23.1 v1 H11.1 Z"/>
+  <path d="M12.66 4.05 L8.76 3.55 L8.64 4.45 L12.54 4.95 Z"/>
+  <path d="M8.2 3.4 h0.9 v1.2 h-0.9 Z"/>
+  <path d="M11.9 3.8 h2.1 v1.7 h-2.1 Z"/>
+  <path fill-opacity=".55" d="M20.6 3.7 h0.7 v1.8 h-0.7 Z"/>
+  <path d="M1.7 14.1 h1.5 v1.6 H1.7 Z"/>
+  <path fill-rule="evenodd" d="M7.2 12.7a3.3 3.3 0 1 0 0 6.6 3.3 3.3 0 0 0 0-6.6Z M7.2 14.6a1.4 1.4 0 1 0 0 2.8 1.4 1.4 0 0 0 0-2.8Z"/>
+  <path fill-rule="evenodd" d="M18.5 12.7a3.3 3.3 0 1 0 0 6.6 3.3 3.3 0 0 0 0-6.6Z M18.5 14.6a1.4 1.4 0 1 0 0 2.8 1.4 1.4 0 0 0 0-2.8Z"/>
 </svg>`;
 
 // Map pins used one walkie-talkie glyph for everything, so a vehicle tracker

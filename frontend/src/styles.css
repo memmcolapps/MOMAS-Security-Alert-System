@@ -177,6 +177,19 @@ textarea {
   color: #ff1a1a;
 }
 
+/* A handset the network has not heard from is drawn the way an offline drone
+   is - grey and dimmed - so a glance at the map separates the radios that can
+   answer a call from the ones that cannot. SOS keeps its red either way. */
+.device-pin.offline {
+  background: #8a8a8a;
+  box-shadow: none;
+  opacity: 0.7;
+}
+
+.device-label.offline {
+  color: #9a9a9a;
+}
+
 .drone-pin {
   width: 28px;
   height: 28px;
@@ -332,6 +345,44 @@ textarea {
   justify-content: center;
   cursor: pointer;
   font-size: 13px;
+}
+
+/* Sits directly under the recenter button as one vertical stack. Words rather
+   than icons - nothing pictures "offline handset" unambiguously - so these
+   buttons run wider than the square utility ones above them. */
+.map-filter-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: none;
+  box-shadow: none;
+}
+
+.map-filter-bar-off {
+  display: none;
+}
+
+.map-filter-btn {
+  width: auto;
+  min-width: 30px;
+  height: 22px;
+  padding: 0 6px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: rgba(255, 68, 68, 0.65);
+  border-color: rgba(255, 68, 68, 0.28);
+}
+
+.map-filter-btn:hover {
+  color: #ff4444;
+  border-color: rgba(255, 68, 68, 0.5);
+}
+
+.map-filter-btn.active {
+  background: rgba(255, 68, 68, 0.9);
+  border-color: #ff4444;
+  color: #000;
 }
 
 .scrollbar-thin::-webkit-scrollbar {
