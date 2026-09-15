@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plane, Plus, Save, Trash2, Wifi, WifiOff, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { FilterBar } from "../components/FilterBar";
 import { Toast, useToast } from "../components/Toast";
 import {
   deleteDrone,
@@ -40,6 +41,9 @@ export function DronesRoute() {
   const [editingId, setEditingId] = useState(null);
   const { toast, notify, dismiss: dismissToast } = useToast();
   const [form, setForm] = useState(emptyForm);
+  const [search, setSearch] = useState("");
+  const [orgFilter, setOrgFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
 
   const registryQuery = useQuery({
     queryKey: ["drone-registry"],
@@ -69,10 +73,10 @@ export function DronesRoute() {
     enabled: !isPlatformAdmin && canManageDrones,
   });
 
-  const registered = registryQuery.data?.drones || [];
-  const organizations = orgsQuery.data?.organizations || [];
+  const registered = useMemo(() => registryQuery.data?.drones || [], [registryQuery.data?.drones]);
+  const organizations = useMemo(() => orgsQuery.data?.organizations || [], [orgsQuery.data?.organizations]);
   const units = orgAdminQuery.data?.units || [];
-  const live = positionsQuery.data?.drones || [];
+  const live = useMemo(() => positionsQuery.data?.drones || [], [positionsQuery.data?.drones]);
   const listener = positionsQuery.data?.listener;
 
   const liveBySysid = useMemo(() => new Map(live.map((d) => [Number(d.sysid), d])), [live]);
@@ -81,6 +85,59 @@ export function DronesRoute() {
     [live, registered],
   );
   const onlineCount = useMemo(() => live.filter((d) => d.online).length, [live]);
+
+  const visibleDrones = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return registered.filter((drone) => {
+      if (orgFilter === "unassigned" && drone.organization_id) return false;
+      if (orgFilter !== "all" && orgFilter !== "unassigned" && String(drone.organization_id) !== String(orgFilter)) {
+        return false;
+      }
+      if (statusFilter === "live" && !liveBySysid.get(Number(drone.sysid))?.online) return false;
+      if (statusFilter === "active" && !drone.active) return false;
+      if (statusFilter === "inactive" && drone.active) return false;
+      if (!term) return true;
+      return [drone.sysid, drone.name, drone.registration, drone.model, drone.operator, drone.organization_name]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(term));
+    });
+  }, [liveBySysid, orgFilter, registered, search, statusFilter]);
+
+  const filterControls = useMemo(() => {
+    const controls = [];
+    if (isPlatformAdmin) {
+      controls.push({
+        key: "org",
+        label: "Company",
+        value: orgFilter,
+        onChange: setOrgFilter,
+        options: [
+          { value: "all", label: `All companies (${registered.length})` },
+          {
+            value: "unassigned",
+            label: `Unassigned (${registered.filter((drone) => !drone.organization_id).length})`,
+          },
+          ...organizations.map((org) => ({
+            value: String(org.id),
+            label: `${org.name} (${registered.filter((drone) => String(drone.organization_id) === String(org.id)).length})`,
+          })),
+        ],
+      });
+    }
+    controls.push({
+      key: "status",
+      label: "Status",
+      value: statusFilter,
+      onChange: setStatusFilter,
+      options: [
+        { value: "all", label: `Any status (${registered.length})` },
+        { value: "live", label: `Live now (${registered.filter((drone) => liveBySysid.get(Number(drone.sysid))?.online).length})` },
+        { value: "active", label: `Active (${registered.filter((drone) => drone.active).length})` },
+        { value: "inactive", label: `Inactive (${registered.filter((drone) => !drone.active).length})` },
+      ],
+    });
+    return controls;
+  }, [isPlatformAdmin, liveBySysid, orgFilter, organizations, registered, statusFilter]);
 
   const saveMutation = useMutation({
     mutationFn: saveDrone,
@@ -173,41 +230,40 @@ export function DronesRoute() {
         ) : null}
       </header>
 
-      <section className="glass-panel mb-5 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border-sky-500/25 px-4 py-3 text-[11px]">
-        <span className="flex items-center gap-2">
-          {listener?.enabled ? <Wifi size={14} className="text-sky-400" /> : <WifiOff size={14} className="text-neutral-600" />}
-          <span className="text-neutral-400">Telemetry listener</span>
-          <span className={listener?.enabled ? "font-bold text-sky-400" : "font-bold text-neutral-600"}>
+      <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-neutral-500">
+        <span className="flex items-center gap-1.5">
+          {listener?.enabled ? <Wifi size={12} className="text-sky-400" /> : <WifiOff size={12} className="text-neutral-600" />}
+          Listener
+          <strong className={listener?.enabled ? "text-sky-400" : "text-neutral-600"}>
             {listener ? (listener.enabled ? `port ${listener.port}` : "disabled") : "…"}
-          </span>
+          </strong>
         </span>
-        <span className="text-neutral-400">
-          Ground stations connected: <strong className="text-neutral-200">{listener?.connections ?? "…"}</strong>
+        <span>
+          Ground stations <strong className="text-neutral-300">{listener?.connections ?? "…"}</strong>
         </span>
-        <span className="text-neutral-400">
-          Drones live now: <strong className={onlineCount ? "text-sky-400" : "text-neutral-200"}>{onlineCount}</strong>
+        <span>
+          Live now <strong className={onlineCount ? "text-sky-400" : "text-neutral-300"}>{onlineCount}</strong>
         </span>
-      </section>
+      </div>
 
       {unregistered.length && canManageDrones ? (
-        <section className="glass-panel mb-5 rounded-lg border-amber-500/30 px-4 py-3">
-          <div className="mb-2 text-[11px] font-bold text-amber-400">
-            Unregistered drones detected on the telemetry stream
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {unregistered.map((d) => (
-              <button
-                key={d.sysid}
-                onClick={() => openAdd(d.sysid)}
-                className="inline-flex items-center gap-2 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-300 hover:bg-amber-500/20"
-                title="Click to register this drone"
-              >
-                <Plus size={12} /> sysid {d.sysid}
-                {d.online ? <span className="h-1.5 w-1.5 rounded-full bg-sky-400" /> : null}
-              </button>
-            ))}
-          </div>
-        </section>
+        <div className="mb-3 flex flex-wrap items-center gap-1.5 rounded-md border border-amber-500/25 bg-amber-500/[0.06] px-3 py-1.5 text-[10px]">
+          <span className="font-bold text-amber-400">
+            {unregistered.length} unregistered on the stream
+          </span>
+          <span className="text-neutral-600">— click to register:</span>
+          {unregistered.map((d) => (
+            <button
+              key={d.sysid}
+              onClick={() => openAdd(d.sysid)}
+              className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-amber-300 hover:bg-amber-500/20"
+              title="Click to register this drone"
+            >
+              <Plus size={9} /> {d.sysid}
+              {d.online ? <span className="h-1 w-1 rounded-full bg-sky-400" /> : null}
+            </button>
+          ))}
+        </div>
       ) : null}
 
       {formOpen ? (
@@ -284,9 +340,22 @@ export function DronesRoute() {
         </form>
       ) : null}
 
+      <FilterBar
+        accent="sky"
+        search={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search by sysid, name, registration, model or pilot"
+        filters={filterControls}
+        summary={
+          visibleDrones.length === registered.length
+            ? null
+            : `${visibleDrones.length} of ${registered.length} drones`
+        }
+      />
+
       <section className="glass-panel overflow-hidden rounded-lg border-sky-500/25">
         <div className="border-b border-white/10 px-4 py-3 text-[11px] text-neutral-500">
-          {registryQuery.isLoading ? "Loading..." : `${registered.length} registered drone${registered.length === 1 ? "" : "s"} · ${onlineCount} live now`}
+          {registryQuery.isLoading ? "Loading..." : `${visibleDrones.length} registered drone${visibleDrones.length === 1 ? "" : "s"} · ${onlineCount} live now`}
         </div>
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-left text-xs">
@@ -309,8 +378,8 @@ export function DronesRoute() {
                 <tr>
                   <td className="px-4 py-10 text-center text-neutral-500" colSpan={isPlatformAdmin ? 10 : 9}>Loading drones...</td>
                 </tr>
-              ) : registered.length ? (
-                registered.map((drone) => {
+              ) : visibleDrones.length ? (
+                visibleDrones.map((drone) => {
                   const liveState = liveBySysid.get(Number(drone.sysid));
                   return (
                     <tr className="border-b border-white/5 hover:bg-white/[0.03]" key={drone.sysid}>
@@ -361,7 +430,8 @@ export function DronesRoute() {
               ) : (
                 <tr>
                   <td className="px-4 py-12 text-center text-neutral-500" colSpan={isPlatformAdmin ? 10 : 9}>
-                    <Plane className="mx-auto mb-2" size={28} /> No drones registered yet
+                    <Plane className="mx-auto mb-2" size={28} />
+                    {registered.length ? "No drones match these filters" : "No drones registered yet"}
                   </td>
                 </tr>
               )}

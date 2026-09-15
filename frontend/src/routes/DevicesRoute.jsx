@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, MessageSquare, Plus, Radio, Save, Search, Trash2, X } from "lucide-react";
+import { Check, MessageSquare, Plus, Radio, Save, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   allocateRadioToOrganization,
@@ -14,6 +14,7 @@ import {
   saveDevice,
 } from "../lib/api";
 import { isPlatformOperator, isPlatformStaff } from "../lib/platform-roles";
+import { FilterBar } from "../components/FilterBar";
 import { RadioConsole } from "../components/RadioConsole";
 import { Toast, useToast } from "../components/Toast";
 import { deviceTypeLabel } from "../lib/domain";
@@ -147,6 +148,52 @@ export function DevicesRoute() {
       device.organization_name,
     ].filter(Boolean).some((value) => String(value).toLowerCase().includes(term)));
   }, [channelFilter, organizationDevices, search]);
+  // Both dimensions carry their counts in the option text, so the operator can
+  // see how the fleet splits without the page having to render a chip per row.
+  const filterControls = useMemo(() => {
+    const controls = [];
+    if (isPlatformAdmin) {
+      controls.push({
+        key: "org",
+        label: "Company",
+        value: orgFilter,
+        onChange: setOrgFilter,
+        options: [
+          { value: "all", label: `All companies (${allDevices.length})` },
+          {
+            value: "unassigned",
+            label: `Unassigned (${allDevices.filter((device) => !device.organization_id).length})`,
+          },
+          ...organizations.map((org) => ({
+            value: String(org.id),
+            label: `${org.name} (${allDevices.filter((device) => String(device.organization_id) === String(org.id)).length})`,
+          })),
+        ],
+      });
+    }
+    controls.push({
+      key: "channel",
+      label: "Channel",
+      value: channelFilter,
+      onChange: setChannelFilter,
+      options: [
+        { value: "all", label: `All channels (${organizationDevices.length})` },
+        {
+          value: "unassigned",
+          label: `On no channel (${organizationDevices.filter((device) => !(device.channels || []).length).length})`,
+        },
+        ...channels.map((channel) => ({
+          value: channel.id,
+          label:
+            isPlatformAdmin && orgFilter === "all" && channel.organizationName
+              ? `${channel.organizationName} / ${channel.name}`
+              : channel.name,
+        })),
+      ],
+    });
+    return controls;
+  }, [allDevices, channelFilter, channels, isPlatformAdmin, orgFilter, organizationDevices, organizations]);
+
   const activeCount = useMemo(() => devices.filter((device) => device.active).length, [devices]);
   const orphanCount = useMemo(() => devices.filter((device) => device.pocstars_orphaned).length, [devices]);
 
@@ -549,53 +596,18 @@ export function DevicesRoute() {
         </form>
       ) : null}
 
-      {isPlatformAdmin ? (
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <FilterChip active={orgFilter === "all"} onClick={() => setOrgFilter("all")}>
-            All ({allDevices.length})
-          </FilterChip>
-          <FilterChip active={orgFilter === "unassigned"} onClick={() => setOrgFilter("unassigned")}>
-            Unassigned ({allDevices.filter((device) => !device.organization_id).length})
-          </FilterChip>
-          {organizations.map((org) => (
-            <FilterChip key={org.id} active={String(orgFilter) === String(org.id)} onClick={() => setOrgFilter(String(org.id))}>
-              {org.name}
-            </FilterChip>
-          ))}
-        </div>
-      ) : null}
-
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <span className="mr-1 text-[9px] font-bold uppercase tracking-wider text-neutral-600">Channel</span>
-        <FilterChip active={channelFilter === "all"} onClick={() => setChannelFilter("all")}>
-          All ({organizationDevices.length})
-        </FilterChip>
-        <FilterChip active={channelFilter === "unassigned"} onClick={() => setChannelFilter("unassigned")}>
-          On no channel ({organizationDevices.filter((device) => !(device.channels || []).length).length})
-        </FilterChip>
-        {channels.map((channel) => (
-          <FilterChip key={channel.id} active={channelFilter === channel.id} onClick={() => setChannelFilter(channel.id)}>
-            {isPlatformAdmin && orgFilter === "all" && channel.organizationName
-              ? `${channel.organizationName} / ${channel.name}`
-              : channel.name}
-          </FilterChip>
-        ))}
-      </div>
-
-      <div className="mb-3 flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-3 py-2">
-        <Search size={14} className="text-neutral-500" />
-        <input
-          className="flex-1 bg-transparent text-xs text-neutral-200 placeholder:text-neutral-600 focus:outline-none"
-          placeholder="Search by IMEI, name, operator or company"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-        />
-        {search ? (
-          <button className="text-neutral-500 hover:text-neutral-200" onClick={() => setSearch("")} aria-label="Clear search">
-            <X size={13} />
-          </button>
-        ) : null}
-      </div>
+      <FilterBar
+        accent="green"
+        search={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search by IMEI, name, operator or company"
+        filters={filterControls}
+        summary={
+          devices.length === allDevices.length
+            ? null
+            : `${devices.length} of ${allDevices.length} devices`
+        }
+      />
 
       <section className="glass-panel overflow-hidden rounded-lg border-green-500/25">
         <div className="border-b border-white/10 px-4 py-3 text-[11px] text-neutral-500">
@@ -840,19 +852,4 @@ function OperatorCell({ device, canEdit, onSaved }) {
 
 function Muted() {
   return <span className="text-neutral-700">-</span>;
-}
-
-function FilterChip({ active, onClick, children }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`rounded-full border px-3 py-1 text-[10px] font-bold transition ${
-        active
-          ? "border-ops-green bg-green-500/15 text-ops-green"
-          : "border-white/10 bg-white/[0.03] text-neutral-400 hover:text-neutral-200"
-      }`}
-    >
-      {children}
-    </button>
-  );
 }
