@@ -180,13 +180,25 @@ async function scrapeReliefWeb(daysBack = 30) {
 
   let added = 0;
   let skipped = reportItems.length - newReportItems.length;
+  let classificationFailed = 0;
 
   for (let i = 0; i < newReportItems.length; i++) {
     const ri = newReportItems[i];
     const result = results[i];
     const external_id = `reliefweb:${ri.reportId}`;
 
-    if (!result || !result.is_security_incident) {
+    if (!result) {
+      classificationFailed++;
+      skipped++;
+      await db.markSourceItemClassificationFailed(
+        external_id,
+        "Classifier returned no result; retry scheduled",
+        ri.contentText || null,
+      );
+      continue;
+    }
+
+    if (!result.is_security_incident) {
       skipped++;
       await db.markSourceItemProcessed(external_id, {
         status: 'non_incident',
@@ -264,7 +276,13 @@ async function scrapeReliefWeb(daysBack = 30) {
     }
   }
 
-  await db.logScrape({ source: 'reliefweb', status: 'ok', items_found: reports.length, items_added: added, error: null });
+  await db.logScrape({
+    source: 'reliefweb',
+    status: classificationFailed ? 'error' : 'ok',
+    items_found: reports.length,
+    items_added: added,
+    error: classificationFailed ? `${classificationFailed} item(s) could not be classified` : null,
+  });
   console.log(`[ReliefWeb] Done. Found ${reports.length}, skipped ${skipped}, added ${added} new incidents.`);
   return { found: reports.length, added, skipped };
 }

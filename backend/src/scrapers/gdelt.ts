@@ -395,13 +395,27 @@ async function scrapeGDELT(daysBack = 7) {
 
   let added = 0;
   let skipped = 0;
+  let classificationFailed = 0;
 
   for (let i = 0; i < classifyItems.length; i++) {
     const { title, description, cluster, allUrls } = classifyItems[i];
     const firstEv = cluster.events[0];
     const result = results[i];
 
-    if (!result || !result.is_security_incident) {
+    if (!result) {
+      classificationFailed++;
+      skipped++;
+      await Promise.all(cluster.events.map((ev) =>
+        db.markSourceItemClassificationFailed(
+          buildGDELTExternalId(ev.url),
+          "Classifier returned no result; retry scheduled",
+          classifyItems[i].contentText || null,
+        ),
+      ));
+      continue;
+    }
+
+    if (!result.is_security_incident) {
       skipped++;
       await Promise.all(cluster.events.map((ev) =>
         db.markSourceItemProcessed(buildGDELTExternalId(ev.url), {
@@ -493,7 +507,13 @@ async function scrapeGDELT(daysBack = 7) {
     }
   }
 
-  await db.logScrape({ source: 'gdelt', status: 'ok', items_found: articles.length, items_added: added, error: null });
+  await db.logScrape({
+    source: 'gdelt',
+    status: classificationFailed ? 'error' : 'ok',
+    items_found: articles.length,
+    items_added: added,
+    error: classificationFailed ? `${classificationFailed} cluster(s) could not be classified` : null,
+  });
   console.log(`[GDELT] Done. Found ${articles.length} articles (${unprocessedArticles.length} fresh), clustered ${clusters.length}, classified ${candidateClusters.length}, skipped ${skipped}, added ${added} new incidents.`);
   return { found: articles.length, added, skipped, clusters: clusters.length };
 }

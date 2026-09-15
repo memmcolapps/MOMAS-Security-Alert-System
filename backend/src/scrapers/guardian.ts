@@ -117,10 +117,15 @@ async function scrapeGuardian(daysBack = 2) {
     );
 
     let added = 0;
+    let classificationFailed = 0;
     for (let i = 0; i < newItems.length; i++) {
       const item = newItems[i];
       const result = classifications[i];
-      if (!result?.is_security_incident) continue;
+      if (!result) {
+        classificationFailed++;
+        continue;
+      }
+      if (!result.is_security_incident) continue;
 
       const fullText = `${item.title} ${item.description}`;
       const geo = geocode(fullText) || geocode(item.title);
@@ -179,7 +184,13 @@ async function scrapeGuardian(daysBack = 2) {
     }
 
     console.log(`[Guardian] "${query}": added=${added}`);
-    await db.logScrape({ source: `guardian:${query.slice(0, 40)}`, status: 'ok', items_found: articles.length, items_added: added, error: null });
+    await db.logScrape({
+      source: `guardian:${query.slice(0, 40)}`,
+      status: classificationFailed ? 'error' : 'ok',
+      items_found: articles.length,
+      items_added: added,
+      error: classificationFailed ? `${classificationFailed} item(s) could not be classified` : null,
+    });
     allResults.push({ query, found: articles.length, added });
     await delay(QUERY_DELAY_MS);
   }

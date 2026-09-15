@@ -17,21 +17,35 @@ import { looksLikeSecurityIncident } from "./prefilter";
 import { extractState, geocode } from "../geocoder";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODEL = process.env.GROQ_MODEL || "meta-llama/llama-4-scout-17b-16e-instruct";
+const RETIRED_MODEL_REPLACEMENTS: Record<string, string> = {
+  "llama-3.1-8b-instant": "openai/gpt-oss-20b",
+  "meta-llama/llama-4-scout-17b-16e-instruct": "openai/gpt-oss-20b",
+  "llama-3.3-70b-versatile": "openai/gpt-oss-120b",
+};
+
+function resolveGroqModel(configured: string | undefined, fallback: string) {
+  const requested = configured || fallback;
+  const replacement = RETIRED_MODEL_REPLACEMENTS[requested];
+  if (replacement) {
+    console.warn(`[classifier] ${requested} is retired; using ${replacement}`);
+    return replacement;
+  }
+  return requested;
+}
+
+const GROQ_MODEL = resolveGroqModel(process.env.GROQ_MODEL, "openai/gpt-oss-20b");
 const GROQ_TIMEOUT_MS = parseInt(process.env.GROQ_TIMEOUT_MS || "30000", 10);
 const GROQ_MAX_RETRIES = parseInt(process.env.GROQ_MAX_RETRIES || "5", 10);
-// 8s interval ≈ 7 calls/min ≈ 25K TPM with the ~1.5K-token system prompt
-// plus batch items — the binding free-tier limit on llama-4-scout is
-// 30K TPM, not the 30 RPM. Slots are tracked per model, so the verify
-// pass draws from its own quota bucket.
+// Conservative defaults for Groq's free-plan token limit. Slots are tracked
+// per model, so the positive-only verification pass has its own pacing chain.
 const GROQ_MIN_INTERVAL_MS = parseInt(
-  process.env.GROQ_MIN_INTERVAL_MS || "8000",
+  process.env.GROQ_MIN_INTERVAL_MS || "12000",
   10,
 );
 // Second-opinion pass on positives only. Different model on purpose: Groq
 // rate limits are per-model, so verification doesn't eat the triage quota.
 const GROQ_VERIFY_MODEL =
-  process.env.GROQ_VERIFY_MODEL || "llama-3.3-70b-versatile";
+  resolveGroqModel(process.env.GROQ_VERIFY_MODEL, "openai/gpt-oss-120b");
 const GROQ_VERIFY_ENABLED = process.env.GROQ_VERIFY_ENABLED !== "false";
 // Reject incidents whose extracted event date predates publication by more
 // than this many days — they're retrospectives, not fresh incidents.
@@ -41,7 +55,7 @@ const MAX_EVENT_AGE_DAYS = parseInt(
 );
 const GROQ_BATCH_SIZE = Math.max(
   1,
-  parseInt(process.env.GROQ_BATCH_SIZE || "10", 10),
+  parseInt(process.env.GROQ_BATCH_SIZE || "5", 10),
 );
 const CLASSIFIER_MAX_TITLE_CHARS = parseInt(
   process.env.CLASSIFIER_MAX_TITLE_CHARS || "300",
@@ -55,6 +69,18 @@ const CACHE_MAX = Math.max(
   100,
   parseInt(process.env.CLASSIFIER_CACHE_MAX || "5000", 10),
 );
+
+const classifierHealth = {
+  configured: Boolean(process.env.GROQ_API_KEY),
+  model: GROQ_MODEL,
+  verify_model: GROQ_VERIFY_MODEL,
+  verify_enabled: GROQ_VERIFY_ENABLED,
+  model_available: null as boolean | null,
+  verify_model_available: null as boolean | null,
+  last_success_at: null as string | null,
+  last_failure_at: null as string | null,
+  last_error: null as string | null,
+};
 
 const INCIDENT_TYPES = [
   "bombing",
@@ -208,7 +234,7 @@ Input:
 ]
 
 Output:
-[
+{"results":[
   {"id":0,"reasoning":"Fresh ambush attack with confirmed soldier fatalities","is_security_incident":true,"type":"terrorism","location_text":"Maiduguri-Damboa road, Borno","date":null,"actors":"Suspected ISWAP fighters; Nigerian soldiers","fatalities":5,"victims":0,"severity":"ORANGE","summary":"Suspected ISWAP fighters ambushed an army patrol on the Maiduguri-Damboa road, killing five soldiers."},
   {"id":1,"reasoning":"Presidential condemnation of past event, not the incident","is_security_incident":false,"type":null,"location_text":null,"date":null,"actors":null,"fatalities":0,"victims":0,"severity":"BLUE","summary":null},
   {"id":2,"reasoning":"Court/DPP decision about a past killing, violence is not new","is_security_incident":false,"type":null,"location_text":null,"date":null,"actors":null,"fatalities":0,"victims":0,"severity":"BLUE","summary":null},
@@ -217,12 +243,65 @@ Output:
   {"id":5,"reasoning":"New IED blast with confirmed civilian deaths at market","is_security_incident":true,"type":"bombing","location_text":"Biu market, Borno","date":null,"actors":"Unknown bombers; traders","fatalities":3,"victims":0,"severity":"ORANGE","summary":"An IED exploded near Biu market in Borno, killing three traders."},
   {"id":6,"reasoning":"Rescue operation; abduction already happened","is_security_incident":false,"type":null,"location_text":null,"date":null,"actors":null,"fatalities":0,"victims":0,"severity":"BLUE","summary":null},
   {"id":7,"reasoning":"Military rescue operation, not new attack","is_security_incident":false,"type":null,"location_text":null,"date":null,"actors":null,"fatalities":0,"victims":0,"severity":"BLUE","summary":null}
-]
+]}
 
 ---
-Now classify the real input. Respond ONLY with a JSON array. Each element must be:
+Now classify the real input. Respond ONLY with a JSON object containing a results array. Each element must be:
 {"id": <same id as input>, "reasoning": "<≤16 words>", "is_security_incident": boolean, "type": string|null, "location_text": string|null, "date": "YYYY-MM-DD"|null, "actors": string|null, "fatalities": integer, "victims": integer, "severity": string, "summary": string|null}
 Do not include any other text.`;
+
+const CLASSIFICATION_RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    results: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "integer" },
+          reasoning: { type: ["string", "null"] },
+          is_security_incident: { type: "boolean" },
+          type: { type: ["string", "null"], enum: [...INCIDENT_TYPES, null] },
+          location_text: { type: ["string", "null"] },
+          date: { type: ["string", "null"] },
+          actors: { type: ["string", "null"] },
+          fatalities: { type: "integer", minimum: 0, maximum: 500 },
+          victims: { type: "integer", minimum: 0, maximum: 500 },
+          severity: { type: "string", enum: SEVERITIES },
+          summary: { type: ["string", "null"] },
+        },
+        required: [
+          "id", "reasoning", "is_security_incident", "type", "location_text",
+          "date", "actors", "fatalities", "victims", "severity", "summary",
+        ],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["results"],
+  additionalProperties: false,
+};
+
+const VERIFICATION_RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    results: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "integer" },
+          confirmed: { type: "boolean" },
+          reason: { type: "string" },
+        },
+        required: ["id", "confirmed", "reason"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["results"],
+  additionalProperties: false,
+};
 
 // ── Slot-based rate limiter (one slot chain per model) ─────────────────────
 const _nextSlotByModel = new Map();
@@ -264,6 +343,40 @@ function cacheSet(key, val) {
 
 function isGroqEnabled() {
   return Boolean(process.env.GROQ_API_KEY);
+}
+
+function getClassifierHealth() {
+  return { ...classifierHealth };
+}
+
+async function checkClassifierModels() {
+  classifierHealth.configured = isGroqEnabled();
+  if (!classifierHealth.configured) {
+    classifierHealth.model_available = false;
+    classifierHealth.verify_model_available = false;
+    classifierHealth.last_error = "GROQ_API_KEY is not configured";
+    return getClassifierHealth();
+  }
+
+  try {
+    const response = await axios.get("https://api.groq.com/openai/v1/models", {
+      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
+      timeout: GROQ_TIMEOUT_MS,
+    });
+    const models = new Set((response.data?.data || []).map((item: any) => item.id));
+    classifierHealth.model_available = models.has(GROQ_MODEL);
+    classifierHealth.verify_model_available = models.has(GROQ_VERIFY_MODEL);
+    classifierHealth.last_error = !classifierHealth.model_available
+      ? `Configured model is unavailable: ${GROQ_MODEL}`
+      : GROQ_VERIFY_ENABLED && !classifierHealth.verify_model_available
+        ? `Configured verification model is unavailable: ${GROQ_VERIFY_MODEL}`
+        : null;
+  } catch (error: any) {
+    classifierHealth.model_available = null;
+    classifierHealth.verify_model_available = null;
+    classifierHealth.last_error = error?.response?.data?.error?.message || error?.message || "Model check failed";
+  }
+  return getClassifierHealth();
 }
 
 function sanitize(raw) {
@@ -348,7 +461,7 @@ function itemText(b) {
  * and 429/503 retries. Throws on unrecoverable errors (incl. 413 — callers
  * split the batch).
  */
-async function callGroqArray({ model, systemPrompt, userContent, maxTokens, label }) {
+async function callGroqArray({ model, systemPrompt, userContent, maxTokens, label, schema }) {
   let lastError = null;
 
   for (let attempt = 1; attempt <= GROQ_MAX_RETRIES; attempt++) {
@@ -365,6 +478,16 @@ async function callGroqArray({ model, systemPrompt, userContent, maxTokens, labe
           ],
           temperature: 0,
           max_tokens: maxTokens,
+          reasoning_effort: "low",
+          include_reasoning: false,
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: `${label}_results`,
+              strict: true,
+              schema,
+            },
+          },
         },
         {
           headers: {
@@ -379,13 +502,17 @@ async function callGroqArray({ model, systemPrompt, userContent, maxTokens, labe
       if (!content) throw new Error("Groq returned empty content");
 
       const parsed = extractJSON(content);
-      if (!Array.isArray(parsed)) {
-        throw new Error(`Expected JSON array, got: ${content.slice(0, 200)}`);
+      if (!Array.isArray(parsed?.results)) {
+        throw new Error(`Expected a results array, got: ${content.slice(0, 200)}`);
       }
-      return parsed;
+      classifierHealth.last_success_at = new Date().toISOString();
+      classifierHealth.last_error = null;
+      return parsed.results;
     } catch (err) {
       const status = err.response?.status;
       lastError = err;
+      classifierHealth.last_failure_at = new Date().toISOString();
+      classifierHealth.last_error = err?.response?.data?.error?.message || err?.message || "Classifier request failed";
 
       if (status === 429 && attempt < GROQ_MAX_RETRIES) {
         const retryAfterMs =
@@ -432,6 +559,7 @@ async function callGroqBatch(batch) {
       userContent: JSON.stringify(payload),
       maxTokens: 320 * batch.length + 200,
       label: "classifier",
+      schema: CLASSIFICATION_RESPONSE_SCHEMA,
     });
 
     const byId = new Map();
@@ -479,7 +607,7 @@ Reject (confirmed=false) if the item is actually:
 - An event outside Nigeria
 - Not about violence at all (accidents, disease, economics, sports)
 
-Respond ONLY with a JSON array: [{"id": <input id>, "confirmed": boolean, "reason": "<≤12 words>"}]`;
+Respond ONLY with a JSON object: {"results":[{"id": <input id>, "confirmed": boolean, "reason": "<≤12 words>"}]}`;
 
 /**
  * Second-opinion check on triage positives. Returns one verdict per item:
@@ -497,6 +625,7 @@ async function callVerifyBatch(batch) {
       userContent: JSON.stringify(payload),
       maxTokens: 60 * batch.length + 100,
       label: "verify",
+      schema: VERIFICATION_RESPONSE_SCHEMA,
     });
 
     const byId = new Map();
@@ -822,4 +951,4 @@ async function classifyMany(items) {
   return results;
 }
 
-export { classify, classifyMany, isGroqEnabled };
+export { classify, classifyMany, isGroqEnabled, checkClassifierModels, getClassifierHealth, resolveGroqModel };

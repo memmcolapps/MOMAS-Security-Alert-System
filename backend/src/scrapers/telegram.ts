@@ -166,11 +166,17 @@ async function scrapeChannel(channel) {
 
   let added = 0;
   let skipped = knownIds.size;
+  let classificationFailed = 0;
 
   for (let i = 0; i < newItems.length; i++) {
     const { title, description, external_id, msg } = newItems[i];
     const result = results[i];
-    if (!result || !result.is_security_incident) {
+    if (!result) {
+      classificationFailed++;
+      skipped++;
+      continue;
+    }
+    if (!result.is_security_incident) {
       skipped++;
       continue;
     }
@@ -245,7 +251,12 @@ async function scrapeChannel(channel) {
     }
   }
 
-  return { found: messages.length, added, skipped, error: null };
+  return {
+    found: messages.length,
+    added,
+    skipped,
+    error: classificationFailed ? `${classificationFailed} item(s) could not be classified` : null,
+  };
 }
 
 async function scrapeTelegram() {

@@ -29,6 +29,7 @@ import {
 import { cors } from "hono/cors";
 import { requireAuth } from "./auth";
 import { liveRadioWebSocket } from "./pocstars/live-gateway";
+import { checkClassifierModels, getClassifierHealth } from "./classifier";
 
 const app = new Hono();
 const PORT = env.PORT;
@@ -88,9 +89,17 @@ app.get("/api/config", (c) =>
   }),
 );
 
-app.get("/api/health", (c) =>
-  c.json({
-    status: "ok",
+app.get("/api/health", async (c) => {
+  const osint = await db.getOsintPipelineHealth().catch((error) => ({
+    error: error instanceof Error ? error.message : "Health query failed",
+  }));
+  const classifier = getClassifierHealth();
+  const degraded = classifier.model_available === false
+    || (classifier.verify_enabled && classifier.verify_model_available === false)
+    || "error" in osint
+    || Number(osint.classification_failures_24h || 0) > 0;
+  return c.json({
+    status: degraded ? "degraded" : "ok",
     runtime: "bun",
     time: new Date().toISOString(),
     tiers: {
@@ -108,8 +117,10 @@ app.get("/api/health", (c) =>
       newsapi_enabled: isNewsAPIEnabled(),
       guardian_enabled: isGuardianEnabled(),
     },
-  }),
-);
+    classifier,
+    osint,
+  });
+});
 
 app.use("/*", serveStatic({ root: "../frontend/dist" }));
 app.get("*", serveStatic({ path: "../frontend/dist/index.html" }));
@@ -180,6 +191,13 @@ try {
 
   startGeofenceMonitor();
   startMavlinkListener();
+
+  const classifierStatus = await checkClassifierModels();
+  if (classifierStatus.model_available === false) {
+    console.error(`[Classifier] ${classifierStatus.last_error}`);
+  } else {
+    console.log(`[Classifier] primary=${classifierStatus.model} verify=${classifierStatus.verify_model}`);
+  }
 
   void startTelegramMtproto().catch((error) => {
     console.error(

@@ -28,6 +28,7 @@ import {
 
 const statuses = [
   { value: "pending", label: "Pending" },
+  { value: "classification_failed", label: "Retrying" },
   { value: "needs_review", label: "Needs review" },
   { value: "linked", label: "Linked" },
   { value: "incident", label: "Incident" },
@@ -39,6 +40,7 @@ const statuses = [
 
 const statusStyles = {
   pending: "border-yellow-500/30 bg-yellow-500/10 text-yellow-300",
+  classification_failed: "border-orange-500/30 bg-orange-500/10 text-orange-300",
   needs_review: "border-orange-500/30 bg-orange-500/10 text-orange-300",
   linked: "border-sky-500/30 bg-sky-500/10 text-sky-300",
   incident: "border-red-500/30 bg-red-500/10 text-red-300",

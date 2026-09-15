@@ -10,6 +10,7 @@
     "dev": "bun --watch src/server.ts",
     "typecheck": "bunx tsc --noEmit",
     "check:live-deploy": "bun scripts/check-live-radio-deployment.ts",
+    "backfill:osint": "bun scripts/backfill-osint.ts",
     "test:geofencing": "bun test src/geofencing/geometry.test.ts",
     "check": "bun run typecheck && bun test"
   },

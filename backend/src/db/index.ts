@@ -464,6 +464,8 @@ async function init() {
       ALTER TABLE source_items ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
       ALTER TABLE source_items ADD COLUMN IF NOT EXISTS confidence_score INTEGER DEFAULT 0;
       ALTER TABLE source_items ADD COLUMN IF NOT EXISTS confidence_reason TEXT;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS classification_error TEXT;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS classification_attempted_at TIMESTAMPTZ;
       ALTER TABLE source_items ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL;
       ALTER TABLE osint_watchlists ADD COLUMN IF NOT EXISTS rule_type TEXT DEFAULT 'all_terms';
       ALTER TABLE osint_watchlists ADD COLUMN IF NOT EXISTS min_confidence INTEGER DEFAULT 0;
@@ -735,6 +737,8 @@ async function markSourceItemProcessed(externalId, { status, incident_id = null,
        SET status = $2::TEXT,
            incident_id = COALESCE($3::INTEGER, incident_id),
            content_text = COALESCE(NULLIF($4::TEXT, ''), content_text),
+           classification_error = NULL,
+           classification_attempted_at = NOW(),
            processed_at = NOW(),
            updated_at = NOW()
      WHERE external_id = $1
@@ -745,6 +749,22 @@ async function markSourceItemProcessed(externalId, { status, incident_id = null,
   const row = rows[0];
   if (row) await refreshSourceItemConfidence(row.id).catch(() => null);
   if (row?.incident_id) await refreshIncidentConfidence(row.incident_id).catch(() => null);
+}
+
+async function markSourceItemClassificationFailed(externalId, error = "Classifier unavailable", contentText = null) {
+  const { rows } = await queryWithRetry(
+    `UPDATE source_items
+        SET status = 'classification_failed',
+            content_text = COALESCE(NULLIF($3::TEXT, ''), content_text),
+            classification_error = $2,
+            classification_attempted_at = NOW(),
+            processed_at = NULL,
+            updated_at = NOW()
+      WHERE external_id = $1
+      RETURNING id`,
+    [externalId, String(error || "Classifier unavailable").slice(0, 1000), contentText],
+  );
+  return rows[0] ?? null;
 }
 
 function normalizeSourceItemStatus(status) {
@@ -1602,6 +1622,23 @@ async function getAdvancedSourceAnalytics() {
   });
 
   return { sources: enriched, trends: trendsResult.rows };
+}
+
+async function getOsintPipelineHealth() {
+  const { rows } = await queryWithRetry(
+    `SELECT
+       (SELECT MAX(created_at) FROM scrape_logs) AS last_scrape_at,
+       (SELECT MAX(created_at) FROM source_items) AS last_collected_at,
+       (SELECT MAX(created_at) FROM incidents) AS last_incident_at,
+       (SELECT COUNT(*)::int FROM source_items
+         WHERE status = 'classification_failed'
+           AND updated_at >= NOW() - INTERVAL '24 hours') AS classification_failures_24h,
+       (SELECT COUNT(*)::int FROM source_items
+         WHERE created_at >= NOW() - INTERVAL '24 hours') AS collected_24h,
+       (SELECT COUNT(*)::int FROM incidents
+         WHERE created_at >= NOW() - INTERVAL '24 hours') AS incidents_24h`,
+  );
+  return rows[0] ?? null;
 }
 
 // Entity-centric link graph. The backbone is entity↔entity *co-occurrence*
@@ -4279,6 +4316,7 @@ export {
   upsertSourceItem,
   upsertSourceItems,
   markSourceItemProcessed,
+  markSourceItemClassificationFailed,
   listSourceItems,
   countSourceItems,
   getSourceItem,
@@ -4312,6 +4350,7 @@ export {
   recentSourceItems,
   getSourceAnalytics,
   getAdvancedSourceAnalytics,
+  getOsintPipelineHealth,
   getOsintGraph,
   clearAll,
   countAllIncidents,

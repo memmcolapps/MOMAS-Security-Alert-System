@@ -51,7 +51,7 @@ function primaryOrgId(user: any) {
 const idSchema = z.coerce.number().int().positive();
 const limitSchema = z.coerce.number().int().min(1).max(500);
 const hoursSchema = z.coerce.number().int().min(1).max(24 * 365);
-const sourceItemStatuses = ["pending", "needs_review", "linked", "incident", "merged", "dismissed", "non_incident", "all"] as const;
+const sourceItemStatuses = ["pending", "classification_failed", "needs_review", "linked", "incident", "merged", "dismissed", "non_incident", "all"] as const;
 const alertStatuses = ["new", "reviewed", "dismissed", "all"] as const;
 const managerRoles = new Set(["org_owner", "org_admin", "unit_admin", "admin"]);
 

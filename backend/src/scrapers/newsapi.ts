@@ -95,10 +95,15 @@ async function scrapeNewsAPI(daysBack = 2) {
   );
 
   let added = 0;
+  let classificationFailed = 0;
   for (let i = 0; i < newItems.length; i++) {
     const item = newItems[i];
     const result = classifications[i];
-    if (!result?.is_security_incident) continue;
+    if (!result) {
+      classificationFailed++;
+      continue;
+    }
+    if (!result.is_security_incident) continue;
 
     const fullText = `${item.title} ${item.description}`;
     const geo = geocode(fullText) || geocode(item.title);
@@ -157,7 +162,13 @@ async function scrapeNewsAPI(daysBack = 2) {
   }
 
   console.log(`[NewsAPI] Done. added=${added}`);
-  await db.logScrape({ source: 'newsapi', status: 'ok', items_found: raw.length, items_added: added, error: null });
+  await db.logScrape({
+    source: 'newsapi',
+    status: classificationFailed ? 'error' : 'ok',
+    items_found: raw.length,
+    items_added: added,
+    error: classificationFailed ? `${classificationFailed} item(s) could not be classified` : null,
+  });
   return [{ found: raw.length, added }];
 }
 

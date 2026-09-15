@@ -296,12 +296,24 @@ async function scrapeFeed(feed) {
 
   let added = 0;
   let skipped = knownIncidentIds.size + processedSourceIds.size;
+  let classificationFailed = 0;
 
   for (let i = 0; i < newItems.length; i++) {
     const { title, description, item, external_id } = newItems[i];
     const result = results[i];
 
-    if (!result || !result.is_security_incident) {
+    if (!result) {
+      classificationFailed++;
+      skipped++;
+      await db.markSourceItemClassificationFailed(
+        external_id,
+        "Classifier returned no result; retry scheduled",
+        newItems[i].contentText || null,
+      );
+      continue;
+    }
+
+    if (!result.is_security_incident) {
       skipped++;
       await db.markSourceItemProcessed(external_id, {
         status: "non_incident",
@@ -396,7 +408,12 @@ async function scrapeFeed(feed) {
     }
   }
 
-  return { found: items.length, added, skipped, error: null };
+  return {
+    found: items.length,
+    added,
+    skipped,
+    error: classificationFailed ? `${classificationFailed} item(s) could not be classified` : null,
+  };
 }
 
 const FEED_CONCURRENCY = Math.max(
