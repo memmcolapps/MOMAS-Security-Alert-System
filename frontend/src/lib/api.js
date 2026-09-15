@@ -56,6 +56,10 @@ async function request(path, options = {}) {
   return body;
 }
 
+export function getSystemHealth() {
+  return request("/api/health");
+}
+
 export function login(payload) {
   return request("/api/auth/login", {
     method: "POST",

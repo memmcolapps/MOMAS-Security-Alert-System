@@ -19,6 +19,7 @@ import {
   getOsintSourceAnalytics,
   getOsintBrief,
   getOsintGraph,
+  getSystemHealth,
   promoteOsintItem,
   reviewOsintItem,
   saveOsintSource,
@@ -150,6 +151,11 @@ export function OsintRoute() {
     queryKey: ["osint-sources"],
     queryFn: listOsintSources,
     staleTime: 60_000,
+  });
+  const healthQuery = useQuery({
+    queryKey: ["system-health"],
+    queryFn: getSystemHealth,
+    refetchInterval: 60_000,
   });
   const watchlistsQuery = useQuery({
     queryKey: ["osint-watchlists"],
@@ -439,6 +445,15 @@ export function OsintRoute() {
   }
 
   const busy = reviewMutation.isPending || promoteMutation.isPending || linkMutation.isPending || extractMutation.isPending;
+  const systemHealth = healthQuery.data || healthQuery.error?.body;
+  const lastScrapeAt = systemHealth?.osint?.last_scrape_at;
+  const scrapeIsFresh = lastScrapeAt && Date.now() - new Date(lastScrapeAt).getTime() < 20 * 60_000;
+  const pipelineHealthy = systemHealth?.status === "ok" && scrapeIsFresh;
+  const section = ["alerts", "watchlists"].includes(tab)
+    ? "monitors"
+    : ["sources", "analytics"].includes(tab)
+      ? "sources"
+      : "queue";
 
   return (
     <main className="flex h-screen flex-col bg-ops-bg pt-12 text-neutral-200">
@@ -446,20 +461,20 @@ export function OsintRoute() {
         <div className="flex flex-wrap items-center gap-3">
           <div>
             <h1 className="flex items-center gap-2 text-sm font-bold text-neutral-100">
-              <FileSearch size={16} className="text-ops-red" /> OSINT Inbox
+              <FileSearch size={16} className="text-ops-red" /> OSINT
             </h1>
             <p className="mt-1 text-[11px] text-neutral-500">
-              Review collected source items, preserve evidence, and promote confirmed reports.
+              Triage reports, monitor threats, and manage collection.
             </p>
           </div>
           <span
             className={`ml-auto inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold ${
-              streamLive ? "border-ops-green/40 bg-ops-green/10 text-ops-green" : "border-white/10 bg-white/[0.03] text-neutral-500"
+              pipelineHealthy ? "border-ops-green/40 bg-ops-green/10 text-ops-green" : "border-orange-500/30 bg-orange-500/10 text-orange-300"
             }`}
-            title={streamLive ? "Live alert stream connected" : "Live alert stream offline"}
+            title={lastScrapeAt ? `Last collection run ${relativeTime(lastScrapeAt)} · alert stream ${streamLive ? "connected" : "offline"}` : "Collection health unavailable"}
           >
-            <span className={`h-1.5 w-1.5 rounded-full ${streamLive ? "animate-pulse bg-ops-green" : "bg-neutral-600"}`} />
-            {streamLive ? "Live" : "Offline"}
+            <span className={`h-1.5 w-1.5 rounded-full ${pipelineHealthy ? "animate-pulse bg-ops-green" : "bg-orange-400"}`} />
+            {healthQuery.isLoading ? "Checking" : pipelineHealthy ? "Healthy" : "Degraded"}
           </span>
           <button
             className="inline-flex items-center gap-2 rounded border border-ops-line px-3 py-1.5 text-[11px] font-bold text-neutral-300 hover:bg-white/5"
@@ -470,14 +485,26 @@ export function OsintRoute() {
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2 text-[11px] font-bold">
-          <TabButton active={tab === "inbox"} icon={FileSearch} label="Inbox" badge={pendingCount} onClick={() => setTab("inbox")} />
-          <TabButton active={tab === "alerts"} icon={Bell} label="Alerts" badge={newAlertsCount} pulse={liveAlerts > 0} onClick={() => setTab("alerts")} />
-          <TabButton active={tab === "watchlists"} icon={Tags} label="Watchlists" onClick={() => setTab("watchlists")} />
-          <TabButton active={tab === "sources"} icon={Database} label="Sources" onClick={() => setTab("sources")} />
-          <TabButton active={tab === "entities"} icon={Network} label="Entities" onClick={() => setTab("entities")} />
-          <TabButton active={tab === "graph"} icon={GitBranch} label="Graph" onClick={() => setTab("graph")} />
-          <TabButton active={tab === "analytics"} icon={Activity} label="Analytics" onClick={() => setTab("analytics")} />
-          <TabButton active={tab === "reports"} icon={Download} label="Reports" onClick={() => setTab("reports")} />
+          <TabButton active={section === "queue"} icon={FileSearch} label="Queue" badge={pendingCount} onClick={() => setTab("inbox")} />
+          <TabButton active={section === "monitors"} icon={Bell} label="Monitors" badge={newAlertsCount} pulse={liveAlerts > 0} onClick={() => setTab("alerts")} />
+          <TabButton active={section === "sources"} icon={Database} label="Sources" onClick={() => setTab("sources")} />
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-1 text-[10px] font-bold text-neutral-500">
+          {section === "queue" ? <>
+            <SubnavButton active={tab === "inbox"} label="Review" onClick={() => setTab("inbox")} />
+            <SubnavButton active={tab === "entities"} label="Entities" onClick={() => setTab("entities")} />
+            <SubnavButton active={tab === "graph"} label="Graph" onClick={() => setTab("graph")} />
+            <SubnavButton active={tab === "reports"} label="Brief" onClick={() => setTab("reports")} />
+          </> : null}
+          {section === "monitors" ? <>
+            <SubnavButton active={tab === "alerts"} label="Alerts" onClick={() => setTab("alerts")} />
+            <SubnavButton active={tab === "watchlists"} label="Watchlists" onClick={() => setTab("watchlists")} />
+          </> : null}
+          {section === "sources" ? <>
+            <SubnavButton active={tab === "sources"} label="Registry" onClick={() => setTab("sources")} />
+            <SubnavButton active={tab === "analytics"} label="Performance" onClick={() => setTab("analytics")} />
+          </> : null}
         </div>
 
         {tab === "inbox" ? <div className="mt-4 grid gap-3 md:grid-cols-[170px_170px_1fr]">
@@ -851,6 +878,19 @@ function TabButton({ active, icon: Icon, label, onClick, badge, pulse }) {
           {Number(badge) > 99 ? "99+" : badge}
         </span>
       ) : null}
+    </button>
+  );
+}
+
+function SubnavButton({ active, label, onClick }) {
+  return (
+    <button
+      className={`rounded px-2.5 py-1 transition ${
+        active ? "bg-white/10 text-neutral-100" : "hover:bg-white/[0.05] hover:text-neutral-300"
+      }`}
+      onClick={onClick}
+    >
+      {label}
     </button>
   );
 }

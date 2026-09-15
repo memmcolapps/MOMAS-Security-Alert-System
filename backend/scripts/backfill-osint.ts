@@ -17,7 +17,8 @@ if (!/^\d{4}-\d{2}-\d{2}$/.test(since)) {
 }
 
 const { rows } = await db.pool.query(
-  `SELECT *
+  `SELECT external_id, source_type, source, title, description, content_text,
+          source_url, published_at, created_at
      FROM source_items
     WHERE created_at >= $1::date
       AND (
@@ -103,7 +104,8 @@ for (let index = 0; index < candidates.length; index++) {
   }
 
   const status = persisted.status === "merged" ? "merged" : "incident";
-  summary[status]++;
+  if (status === "merged") summary.merged++;
+  else summary.incidents++;
   await db.markSourceItemProcessed(item.external_id, {
     status,
     incident_id: persisted.incidentId,
