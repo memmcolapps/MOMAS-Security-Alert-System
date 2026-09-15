@@ -5,6 +5,7 @@ import {
   fenceMetrics,
   haversineMetres,
   pointInPolygon,
+  ringSelfIntersects,
   validatePolygonGeometry,
 } from "./geometry";
 
@@ -92,3 +93,31 @@ describe("geofence geometry", () => {
   });
 });
 
+
+describe("self-intersecting rings", () => {
+  const bowtie = [
+    [3.0, 6.0],
+    [4.0, 7.0],
+    [4.0, 6.0],
+    [3.0, 7.0],
+    [3.0, 6.0],
+  ];
+
+  test("accepts a simple ring", () => {
+    expect(ringSelfIntersects(square.coordinates[0])).toBe(false);
+  });
+
+  test("rejects a ring that crosses over itself", () => {
+    expect(ringSelfIntersects(bowtie)).toBe(true);
+    expect(validatePolygonGeometry({ type: "Polygon", coordinates: [bowtie] })).toBe(false);
+  });
+
+  test("a triangle cannot cross itself", () => {
+    expect(ringSelfIntersects([[3, 6], [4, 6], [3.5, 7], [3, 6]])).toBe(false);
+  });
+
+  test("ignores a ring too short to be a polygon", () => {
+    expect(ringSelfIntersects([])).toBe(false);
+    expect(ringSelfIntersects([[3, 6], [4, 6]])).toBe(false);
+  });
+});

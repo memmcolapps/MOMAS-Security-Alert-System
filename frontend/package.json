@@ -9,7 +9,8 @@
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
     "lint": "eslint .",
-    "test:live-radio-url": "node --test src/lib/live-radio-url.test.js"
+    "test:live-radio-url": "node --test src/lib/live-radio-url.test.js",
+    "test": "node --test src/lib/*.test.js"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.7",

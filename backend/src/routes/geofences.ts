@@ -9,7 +9,7 @@ import {
 } from "../auth";
 import { env } from "../config";
 import * as db from "../db";
-import { evaluateFence, fenceMetrics, validatePolygonGeometry } from "../geofencing/geometry";
+import { evaluateFence, fenceMetrics, ringSelfIntersects, validatePolygonGeometry } from "../geofencing/geometry";
 import { assetKey, currentAssetPositions } from "../geofencing/positions";
 import * as store from "../geofencing/store";
 import { reverseGeocode, searchPlaces } from "../geocoder";
@@ -70,8 +70,13 @@ function validateFence(body: any) {
   const shapeType = body.shape_type;
   if (!name) throw new Error("Fence name is required.");
   if (!["circle", "polygon"].includes(shapeType)) throw new Error("Fence shape must be circle or polygon.");
-  if (shapeType === "polygon" && !validatePolygonGeometry(body.geometry)) {
-    throw new Error("A polygon requires at least three valid map points.");
+  if (shapeType === "polygon") {
+    if (ringSelfIntersects(body.geometry?.coordinates?.[0])) {
+      throw new Error("This fence crosses over itself. Corners have to go round the area in order.");
+    }
+    if (!validatePolygonGeometry(body.geometry)) {
+      throw new Error("A polygon requires at least three valid map points.");
+    }
   }
   if (
     shapeType === "circle" &&

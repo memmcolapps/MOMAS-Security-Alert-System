@@ -38,9 +38,12 @@ import { isPlatformOperator, isPlatformStaff } from "../lib/platform-roles";
 import {
   bufferRing,
   circleAroundAssets,
+  circleToPolygon,
   formatArea,
   formatDistance,
   polygonAroundAssets,
+  polygonSelfIntersects,
+  polygonToCircle,
 } from "../lib/fence-placement";
 
 const EMPTY = {
@@ -113,6 +116,17 @@ function toForm(fence) {
   };
 }
 
+/**
+ * The radius as a usable number, or null. The input is a text field, so an
+ * emptied one reads back as "" — and `Number("")` is 0, a radius the API
+ * rightly rejects. Catching it here keeps that rejection out of the preview.
+ */
+function radiusOf(form) {
+  if (form.radius_m === "" || form.radius_m === null || form.radius_m === undefined) return null;
+  const radius = Number(form.radius_m);
+  return Number.isFinite(radius) && radius > 0 ? radius : null;
+}
+
 /** The shape as the API wants it, or null while it is still incomplete. */
 function toGeometry(form) {
   if (form.shape_type !== "polygon") return null;
@@ -122,6 +136,24 @@ function toGeometry(form) {
 
 function isPlaced(form) {
   return form.shape_type === "polygon" ? form.points.length >= 3 : form.center_lat != null;
+}
+
+/**
+ * Why this shape cannot be previewed or saved yet, in words. Returning the
+ * reason rather than a boolean is what lets the editor say which control is
+ * wrong instead of forwarding a 400 from the API.
+ */
+function placementProblem(form) {
+  if (form.shape_type === "circle") {
+    if (form.center_lat == null) return null;
+    if (radiusOf(form) === null) return "Give the circle a radius greater than 0.";
+    return null;
+  }
+  if (form.points.length < 3) return null;
+  if (polygonSelfIntersects(form.points)) {
+    return "This fence crosses over itself. Undo back to the stray corner, or place them in order around the area.";
+  }
+  return null;
 }
 
 function FenceEditorMap({ fences, form, assets, basemap, onBasemapChange, onMapClick, fitToken }) {
@@ -196,21 +228,27 @@ function FenceEditorMap({ fences, form, assets, basemap, onBasemapChange, onMapC
       if (fence.shape_type === "circle") {
         const lat = Number(fence.center_lat);
         const lon = Number(fence.center_lon);
-        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
-        L.circle([lat, lon], { ...style, radius: Number(fence.radius_m) })
+        const radius = Number(fence.radius_m);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon) || !(radius > 0)) return;
+        L.circle([lat, lon], { ...style, radius })
           .bindTooltip(fence.name || "New fence")
           .addTo(layer);
         if (active && Number(fence.buffer_m) > 0) {
-          L.circle([lat, lon], { ...bufferStyle, radius: Number(fence.radius_m) + Number(fence.buffer_m) }).addTo(layer);
+          L.circle([lat, lon], { ...bufferStyle, radius: radius + Number(fence.buffer_m) }).addTo(layer);
         }
         return;
       }
       const ring = active ? fence.points : fence.geometry?.coordinates?.[0];
       if (!ring?.length) return;
-      L.polygon(ring.map(([lon, lat]) => [lat, lon]), style)
-        .bindTooltip(fence.name || "New fence")
+      const crossed = active && ring.length >= 4 && polygonSelfIntersects(ring);
+      L.polygon(
+        ring.map(([lon, lat]) => [lat, lon]),
+        crossed ? { ...style, color: "#f59e0b", fillColor: "#f59e0b", dashArray: "4 4" } : style,
+      )
+        .bindTooltip(crossed ? "This fence crosses over itself" : fence.name || "New fence")
         .addTo(layer);
-      if (active && Number(fence.buffer_m) > 0 && ring.length >= 3) {
+      // A crossed ring has no honest buffer, so none is drawn beside it.
+      if (active && !crossed && Number(fence.buffer_m) > 0 && ring.length >= 3) {
         const outer = bufferRing(ring, Number(fence.buffer_m));
         if (outer) L.polygon(outer.map(([lon, lat]) => [lat, lon]), bufferStyle).addTo(layer);
       }
@@ -476,7 +514,8 @@ export function GeofencesRoute() {
   }, [fences, fenceFilter]);
 
   const geometry = toGeometry(form);
-  const placed = isPlaced(form);
+  const problem = placementProblem(form);
+  const placed = isPlaced(form) && !problem;
 
   const previewQuery = useQuery({
     queryKey: [
@@ -498,7 +537,7 @@ export function GeofencesRoute() {
         geometry,
         center_lat: form.center_lat,
         center_lon: form.center_lon,
-        radius_m: Number(form.radius_m),
+        radius_m: radiusOf(form),
         buffer_m: Number(form.buffer_m),
         confirmations_required: Number(form.confirmations_required),
         assignments: form.assignments,
@@ -641,6 +680,41 @@ export function GeofencesRoute() {
     setErrors((current) => (current[key] ? { ...current, [key]: null } : current));
   }
 
+  /**
+   * Switching shape carries the placed area across rather than discarding it:
+   * a polygon becomes the smallest circle that still holds every corner, and a
+   * circle becomes a twelve-sided ring of the same extent. Wiping the shape
+   * silently is what this used to do, and it cost the operator the placement
+   * every time they wanted to compare the two.
+   */
+  function changeShape(shape) {
+    if (shape === form.shape_type) return;
+    clearError("area");
+
+    if (shape === "circle") {
+      const circle = form.points.length >= 3 ? polygonToCircle(form.points) : null;
+      setForm((current) => ({
+        ...current,
+        shape_type: "circle",
+        points: [],
+        center_lat: circle ? circle.center_lat : null,
+        center_lon: circle ? circle.center_lon : null,
+        radius_m: circle ? circle.radius_m : current.radius_m,
+      }));
+      return;
+    }
+
+    const ring =
+      form.center_lat != null ? circleToPolygon(form.center_lat, form.center_lon, radiusOf(form)) : null;
+    setForm((current) => ({
+      ...current,
+      shape_type: "polygon",
+      points: ring || [],
+      center_lat: null,
+      center_lon: null,
+    }));
+  }
+
   function handleMapClick(latlng) {
     if (!editing) return;
     clearError("area");
@@ -720,6 +794,11 @@ export function GeofencesRoute() {
       setSections((current) => ({ ...current, area: true }));
       return;
     }
+    if (problem) {
+      setError("area", problem);
+      setSections((current) => ({ ...current, area: true }));
+      return;
+    }
     setErrors({});
     saveMutation.mutate({
       id: form.id,
@@ -729,7 +808,7 @@ export function GeofencesRoute() {
       geometry,
       center_lat: form.center_lat,
       center_lon: form.center_lon,
-      radius_m: Number(form.radius_m),
+      radius_m: radiusOf(form),
       buffer_m: Number(form.buffer_m),
       confirmations_required: Number(form.confirmations_required),
       active: form.active,
@@ -743,9 +822,13 @@ export function GeofencesRoute() {
     timeToAlarmSec < 60 ? `${timeToAlarmSec} seconds` : `${Math.round(timeToAlarmSec / 60)} minutes`;
   const orgName = organizations.find((org) => String(org.id) === String(selectedOrgId))?.name;
   const metrics = preview?.metrics || null;
-  const areaSummary = placed
-    ? `${form.shape_type === "circle" ? formatDistance(Number(form.radius_m)) + " radius" : `${form.points.length} corners`}`
-    : "Not placed yet";
+  const areaSummary = problem
+    ? "Needs attention"
+    : placed
+      ? form.shape_type === "circle"
+        ? `${formatDistance(radiusOf(form))} radius`
+        : `${form.points.length} corners`
+      : "Not placed yet";
 
   return (
     <main className="flex h-screen w-screen flex-col overflow-hidden bg-ops-bg pt-[var(--ops-chrome)] text-neutral-200">
@@ -864,7 +947,7 @@ export function GeofencesRoute() {
                       <button
                         className={`rounded-md border px-3 py-2 text-[10px] font-bold capitalize ${form.shape_type === shape ? "border-red-400 bg-red-500/15 text-red-300" : "border-white/10 text-neutral-500"}`}
                         key={shape}
-                        onClick={() => setForm((current) => ({ ...current, shape_type: shape, points: [], center_lat: null, center_lon: null }))}
+                        onClick={() => changeShape(shape)}
                         type="button"
                       >
                         {shape === "polygon" ? <Shield className="mr-1 inline" size={13} /> : <Circle className="mr-1 inline" size={13} />}
@@ -946,7 +1029,7 @@ export function GeofencesRoute() {
                     ) : null}
                   </div>
 
-                  <FieldError message={errors.area} />
+                  <FieldError message={errors.area || problem} />
 
                   {placed && metrics ? (
                     <p className="mt-2 rounded border border-white/10 bg-white/[0.03] px-2 py-1.5 text-[10px] text-neutral-400">
@@ -1006,6 +1089,7 @@ export function GeofencesRoute() {
                 onSuppressChange={setSuppressExisting}
                 placed={placed}
                 preview={preview}
+                problem={problem}
                 saving={saveMutation.isPending}
                 suppress={suppressExisting}
               />
@@ -1147,11 +1231,14 @@ function Banner({ feedback, onDismiss }) {
  * screen. The asset tally is the part that matters: it catches a fence placed
  * in the wrong spot without the operator having to interpret the map at all.
  */
-function VerifyFooter({ error, loading, onSuppressChange, placed, preview, saving, suppress }) {
+function VerifyFooter({ error, loading, onSuppressChange, placed, preview, problem, saving, suppress }) {
   const summary = preview?.summary;
 
   let verdict = null;
-  if (!placed) {
+  if (problem) {
+    // Said in full in the Area section; here it only has to explain the gap.
+    verdict = <span className="text-amber-300">The area needs fixing before this fence can be checked.</span>;
+  } else if (!placed) {
     verdict = <span className="text-neutral-500"><Crosshair className="mr-1 inline" size={11} />Place the fence to see what it covers.</span>;
   } else if (error) {
     verdict = <span className="text-red-200">{error.message}</span>;
@@ -1187,7 +1274,7 @@ function VerifyFooter({ error, loading, onSuppressChange, placed, preview, savin
 
       <button
         className="mt-2.5 inline-flex w-full items-center justify-center gap-2 rounded-md bg-red-400 px-4 py-2.5 text-xs font-bold text-black disabled:opacity-40"
-        disabled={saving}
+        disabled={saving || Boolean(problem)}
         type="submit"
       >
         <Save size={14} /> {saving ? "Saving…" : "Save geofence"}

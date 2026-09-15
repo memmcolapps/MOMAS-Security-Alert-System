@@ -155,17 +155,76 @@ export function fenceMetrics(fence: GeofenceShape) {
   };
 }
 
+function orientation(a: number[], b: number[], c: number[]) {
+  const value = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  if (Math.abs(value) < 1e-15) return 0;
+  return value > 0 ? 1 : -1;
+}
+
+function onSegment(a: number[], b: number[], point: number[]) {
+  return (
+    Math.min(a[0], b[0]) - 1e-15 <= point[0] &&
+    point[0] <= Math.max(a[0], b[0]) + 1e-15 &&
+    Math.min(a[1], b[1]) - 1e-15 <= point[1] &&
+    point[1] <= Math.max(a[1], b[1]) + 1e-15
+  );
+}
+
+function segmentsCross(p1: number[], p2: number[], p3: number[], p4: number[]) {
+  const d1 = orientation(p3, p4, p1);
+  const d2 = orientation(p3, p4, p2);
+  const d3 = orientation(p1, p2, p3);
+  const d4 = orientation(p1, p2, p4);
+  if (d1 !== d2 && d3 !== d4) return true;
+  if (d1 === 0 && onSegment(p3, p4, p1)) return true;
+  if (d2 === 0 && onSegment(p3, p4, p2)) return true;
+  if (d3 === 0 && onSegment(p1, p2, p3)) return true;
+  if (d4 === 0 && onSegment(p1, p2, p4)) return true;
+  return false;
+}
+
+/**
+ * Whether a ring crosses itself — corners ordered into a bowtie.
+ *
+ * `pointInPolygon` fills by the even-odd rule, so one lobe of a bowtie counts
+ * as outside the fence while the drawn shape gives no hint of it. A fence like
+ * that alarms on assets sitting visibly within it, so it is rejected rather
+ * than stored.
+ */
+export function ringSelfIntersects(ring: any[]) {
+  const points = (Array.isArray(ring) ? ring : []).filter(
+    (point: any) => Array.isArray(point) && point.length >= 2,
+  );
+  const closed =
+    points.length > 1 &&
+    Math.abs(points[0][0] - points[points.length - 1][0]) < 1e-12 &&
+    Math.abs(points[0][1] - points[points.length - 1][1]) < 1e-12;
+  const open = closed ? points.slice(0, -1) : points;
+  const count = open.length;
+  if (count < 4) return false;
+
+  for (let i = 0; i < count; i++) {
+    for (let j = i + 1; j < count; j++) {
+      // Edges sharing a vertex always touch; that is not a crossing.
+      if (j === (i + 1) % count || i === (j + 1) % count) continue;
+      if (segmentsCross(open[i], open[(i + 1) % count], open[j], open[(j + 1) % count])) return true;
+    }
+  }
+  return false;
+}
+
 export function validatePolygonGeometry(geometry: any) {
   if (geometry?.type !== "Polygon" || !Array.isArray(geometry.coordinates) || !geometry.coordinates.length) {
     return false;
   }
   const outer = geometry.coordinates[0];
-  return Array.isArray(outer) && outer.length >= 4 && outer.every(
+  const wellFormed = Array.isArray(outer) && outer.length >= 4 && outer.every(
     (point: any) =>
       Array.isArray(point) &&
       point.length >= 2 &&
       Number.isFinite(Number(point[0])) &&
       Number.isFinite(Number(point[1])),
   );
+  return wellFormed && !ringSelfIntersects(outer);
 }
 
