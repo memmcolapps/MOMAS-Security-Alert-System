@@ -141,7 +141,10 @@ async function scrapeChannel(channel) {
   const knownIds = await db.existingExternalIds(
     items.map((i) => i.external_id),
   );
-  const newItems = items.filter((i) => !knownIds.has(i.external_id));
+  const processedIds = await db.existingProcessedSourceItemIds(
+    items.map((i) => i.external_id),
+  );
+  const newItems = items.filter((i) => !knownIds.has(i.external_id) && !processedIds.has(i.external_id));
 
   console.log(
     `[Telegram] @${channel}: ${messages.length} msgs, ${knownIds.size} known, classifying ${newItems.length}…`,
@@ -195,7 +198,7 @@ async function scrapeChannel(channel) {
       state = state || fallback?.state || extractState(fullText) || null;
     }
 
-    const date = msg.ts.toISOString().slice(0, 10);
+    const date = result.date || msg.ts.toISOString().slice(0, 10);
 
     // Fingerprint dedup against same-day, same-state, same-type
     const fp = buildFingerprint({ date, state, type, title, description });
@@ -216,6 +219,7 @@ async function scrapeChannel(channel) {
           source_url: msg.url,
           fatalities,
           victims,
+          verification_status: result.verification_status,
         });
         if (merged) {
           console.log(
@@ -246,6 +250,10 @@ async function scrapeChannel(channel) {
         source_url: msg.url,
         source_type: "telegram",
         verified: 0,
+        claimed_location: result.location_text || null,
+        event_date_confirmed: Boolean(result.date),
+        verification_status: result.verification_status || "unavailable",
+        published_at: msg.ts,
       });
       if (inserted) added++;
     }

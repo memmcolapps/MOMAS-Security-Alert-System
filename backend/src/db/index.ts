@@ -7,7 +7,16 @@ import { DISCOVERED_STATUS } from "../pocstars/vendor-companies";
 import { Pool } from "pg";
 import { env } from "../config";
 import { bus } from "../events";
-import { scoreEvidenceItem, scoreIncident } from "../osint/confidence";
+import {
+  AUTO_APPROVAL_THRESHOLD,
+  assessIncidentCandidate,
+  scoreEvidenceItem,
+  scoreIncident,
+  sourceFamily,
+  sourceReliability,
+  locationAgreement,
+} from "../osint/confidence";
+import { buildFingerprint, fingerprintsMatch } from "../classifier/fingerprint";
 
 const pool = new Pool({
   connectionString:
@@ -459,11 +468,29 @@ async function init() {
       ALTER TABLE incidents ADD COLUMN IF NOT EXISTS summary TEXT;
       ALTER TABLE incidents ADD COLUMN IF NOT EXISTS confidence_score INTEGER DEFAULT 0;
       ALTER TABLE incidents ADD COLUMN IF NOT EXISTS confidence_reason TEXT;
+      ALTER TABLE incidents ADD COLUMN IF NOT EXISTS confidence_breakdown JSONB DEFAULT '{}'::jsonb;
+      ALTER TABLE incidents ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'legacy';
+      ALTER TABLE incidents ADD COLUMN IF NOT EXISTS approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE incidents ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
       ALTER TABLE source_items ADD COLUMN IF NOT EXISTS analyst_note TEXT;
       ALTER TABLE source_items ADD COLUMN IF NOT EXISTS reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
       ALTER TABLE source_items ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
       ALTER TABLE source_items ADD COLUMN IF NOT EXISTS confidence_score INTEGER DEFAULT 0;
       ALTER TABLE source_items ADD COLUMN IF NOT EXISTS confidence_reason TEXT;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS confidence_breakdown JSONB DEFAULT '{}'::jsonb;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS source_family TEXT;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS event_type TEXT;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS event_date DATE;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS event_date_confirmed BOOLEAN DEFAULT false;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS event_state TEXT;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS event_location TEXT;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS event_lat REAL;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS event_lon REAL;
+      ALTER TABLE source_items ADD COLUMN IF NOT EXISTS verification_status TEXT DEFAULT 'unavailable';
+      CREATE INDEX IF NOT EXISTS idx_source_items_event_match
+        ON source_items(event_date, event_state, event_type);
+      CREATE INDEX IF NOT EXISTS idx_source_items_family
+        ON source_items(source_family);
       ALTER TABLE source_items ADD COLUMN IF NOT EXISTS classification_error TEXT;
       ALTER TABLE source_items ADD COLUMN IF NOT EXISTS classification_attempted_at TIMESTAMPTZ;
       ALTER TABLE source_items ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL;
@@ -636,12 +663,136 @@ async function init() {
 
 /** Insert one incident. Returns the inserted row, or null on duplicate. */
 async function insertIncident(p) {
+  const family = sourceFamily(p);
+  const verificationStatus = p.verification_status || (p.verified ? "structured" : "unavailable");
+  const eventDateConfirmed = p.event_date_confirmed === true || verificationStatus === "structured";
+  const sourceItem = await upsertSourceItem({
+    external_id: p.source_item_external_id || p.external_id,
+    source_type: p.source_type,
+    source: p.source,
+    title: p.title,
+    description: p.description,
+    source_url: p.source_url,
+    published_at: p.published_at || p.date,
+    raw: {},
+    status: "pending",
+  });
+
+  const { rows: configuredRows } = await queryWithRetry(
+    `SELECT reliability_score
+       FROM osint_sources
+      WHERE enabled = TRUE
+        AND source_type = $1
+        AND (LOWER(name) = LOWER($2) OR locator = $3)
+      ORDER BY reliability_score DESC
+      LIMIT 1`,
+    [p.source_type || "", p.source || "", p.source_url || ""],
+  );
+  const baseReliability = sourceReliability({
+    ...p,
+    source_reliability: configuredRows[0]?.reliability_score,
+  });
+  const { rows: historyRows } = await queryWithRetry(
+    `SELECT COUNT(*)::int AS resolved,
+            COUNT(*) FILTER (WHERE status IN ('incident', 'merged', 'linked'))::int AS approved
+       FROM source_items
+      WHERE source_family = $1
+        AND reviewed_by IS NOT NULL
+        AND status IN ('incident', 'merged', 'linked', 'dismissed', 'non_incident')`,
+    [family],
+  );
+  const resolvedHistory = Number(historyRows[0]?.resolved || 0);
+  const effectiveReliability = resolvedHistory
+    ? Math.round((baseReliability * 5 + Number(historyRows[0]?.approved || 0) * 100) / (5 + resolvedHistory))
+    : baseReliability;
+
+  await queryWithRetry(
+    `UPDATE source_items
+        SET source_family = $2,
+            event_type = $3,
+            event_date = $4::DATE,
+            event_date_confirmed = $5,
+            event_state = $6,
+            event_location = $7,
+            event_lat = $8,
+            event_lon = $9,
+            verification_status = $10,
+            classification_attempted_at = NOW(),
+            updated_at = NOW()
+      WHERE id = $1`,
+    [
+      sourceItem.id,
+      family,
+      p.type,
+      p.date,
+      eventDateConfirmed,
+      p.state,
+      p.claimed_location || p.location,
+      p.lat,
+      p.lon,
+      verificationStatus,
+    ],
+  );
+
+  const { rows: nearby } = await queryWithRetry(
+    `SELECT * FROM source_items
+      WHERE id <> $1
+        AND event_type = $2
+        AND event_date BETWEEN $3::DATE - INTERVAL '1 day' AND $3::DATE + INTERVAL '1 day'
+        AND (LOWER(event_state) = LOWER($4) OR ($4 = '' AND event_state IS NULL))
+        AND status NOT IN ('dismissed', 'non_incident')
+      ORDER BY created_at DESC
+      LIMIT 100`,
+    [sourceItem.id, p.type, p.date, p.state || ""],
+  );
+  const fingerprint = buildFingerprint(p);
+  const dbCorroborators = nearby.filter((item) =>
+    locationAgreement(p, item) && fingerprintsMatch(
+      fingerprint,
+      buildFingerprint({
+        date: item.event_date?.toISOString?.().slice(0, 10) || item.event_date,
+        state: item.event_state,
+        type: item.event_type,
+        title: item.title,
+        description: item.description,
+      }),
+    ),
+  );
+  const corroborators = [
+    ...dbCorroborators,
+    ...(Array.isArray(p.corroborating_sources) ? p.corroborating_sources : []),
+  ];
+  const assessment = assessIncidentCandidate({
+    ...p,
+    source_reliability: effectiveReliability,
+    verification_status: verificationStatus,
+    event_date_confirmed: eventDateConfirmed,
+  }, corroborators);
+
+  await queryWithRetry(
+    `UPDATE source_items
+        SET confidence_score = $2,
+            confidence_reason = $3,
+            confidence_breakdown = $4::jsonb,
+            source_family = $5,
+            status = CASE WHEN $6 THEN 'needs_review' ELSE status END,
+            processed_at = CASE WHEN $6 THEN NOW() ELSE processed_at END,
+            updated_at = NOW()
+      WHERE id = $1`,
+    [sourceItem.id, assessment.score, assessment.reason, JSON.stringify(assessment.breakdown), assessment.sourceFamily, assessment.requiresHumanApproval],
+  );
+
+  const humanApproved = p.approval_status === "human_approved";
+  if (assessment.score < AUTO_APPROVAL_THRESHOLD && !humanApproved) return null;
+
   const result = await queryWithRetry(
     `
     INSERT INTO incidents
       (external_id, title, description, date, location, state, lat, lon,
-       type, severity, fatalities, victims, source, source_url, source_type, verified)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       type, severity, fatalities, victims, source, source_url, source_type, verified,
+       confidence_score, confidence_reason, confidence_breakdown,
+       approval_status, approved_by, approved_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NOW())
     ON CONFLICT (external_id) DO NOTHING
     RETURNING *
   `,
@@ -661,11 +812,40 @@ async function insertIncident(p) {
       p.source,
       p.source_url,
       p.source_type,
-      p.verified,
+      1,
+      assessment.score,
+      assessment.reason,
+      JSON.stringify(assessment.breakdown),
+      humanApproved ? "human_approved" : "auto_approved",
+      p.approved_by || null,
     ],
   );
   const row = result.rows[0] || null;
-  if (row) bus.emit("incident:new", row);
+  if (row) {
+    const corroboratorIds = dbCorroborators.map((item) => item.id);
+    await queryWithRetry(
+      `UPDATE source_items
+          SET incident_id = $2,
+              status = CASE WHEN id = $1 THEN 'incident' ELSE 'linked' END,
+              processed_at = NOW(),
+              updated_at = NOW()
+        WHERE id = $1 OR id = ANY($3::int[])`,
+      [sourceItem.id, row.id, corroboratorIds],
+    );
+    await createAuditLog({
+      organization_id: null,
+      actor_user_id: p.approved_by || null,
+      action: humanApproved ? "osint.human_approved" : "osint.auto_approved",
+      target_type: "incident",
+      target_id: row.id,
+      metadata: {
+        evidence_score: assessment.score,
+        independent_sources: assessment.breakdown.independent_sources,
+        source_families: assessment.breakdown.source_families,
+      },
+    }).catch(() => null);
+    bus.emit("incident:new", row);
+  }
   return row;
 }
 
@@ -778,6 +958,10 @@ function normalizeSourceItemStatus(status) {
 function addSourceItemStatusCondition(conds, vals, i, status) {
   const normalized = normalizeSourceItemStatus(status);
   if (!normalized || normalized === "all") return i;
+  if (normalized === "attention") {
+    conds.push(`si.status = 'needs_review'`);
+    return i;
+  }
   if (normalized === "incident") {
     conds.push(`(si.status IN ('incident', 'merged', 'linked') OR si.incident_id IS NOT NULL)`);
     return i;
@@ -843,6 +1027,14 @@ async function listSourceItems({
            si.reviewed_at,
            si.confidence_score,
            si.confidence_reason,
+           si.confidence_breakdown,
+           si.verification_status,
+           si.event_type,
+           si.event_date,
+           si.event_date_confirmed,
+           si.event_state,
+           si.event_location,
+           si.source_family,
            i.title AS incident_title,
            i.date AS incident_date,
            u.email AS reviewed_by_email
@@ -936,10 +1128,11 @@ async function updateSourceItemReview(id, { status, analyst_note, reviewed_by, c
   );
   const row = rows[0] ?? null;
   if (row) {
-    await refreshSourceItemConfidence(row.id).catch(() => null);
+    const refreshed = await refreshSourceItemConfidence(row.id).catch(() => null);
     if (row.incident_id) await refreshIncidentConfidence(row.incident_id).catch(() => null);
+    return refreshed || row;
   }
-  return row;
+  return null;
 }
 
 async function linkSourceItemToIncident(
@@ -1108,7 +1301,7 @@ async function existingProcessedSourceItemIds(ids) {
     `SELECT external_id FROM source_items
       WHERE external_id = ANY($1)
         AND processed_at IS NOT NULL
-        AND status IN ('incident', 'merged', 'non_incident', 'dismissed', 'linked')`,
+        AND status IN ('incident', 'merged', 'non_incident', 'dismissed', 'linked', 'needs_review')`,
     [ids],
   );
   return new Set(rows.map((r) => r.external_id));
@@ -1135,7 +1328,10 @@ async function findMatchingIncidents({ date, state, type }) {
  * Updates report_count, sources array, and takes the max casualty count.
  * Returns true if merged successfully.
  */
-async function mergeIntoIncident(incidentId, { source, source_url, fatalities, victims }) {
+async function mergeIntoIncident(incidentId, { source, source_url, fatalities, victims, verification_status }) {
+  if (!["confirmed", "structured", "human_approved"].includes(String(verification_status || ""))) {
+    return false;
+  }
   const result = await queryWithRetry(
     `UPDATE incidents
      SET report_count = report_count + 1,
@@ -1263,10 +1459,11 @@ async function refreshSourceItemConfidence(id) {
     `UPDATE source_items
         SET confidence_score = $2,
             confidence_reason = $3,
+            confidence_breakdown = $4::jsonb,
             updated_at = NOW()
       WHERE id = $1
       RETURNING *`,
-    [id, confidence.score, confidence.reason],
+    [id, confidence.score, confidence.reason, JSON.stringify(confidence.breakdown || {})],
   );
   return rows[0] ?? null;
 }
@@ -1288,10 +1485,11 @@ async function refreshIncidentConfidence(incidentId) {
     `UPDATE incidents
         SET confidence_score = $2,
             confidence_reason = $3,
+            confidence_breakdown = $4::jsonb,
             updated_at = NOW()
       WHERE id = $1
       RETURNING *`,
-    [incidentId, confidence.score, confidence.reason],
+    [incidentId, confidence.score, confidence.reason, JSON.stringify(confidence.breakdown || {})],
   );
   return rows[0] ?? null;
 }

@@ -360,6 +360,7 @@ async function scrapeFeed(feed) {
           source_url: sourceUrl,
           fatalities,
           victims,
+          verification_status: result.verification_status,
         });
         if (merged) {
           await db.markSourceItemProcessed(external_id, {
@@ -395,6 +396,10 @@ async function scrapeFeed(feed) {
         source_url: sourceUrl,
         source_type: "rss",
         verified: 0,
+        claimed_location: result.location_text || null,
+        event_date_confirmed: Boolean(result.date),
+        verification_status: result.verification_status || "unavailable",
+        published_at: item.isoDate || item.pubDate || date,
       });
 
       if (inserted) added++;

@@ -51,7 +51,7 @@ function primaryOrgId(user: any) {
 const idSchema = z.coerce.number().int().positive();
 const limitSchema = z.coerce.number().int().min(1).max(500);
 const hoursSchema = z.coerce.number().int().min(1).max(24 * 365);
-const sourceItemStatuses = ["pending", "classification_failed", "needs_review", "linked", "incident", "merged", "dismissed", "non_incident", "all"] as const;
+const sourceItemStatuses = ["attention", "pending", "classification_failed", "needs_review", "linked", "incident", "merged", "dismissed", "non_incident", "expired", "all"] as const;
 const alertStatuses = ["new", "reviewed", "dismissed", "all"] as const;
 const managerRoles = new Set(["org_owner", "org_admin", "unit_admin", "admin"]);
 
@@ -437,8 +437,6 @@ router.post("/items/:id/review", async (c) => {
   const input = parse(c, z.object({
     status: z.enum(["pending", "needs_review", "dismissed", "non_incident"]).default("needs_review"),
     analyst_note: z.string().trim().max(4000).nullable().default(null),
-    confidence_score: z.number().int().min(0).max(100).nullable().optional(),
-    confidence_reason: z.string().trim().max(2000).nullable().optional(),
   }), body);
   if (isResponse(input)) return input;
 
@@ -447,8 +445,8 @@ router.post("/items/:id/review", async (c) => {
       status: input.status,
       analyst_note: input.analyst_note,
       reviewed_by: user?.id || null,
-      confidence_score: input.confidence_score ?? null,
-      confidence_reason: input.confidence_reason ?? null,
+      confidence_score: null,
+      confidence_reason: null,
       organization_id: primaryOrgId(user),
     });
     if (!item) return c.json({ error: "OSINT item not found" }, 404);
@@ -504,6 +502,7 @@ router.post("/items/:id/link", async (c) => {
       source_url: item.source_url,
       fatalities: 0,
       victims: 0,
+      verification_status: "human_approved",
     });
     const refreshedIncident = await db.refreshIncidentConfidence(incidentId);
 
@@ -537,6 +536,10 @@ router.post("/items/:id/promote", async (c) => {
   try {
     const item = await db.getSourceItem(itemId, primaryOrgId(user));
     if (!item) return c.json({ error: "OSINT item not found" }, 404);
+    const hasCurrentAssessment = item.confidence_breakdown?.final_score != null;
+    if ((!hasCurrentAssessment || Number(item.confidence_score || 0) < 70) && !input.analyst_note) {
+      return c.json({ error: "This evidence requires an analyst approval note." }, 400);
+    }
 
     const title = item.title || "OSINT report";
     const description = sourceText(item) || title;
@@ -570,6 +573,9 @@ router.post("/items/:id/promote", async (c) => {
       source: item.source,
       source_url: item.source_url,
       source_type: item.source_type,
+      published_at: item.published_at || item.created_at,
+      approval_status: "human_approved",
+      approved_by: user?.id || null,
     });
 
     const status = persisted.status === "inserted" ? "incident" : persisted.status;
@@ -584,8 +590,8 @@ router.post("/items/:id/promote", async (c) => {
       status,
       analyst_note: input.analyst_note,
       reviewed_by: user?.id || null,
-      confidence_score: 75,
-      confidence_reason: result.reasoning || "Promoted by analyst from OSINT inbox",
+      confidence_score: null,
+      confidence_reason: null,
       organization_id: primaryOrgId(user),
     });
     await runWatchlistMatch(reviewed, { organizationId: primaryOrgId(user) }).catch(() => null);
@@ -596,7 +602,12 @@ router.post("/items/:id/promote", async (c) => {
       action: "osint.promote",
       target_type: "source_item",
       target_id: item.id,
-      metadata: { incident_id: persisted.incidentId, status: persisted.status },
+      metadata: {
+        incident_id: persisted.incidentId,
+        status: persisted.status,
+        approval: "human_approved",
+        evidence_score: reviewed?.confidence_score,
+      },
     }).catch(() => null);
 
     const incident = persisted.incidentId

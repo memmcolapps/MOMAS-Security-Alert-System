@@ -28,15 +28,10 @@ import {
 } from "../lib/api";
 
 const statuses = [
-  { value: "pending", label: "Pending" },
-  { value: "classification_failed", label: "Retrying" },
-  { value: "needs_review", label: "Needs review" },
-  { value: "linked", label: "Linked" },
-  { value: "incident", label: "Incident" },
-  { value: "merged", label: "Merged" },
+  { value: "attention", label: "Needs approval" },
+  { value: "incident", label: "Published" },
   { value: "dismissed", label: "Dismissed" },
-  { value: "non_incident", label: "Non-incident" },
-  { value: "all", label: "All" },
+  { value: "all", label: "All evidence" },
 ];
 
 const statusStyles = {
@@ -94,6 +89,10 @@ function confBarColor(value) {
   return "#fb923c";
 }
 
+function needsHumanApproval(item) {
+  return item?.confidence_breakdown?.final_score == null || Number(item?.confidence_score || 0) < 70;
+}
+
 function SkeletonRows() {
   return (
     <div className="animate-pulse">
@@ -110,7 +109,7 @@ function SkeletonRows() {
 export function OsintRoute() {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState("inbox");
-  const [status, setStatus] = useState("pending");
+  const [status, setStatus] = useState("attention");
   const [sourceType, setSourceType] = useState("all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
@@ -130,7 +129,7 @@ export function OsintRoute() {
   const listQuery = useQuery({
     queryKey: ["osint-items", status, sourceType, search, page],
     queryFn: () => listOsintItems({ status, source_type: sourceType, q: search, limit: 50, offset: page * 50 }),
-    refetchInterval: status === "pending" ? 30000 : false,
+    refetchInterval: status === "attention" ? 30000 : false,
   });
 
   const items = useMemo(() => listQuery.data?.items || [], [listQuery.data?.items]);
@@ -192,7 +191,7 @@ export function OsintRoute() {
   // Lightweight counts that drive the tab badges regardless of the active tab.
   const pendingCountQuery = useQuery({
     queryKey: ["osint-pending-count"],
-    queryFn: () => listOsintItems({ status: "pending", limit: 1 }),
+    queryFn: () => listOsintItems({ status: "attention", limit: 1 }),
     refetchInterval: 60000,
   });
   const newAlertsQuery = useQuery({
@@ -598,11 +597,12 @@ export function OsintRoute() {
                     </div>
                     <div className="flex items-center gap-2 text-[10px] text-neutral-500">
                       <span className="truncate">{sourceLabel(item)}</span>
-                      {item.confidence_score ? (
+                      {item.confidence_score != null ? (
                         <span className="flex shrink-0 items-center gap-1" title={`Confidence ${item.confidence_score}%`}>
                           <span className="h-1 w-8 overflow-hidden rounded-full bg-white/10">
                             <span className="block h-full rounded-full" style={{ width: `${Math.min(100, item.confidence_score)}%`, backgroundColor: confBarColor(item.confidence_score) }} />
                           </span>
+                          <span className={confidenceColor(item.confidence_score)}>{item.confidence_score}%</span>
                         </span>
                       ) : null}
                       <span className="ml-auto shrink-0" title={formatDate(item.published_at || item.created_at)}>
@@ -643,10 +643,10 @@ export function OsintRoute() {
                   <p className="mt-2 text-[11px] text-neutral-500">
                     Published {formatDate(detail.published_at)} · collected {formatDate(detail.created_at)}
                   </p>
-                  {detail.confidence_score ? (
+                  {detail.confidence_score != null ? (
                     <p className="mt-2 text-[11px] text-neutral-400">
-                      Source confidence: <span className={`font-black ${confidenceColor(detail.confidence_score)}`}>{detail.confidence_score}%</span>
-                      {detail.confidence_reason ? ` · ${detail.confidence_reason}` : ""}
+                      Evidence confidence: <span className={`font-black ${confidenceColor(detail.confidence_score)}`}>{detail.confidence_score}%</span>
+                      {needsHumanApproval(detail) ? " · Human approval required" : " · Eligible for automatic publication"}
                     </p>
                   ) : null}
                 </div>
@@ -677,15 +677,16 @@ export function OsintRoute() {
                 </section>
 
                 <aside className="rounded border border-white/10 bg-black/25 p-4">
+                  <ConfidencePanel item={detail} />
                   <h3 className="text-[11px] font-bold uppercase tracking-wide text-neutral-500">Analyst actions</h3>
 
                   <label className="mt-4 block text-[11px] font-bold text-neutral-400">
-                    Analyst note
+                    Analyst note {needsHumanApproval(detail) ? "(required to approve)" : ""}
                     <textarea
                       className="mt-1 h-24 w-full resize-none rounded border border-ops-line bg-black/60 p-2 text-xs font-normal text-neutral-200 outline-none"
                       value={note}
                       onChange={(event) => setNote(event.target.value)}
-                      placeholder="Why this was promoted, linked, or dismissed"
+                      placeholder="Why this evidence should be approved, linked, or dismissed"
                     />
                   </label>
 
@@ -708,10 +709,10 @@ export function OsintRoute() {
 
                   <button
                     className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-[11px] font-bold text-red-300 disabled:opacity-50"
-                    disabled={busy}
+                    disabled={busy || (needsHumanApproval(detail) && !note.trim())}
                     onClick={promote}
                   >
-                    <ShieldCheck size={13} /> Promote to incident
+                    <ShieldCheck size={13} /> {needsHumanApproval(detail) ? "Approve & publish" : "Publish incident"}
                   </button>
 
                   <button
@@ -892,6 +893,51 @@ function SubnavButton({ active, label, onClick }) {
     >
       {label}
     </button>
+  );
+}
+
+const confidenceLabels = {
+  security_relevance: "Security relevance",
+  corroboration: "Corroboration",
+  source_reliability: "Source reliability",
+  location: "Location",
+  freshness: "Freshness",
+};
+
+function ConfidencePanel({ item }) {
+  const breakdown = item?.confidence_breakdown || {};
+  const parts = Object.entries(confidenceLabels)
+    .map(([key, label]) => ({ key, label, ...breakdown[key] }))
+    .filter((part) => Number.isFinite(Number(part.score)));
+  if (!parts.length) return null;
+  const needsApproval = Number(item.confidence_score || 0) < Number(breakdown.threshold || 70);
+  return (
+    <section className={`mb-4 rounded border p-3 ${needsApproval ? "border-orange-500/30 bg-orange-500/[0.06]" : "border-ops-green/25 bg-ops-green/[0.05]"}`}>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-wide text-neutral-500">Evidence confidence</p>
+          <p className={`mt-1 text-xl font-black ${confidenceColor(item.confidence_score)}`}>{item.confidence_score}%</p>
+        </div>
+        <span className={`rounded px-2 py-1 text-[9px] font-black uppercase ${needsApproval ? "bg-orange-500/15 text-orange-300" : "bg-ops-green/15 text-ops-green"}`}>
+          {needsApproval ? "Approval required" : "Auto eligible"}
+        </span>
+      </div>
+      <div className="mt-3 space-y-2">
+        {parts.map((part) => (
+          <div key={part.key} title={part.reason || ""}>
+            <div className="mb-1 flex justify-between text-[10px] text-neutral-400">
+              <span>{part.label}</span><span>{part.score}/{part.max}</span>
+            </div>
+            <div className="h-1 overflow-hidden rounded bg-white/10">
+              <div className="h-full rounded bg-neutral-300" style={{ width: `${Math.min(100, (Number(part.score) / Number(part.max || 1)) * 100)}%` }} />
+            </div>
+          </div>
+        ))}
+      </div>
+      {breakdown.hard_caps?.length ? (
+        <p className="mt-3 text-[10px] leading-relaxed text-orange-200/80">Held: {breakdown.hard_caps.join(" · ")}</p>
+      ) : null}
+    </section>
   );
 }
 

@@ -390,7 +390,11 @@ async function scrapeGDELT(daysBack = 7) {
   }));
 
   const results = await classifyMany(
-    classifyItems.map((ci) => ({ title: ci.title, description: ci.description })),
+    classifyItems.map((ci) => ({
+      title: ci.title,
+      description: ci.description,
+      publishedAt: ci.cluster.events[0]?.datePublished || null,
+    })),
   );
 
   let added = 0;
@@ -437,7 +441,7 @@ async function scrapeGDELT(daysBack = 7) {
     }
 
     const state = geo?.state || extractState(`${title} ${description}`) || firstEv.locationName || null;
-    const dateStr = firstEv.datePublished?.slice(0, 10) || new Date().toISOString().slice(0, 10);
+    const dateStr = result.date || firstEv.datePublished?.slice(0, 10) || new Date().toISOString().slice(0, 10);
     const { tier: confidenceTier } = computeIncidentConfidence(cluster);
 
     // Check for existing incident with matching fingerprint
@@ -459,6 +463,7 @@ async function scrapeGDELT(daysBack = 7) {
           source_url: allUrls[0],
           fatalities,
           victims,
+          verification_status: result.verification_status,
         });
         if (merged) {
           await Promise.all(cluster.events.map((ev) =>
@@ -492,6 +497,15 @@ async function scrapeGDELT(daysBack = 7) {
         source_url: allUrls[0] || null,
         source_type: 'gdelt',
         verified: confidenceTier === 'HIGH' ? 1 : 0,
+        claimed_location: result.location_text || firstEv.locationName || null,
+        event_date_confirmed: Boolean(result.date),
+        verification_status: result.verification_status || 'unavailable',
+        published_at: firstEv.datePublished || dateStr,
+        corroborating_sources: cluster.events.map((event) => ({
+          source_type: 'gdelt',
+          source: event.domain || 'unknown',
+          source_url: event.url || null,
+        })),
       });
 
       if (inserted) added++;

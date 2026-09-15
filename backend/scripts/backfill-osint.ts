@@ -54,7 +54,7 @@ const results = await classifyMany(candidates.map((item) => ({
   publishedAt: item.published_at,
 })));
 
-const summary = { incidents: 0, merged: 0, rejected: 0, failed: 0 };
+const summary = { incidents: 0, merged: 0, needs_review: 0, rejected: 0, failed: 0 };
 
 for (let index = 0; index < candidates.length; index++) {
   const item = candidates[index];
@@ -92,6 +92,11 @@ for (let index = 0; index < candidates.length; index++) {
     source_url: item.source_url,
     source_type: item.source_type,
   });
+
+  if (persisted.status === "needs_review") {
+    summary.needs_review++;
+    continue;
+  }
 
   if (!persisted.incidentId) {
     summary.failed++;

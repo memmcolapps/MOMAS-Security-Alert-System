@@ -175,7 +175,7 @@ async function scrapeReliefWeb(daysBack = 30) {
   console.log(`[ReliefWeb] Classifying ${newReportItems.length} fresh report(s)…`);
 
   const results = await classifyMany(
-    newReportItems.map((ri) => ({ title: ri.title, description: ri.description })),
+    newReportItems.map((ri) => ({ title: ri.title, description: ri.description, publishedAt: ri.dateCreated })),
   );
 
   let added = 0;
@@ -211,7 +211,7 @@ async function scrapeReliefWeb(daysBack = 30) {
     const fullText = `${ri.title} ${ri.description} ${ri.keywords.join(' ')}`;
     const geo = geocode(fullText) || geocode(ri.title);
     const state = geo?.state || extractState(fullText) || null;
-    const dateStr = ri.dateCreated.slice(0, 10);
+    const dateStr = result.date || ri.dateCreated.slice(0, 10);
 
     // Check for existing incident with matching fingerprint
     const fp = buildFingerprint({ date: dateStr, state, type, title: ri.title, description: ri.description });
@@ -232,6 +232,7 @@ async function scrapeReliefWeb(daysBack = 30) {
           source_url: ri.sourceUrl,
           fatalities,
           victims,
+          verification_status: result.verification_status,
         });
         if (merged) {
           await db.markSourceItemProcessed(external_id, {
@@ -263,6 +264,10 @@ async function scrapeReliefWeb(daysBack = 30) {
         source_url: ri.sourceUrl,
         source_type: 'reliefweb',
         verified: 1,
+        claimed_location: result.location_text || null,
+        event_date_confirmed: Boolean(result.date),
+        verification_status: result.verification_status || 'unavailable',
+        published_at: ri.dateCreated,
       });
 
       if (inserted) added++;

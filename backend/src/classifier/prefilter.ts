@@ -13,24 +13,21 @@
 
 // Concrete security event indicators — must be present if reaction words appear
 const SECURITY_RE = new RegExp(
-  [
-    'kill(?:ed|ing|s)?', 'dead', 'death', 'fatal(?:ity|ities)?', 'casualt',
+  `\\b(?:${[
+    'kill(?:ed|ing|s)?', 'dead', 'death', 'fatal(?:ity|ities)?', 'casualt(?:y|ies)',
     'shot', 'shoot(?:ing|out)?', 'gun(?:men|man|fire|shot)', 'ambush',
     'attack(?:ed|s|ing)?', 'raid(?:ed|s|ing)?', 'assault(?:ed|s)?',
     'bomb(?:ed|ing|s)?', 'blast', 'explos(?:ion|ive)', 'ied', 'landmine',
     'kidnap(?:ped|ping|pers?)?', 'abduct(?:ed|ion|ions)?', 'hostage', 'ransom',
-    'bandit', 'terror(?:ist|ism)?', 'insurgen(?:t|cy)', 'militant',
+    'bandits?', 'terror(?:ist|ists|ism)?', 'insurgen(?:t|ts|cy)', 'militants?',
     'boko haram', 'iswap', 'ansaru', 'lakurawa', 'jnim',
     'massacre', 'slaughter',
     'raiders?', 'rustlers?', 'vigilante', 'mob', 'communal', 'reprisal',
     'herder', 'herdsmen?', 'farmer[- ]herder', 'pastoralist',
     'cult(?:ist|ists|ism)?', 'confraternity',
-    'troops?', 'soldiers?', 'military', 'police', 'security operative',
     'idps?', 'displac(?:e|es|ed|ing|ement)', 'refugee', 'flee(?:ing|d|s)?',
     'armed', 'gunfire', 'clash(?:es|ed)?', 'violence',
-    'fire(?:outbreak|disaster)?', 'burn(?:t|ed|ing)?', 'blaze',
-    'flood(?:ing|ed|s)?', 'building\\s+collap', 'crash(?:ed|es)?',
-  ].join('|'),
+  ].join('|')})\\b`,
   'i',
 );
 
@@ -74,8 +71,11 @@ const POLICY_DISCUSSION_RE = new RegExp(
   'i',
 );
 
+const NON_SECURITY_HARM_RE = /\b(?:road\s+accident|traffic\s+accident|crash(?:ed|es)?|building\s+collaps(?:e|ed|es)|flood(?:ing|ed|s)?|fire\s+outbreak|industrial\s+fire)\b/i;
+const ACTIVE_VIOLENCE_RE = /\b(?:gunm[ae]n|bandits?|terrorists?|attack(?:ed|s|ing)?|ambush(?:ed|es)?|bomb(?:ed|ing|s)?|kidnap(?:ped|ping|pers?)?|abduct(?:ed|ion|ions)?|armed|raid(?:ed|s|ing)?|shoot(?:ing|out)?|shot)\b/i;
+
 const NIGERIA_RE = new RegExp(
-  [
+  `\\b(?:${[
     'nigeria', 'nigerian',
     'abuja', 'lagos', 'kano',
     'borno', 'yobe', 'adamawa', 'bauchi', 'gombe', 'taraba',
@@ -92,7 +92,7 @@ const NIGERIA_RE = new RegExp(
     'onitsha', 'awka', 'nnewi', 'nsukka', 'asaba', 'yenagoa', 'bonny',
     'lake chad', 'middle belt', 'north[- ]?east', 'north[- ]?west',
     'south[- ]?east', 'south[- ]?south',
-  ].join('|'),
+  ].join('|')})\\b`,
   'i',
 );
 
@@ -101,6 +101,7 @@ function looksLikeSecurityIncident(title, description = '') {
   if (!text.trim()) return false;
   if (!NIGERIA_RE.test(text)) return false;
   if (POLICY_DISCUSSION_RE.test(text)) return false;
+  if (NON_SECURITY_HARM_RE.test(text) && !ACTIVE_VIOLENCE_RE.test(text)) return false;
   // Block reaction/commentary pieces unless they also describe a concrete event
   if (NON_EVENT_RE.test(text) && !SECURITY_RE.test(text)) return false;
   return SECURITY_RE.test(text);

@@ -611,7 +611,8 @@ Respond ONLY with a JSON object: {"results":[{"id": <input id>, "confirmed": boo
 
 /**
  * Second-opinion check on triage positives. Returns one verdict per item:
- * {confirmed, reason} or null when verification was unavailable (fail open).
+ * {confirmed, reason} or null when verification was unavailable. Downstream
+ * confidence scoring treats unavailable verification as human-review only.
  */
 async function callVerifyBatch(batch) {
   const payload = batch.map((b, i) => ({ id: i, text: itemText(b) }));
@@ -788,6 +789,11 @@ async function verifyNode(state) {
       console.log(
         `[graph:${state.runId}:verify] disabled — keeping ${positives.length} unverified positive(s)`,
       );
+      for (const idx of positives) {
+        results[idx] = { ...results[idx], verification_status: "unavailable" };
+        const key = keyByIndex.get(idx);
+        if (key) cacheSet(key, results[idx]);
+      }
     }
     return { results };
   }
@@ -805,17 +811,26 @@ async function verifyNode(state) {
 
     for (let j = 0; j < slice.length; j++) {
       const verdict = verdicts[j];
-      // null verdict = verification unavailable; fail open and keep the triage result
-      if (!verdict || verdict.confirmed !== false) continue;
-
       const idx = slice[j];
+      const key = keyByIndex.get(idx);
+      if (!verdict) {
+        results[idx] = { ...results[idx], verification_status: "unavailable" };
+        if (key) cacheSet(key, results[idx]);
+        continue;
+      }
+      if (verdict.confirmed !== false) {
+        results[idx] = { ...results[idx], verification_status: "confirmed" };
+        if (key) cacheSet(key, results[idx]);
+        continue;
+      }
+
       rejected++;
       results[idx] = {
         ...NON_INCIDENT,
         reasoning: `verify: ${verdict.reason || "rejected by second pass"}`,
+        verification_status: "rejected",
       };
       console.log(`  [✗ verify] ${verdict.reason || "rejected"}`);
-      const key = keyByIndex.get(idx);
       if (key) cacheSet(key, results[idx]);
     }
   }
@@ -863,15 +878,14 @@ function publishGuardNode(state) {
     }
 
     let reason = null;
+    const guardFlags = [];
     if (FOLLOW_UP_RE.test(text)) {
       reason = "Follow-up story, not a fresh incident";
     } else if (FOREIGN_PLACE_RE.test(guardText) && !stateName) {
       reason = "Foreign or non-Nigeria story";
-    } else if (!geo && !stateName) {
-      reason = "No concrete Nigerian map location";
-    } else if (staleDays !== null && staleDays > MAX_EVENT_AGE_DAYS) {
-      reason = `Event predates publication by ${Math.round(staleDays)} days`;
     }
+    if (!geo && !stateName) guardFlags.push("location_unresolved");
+    if (staleDays !== null && staleDays > MAX_EVENT_AGE_DAYS) guardFlags.push("stale_event");
 
     if (reason) {
       guardRejected++;
@@ -882,11 +896,12 @@ function publishGuardNode(state) {
       continue;
     }
 
+    results[i] = { ...result, guard_flags: guardFlags };
     incidents++;
   }
 
   console.log(
-    `[graph:${state.runId}:publish_guard] ${state.stats.incidents || 0} candidate incident(s) -> ${incidents} publishable, ${guardRejected} rejected`,
+    `[graph:${state.runId}:publish_guard] ${state.stats.incidents || 0} candidate incident(s) -> ${incidents} ready for evidence scoring, ${guardRejected} rejected`,
   );
 
   return {

@@ -79,14 +79,15 @@ async function persistIfIncident(channel, item, result) {
     result,
     title: item.title,
     description: item.description,
-    date: item.ts.toISOString().slice(0, 10),
+    date: result.date || item.ts.toISOString().slice(0, 10),
     external_id: item.external_id,
     source: `Telegram @${channel}`,
     source_url: item.url,
     source_type: "telegram",
+    published_at: item.publishedAt,
   });
 
-  if (outcome.status !== "skipped") {
+  if (outcome.incidentId) {
     console.log(
       `[TG-MTProto] @${channel} ${outcome.status} incident #${outcome.incidentId}: ${item.title.slice(0, 60)}…`,
     );
@@ -111,7 +112,10 @@ async function backfillChannel(client, channel) {
     const knownIds = await db.existingExternalIds(
       items.map((i) => i.external_id),
     );
-    const fresh = items.filter((i) => !knownIds.has(i.external_id));
+    const processedIds = await db.existingProcessedSourceItemIds(
+      items.map((i) => i.external_id),
+    );
+    const fresh = items.filter((i) => !knownIds.has(i.external_id) && !processedIds.has(i.external_id));
     if (!fresh.length) return;
 
     console.log(
@@ -160,6 +164,8 @@ async function handleNewMessage(channel, event) {
 
     const known = await db.existingExternalIds([item.external_id]);
     if (known.has(item.external_id)) return;
+    const processed = await db.existingProcessedSourceItemIds([item.external_id]);
+    if (processed.has(item.external_id)) return;
 
     const result = await classify(item.title, item.description);
     await persistIfIncident(channel, item, result);

@@ -262,6 +262,7 @@ async function fetchHAPI(daysBack = 30) {
           source_url: 'https://hapi.humdata.org',
           fatalities: c.fatalities,
           victims: 0,
+          verification_status: 'structured',
         });
         if (merged) {
           await db.markSourceItemProcessed(c.external_id, {
@@ -292,12 +293,18 @@ async function fetchHAPI(daysBack = 30) {
         source_url: 'https://hapi.humdata.org',
         source_type: 'hapi',
         verified: 1,
+        claimed_location: c.location,
+        event_date_confirmed: true,
+        verification_status: 'structured',
+        published_at: c.date,
       });
-      if (inserted) added++;
-      await db.markSourceItemProcessed(c.external_id, {
-        status: 'incident',
-        incident_id: inserted?.id ?? null,
-      });
+      if (inserted) {
+        added++;
+        await db.markSourceItemProcessed(c.external_id, {
+          status: 'incident',
+          incident_id: inserted.id,
+        });
+      }
     }
   }
 
@@ -377,6 +384,7 @@ async function fetchHAPI(daysBack = 30) {
           source_url: 'https://hapi.humdata.org',
           fatalities: 0,
           victims: Math.min(c.population, 4999),
+          verification_status: 'structured',
         });
         if (merged) {
           await db.markSourceItemProcessed(c.external_id, {
@@ -407,12 +415,18 @@ async function fetchHAPI(daysBack = 30) {
         source_url: 'https://hapi.humdata.org',
         source_type: 'hapi',
         verified: 1,
+        claimed_location: c.location,
+        event_date_confirmed: true,
+        verification_status: 'structured',
+        published_at: c.date,
       });
-      if (inserted) added++;
-      await db.markSourceItemProcessed(c.external_id, {
-        status: 'incident',
-        incident_id: inserted?.id ?? null,
-      });
+      if (inserted) {
+        added++;
+        await db.markSourceItemProcessed(c.external_id, {
+          status: 'incident',
+          incident_id: inserted.id,
+        });
+      }
     }
   }
 

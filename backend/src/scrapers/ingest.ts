@@ -24,6 +24,9 @@ async function persistIncident({
   source,
   source_url,
   source_type,
+  published_at = null,
+  approval_status = null,
+  approved_by = null,
 }) {
   const { type, fatalities, victims, severity } = result;
   const fullText = `${title} ${description}`;
@@ -56,6 +59,7 @@ async function persistIncident({
         source_url,
         fatalities,
         victims,
+        verification_status: approval_status === "human_approved" ? "human_approved" : result.verification_status,
       });
       if (merged) return { status: "merged", incidentId: existing.id };
       break;
@@ -81,8 +85,18 @@ async function persistIncident({
     source_url,
     source_type,
     verified: 0,
+    claimed_location: result.location_text || null,
+    event_date_confirmed: Boolean(result.date),
+    verification_status: result.verification_status || "unavailable",
+    published_at: published_at || date,
+    source_item_external_id: external_id.replace(/^osint:/, ""),
+    approval_status,
+    approved_by,
   });
 
+  if (!inserted) {
+    return { status: "needs_review", incidentId: null };
+  }
   return inserted
     ? { status: "inserted", incidentId: inserted.id }
     : { status: "skipped", incidentId: null };

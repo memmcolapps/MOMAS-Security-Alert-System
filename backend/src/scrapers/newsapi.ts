@@ -78,7 +78,8 @@ async function scrapeNewsAPI(daysBack = 2) {
 
   // 3. Skip already-stored articles (no wasted Groq calls)
   const knownIds = await db.existingExternalIds(prefiltered.map((c) => c.external_id));
-  const newItems = prefiltered.filter((c) => !knownIds.has(c.external_id));
+  const processedIds = await db.existingProcessedSourceItemIds(prefiltered.map((c) => c.external_id));
+  const newItems = prefiltered.filter((c) => !knownIds.has(c.external_id) && !processedIds.has(c.external_id));
 
   console.log(
     `[NewsAPI] ${raw.length} fetched → ${prefiltered.length} pass prefilter → ${newItems.length} new`,
@@ -91,7 +92,7 @@ async function scrapeNewsAPI(daysBack = 2) {
 
   // 4. LLM classification
   const classifications = await classifyMany(
-    newItems.map((i) => ({ title: i.title, description: i.description })),
+    newItems.map((i) => ({ title: i.title, description: i.description, publishedAt: i.date })),
   );
 
   let added = 0;
@@ -108,10 +109,11 @@ async function scrapeNewsAPI(daysBack = 2) {
     const fullText = `${item.title} ${item.description}`;
     const geo = geocode(fullText) || geocode(item.title);
     const state = geo?.state || extractState(fullText) || null;
+    const incidentDate = result.date || item.date;
 
     // Check for existing incident with matching fingerprint
-    const fp = buildFingerprint({ date: item.date, state, type: result.type, title: item.title, description: item.description });
-    const matches = await db.findMatchingIncidents({ date: item.date, state, type: result.type });
+    const fp = buildFingerprint({ date: incidentDate, state, type: result.type, title: item.title, description: item.description });
+    const matches = await db.findMatchingIncidents({ date: incidentDate, state, type: result.type });
 
     let merged = false;
     for (const existing of matches) {
@@ -128,6 +130,7 @@ async function scrapeNewsAPI(daysBack = 2) {
           source_url: item.source_url,
           fatalities: result.fatalities,
           victims: result.victims,
+          verification_status: result.verification_status,
         });
         if (merged) {
           console.log(`[NewsAPI] Merged into existing incident #${existing.id}: ${item.title.slice(0, 60)}…`);
@@ -141,7 +144,7 @@ async function scrapeNewsAPI(daysBack = 2) {
         external_id: item.external_id,
         title: item.title,
         description: item.description.slice(0, 2000),
-        date: item.date,
+        date: incidentDate,
         location: geo
           ? geo.matched.charAt(0).toUpperCase() + geo.matched.slice(1)
           : state || 'Nigeria',
@@ -156,6 +159,10 @@ async function scrapeNewsAPI(daysBack = 2) {
         source_url: item.source_url,
         source_type: 'newsapi',
         verified: 0,
+        claimed_location: result.location_text || null,
+        event_date_confirmed: Boolean(result.date),
+        verification_status: result.verification_status || 'unavailable',
+        published_at: item.date,
       });
       if (inserted) added++;
     }
