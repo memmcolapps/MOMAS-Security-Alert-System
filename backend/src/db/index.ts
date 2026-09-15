@@ -2796,6 +2796,21 @@ async function listOrganizationCompanyIds() {
   return rows.map((row: any) => Number(row.company_id));
 }
 
+// Companies belonging to organizations MOMAS actually operates. A discovered
+// organization is another tenant's control room that the sync found on this
+// shared install; we can see it, and that is all. Anything that writes into a
+// company - a dispatcher seat above all - has to ask this rather than
+// listOrganizationCompanyIds, which answers with the whole install.
+async function listOperatedCompanyIds() {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT pocstars_company_id AS company_id
+       FROM organizations
+      WHERE pocstars_company_id ~ '^[0-9]+$'
+        AND status IS DISTINCT FROM 'discovered'`,
+  );
+  return rows.map((row: any) => Number(row.company_id));
+}
+
 // Every slug already spoken for. The company import needs these before it can
 // derive slugs of its own, because a vendor company named after an
 // organization somebody already created by hand is the ordinary case, not the
@@ -4628,6 +4643,7 @@ export {
   assignDeviceToUnit,
   hasPocstarsDispatchers,
   listOrganizationCompanyIds,
+  listOperatedCompanyIds,
   listOrganizationSlugs,
   getOrganizationByCompanyId,
   promoteDiscoveredOrganization,

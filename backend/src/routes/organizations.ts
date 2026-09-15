@@ -2,7 +2,6 @@ import { Hono } from "hono";
 import { isPlatformOwner, normalizeOrgRole, requirePlatform } from "../auth";
 import * as db from "../db";
 import {
-  knownCompanyIds,
   liveRadioConfigured,
   provisionOnNetwork,
   queryPocstarsInventory,
@@ -387,16 +386,16 @@ setInterval(() => {
         target_id: inventory?.dispatcher?.id ?? null,
         metadata: summary,
       });
-      // Presence is watched per vendor company. The database sync is the better
-      // source for which companies exist, but it is not the only one: a sync
-      // that fell back to the voice plane resolves no companies at all, and
-      // relying on it alone meant one transient fallback left presence
-      // unwatched until the next restart. Organizations know their own company.
-      const watched = new Set<number>([
-        ...knownCompanyIds(),
-        ...(await db.listOrganizationCompanyIds()),
-      ]);
-      for (const companyId of watched) startPresenceWatcher(companyId);
+      // Presence is watched only for organizations MOMAS operates. A watcher
+      // signs in on a seat it creates inside the company, so watching every
+      // company the sync enumerates would mint a MOMAS dispatcher account in
+      // thirty-odd other tenants' control rooms - the same thing
+      // IMPORTED_PLATFORM_SEATS refuses to do at import time. That set was two
+      // organizations when this was written and is the whole shared install now
+      // that companies are discovered automatically.
+      for (const companyId of await db.listOperatedCompanyIds()) {
+        startPresenceWatcher(companyId);
+      }
     } catch {
       // Live calls take priority. The next five-minute cycle retries safely.
     } finally {
