@@ -205,7 +205,7 @@ export class PocstarsBridgeClient extends EventEmitter {
     if (message.type === "error") {
       const error = new Error(message.message || "The radio link reported an error.");
       this.rejectWaiters(error);
-      this.emit("error", error);
+      this.raise(error);
       return;
     }
     for (const waiter of this.waiters) {
@@ -234,7 +234,19 @@ export class PocstarsBridgeClient extends EventEmitter {
 
   private fail(error: Error) {
     this.rejectWaiters(error);
-    if (!this.closing) this.emit("error", error);
+    if (!this.closing) this.raise(error);
+  }
+
+  // An EventEmitter with no "error" listener does not ignore emit("error") - it
+  // throws, from inside a socket callback where nothing can catch it, and the
+  // process dies. Most callers here await a request and never attach a
+  // listener, because rejectWaiters already hands them the failure through the
+  // rejected promise. That made a bridge answering "Failed to connect" able to
+  // crash-loop the whole backend, which is exactly what it did once the radio
+  // network became unreachable: every inventory sync and presence refresh took
+  // MOMAS down with it, alarms and map included.
+  private raise(error: Error) {
+    if (this.listenerCount("error") > 0) this.emit("error", error);
   }
 
   private rejectWaiters(error: Error) {
