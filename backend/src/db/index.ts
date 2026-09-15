@@ -290,6 +290,7 @@ async function init() {
       name                  TEXT,
       type                  INTEGER,
       source_dispatcher_uid TEXT,
+      company_id            TEXT,
       active                BOOLEAN NOT NULL DEFAULT true,
       first_seen_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       last_seen_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -540,6 +541,13 @@ async function init() {
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS pocstars_online BOOLEAN;
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS pocstars_last_seen_at TIMESTAMPTZ;
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS pocstars_source_dispatcher_uid TEXT;
+      ALTER TABLE pocstars_groups ADD COLUMN IF NOT EXISTS company_id TEXT;
+      -- One talk group is one channel. Claiming used to be a deliberate act
+      -- rare enough for a race not to matter; the sync now claims on every
+      -- cycle, so a manual claim landing mid-sync could leave two rows for
+      -- one group and radios following whichever was read first.
+      CREATE UNIQUE INDEX IF NOT EXISTS channels_pocstars_group_id_key
+        ON channels(pocstars_group_id) WHERE pocstars_group_id IS NOT NULL;
       -- The vendor company a radio belongs to. Group membership was the only
       -- handle on ownership before companies were imported, which left a radio
       -- in no group unattributable however well we knew its company.
@@ -2989,22 +2997,26 @@ async function syncPocstarsPlatformInventory(inventory: any) {
         id: String(group.id || ""),
         name: String(group.name || `Group ${group.id}`),
         type: Number(group.type || 0),
+        // The vendor company that owns the talk group. This is what lets a
+        // channel find its organization without anybody claiming it by hand.
+        companyId: /^\d+$/.test(String(group.companyId || "")) ? String(group.companyId) : null,
       }))
       .filter((group: any) => /^\d+$/.test(group.id));
     let groupsCreated = 0;
     let groupsUpdated = 0;
     for (const group of groups) {
       const { rows } = await client.query(
-        `INSERT INTO pocstars_groups (group_id, name, type, source_dispatcher_uid, active, last_seen_at)
-         VALUES ($1,$2,$3,$4,true,NOW())
+        `INSERT INTO pocstars_groups (group_id, name, type, source_dispatcher_uid, company_id, active, last_seen_at)
+         VALUES ($1,$2,$3,$4,$5,true,NOW())
          ON CONFLICT (group_id) DO UPDATE SET
            name = EXCLUDED.name,
            type = EXCLUDED.type,
            source_dispatcher_uid = EXCLUDED.source_dispatcher_uid,
+           company_id = COALESCE(EXCLUDED.company_id, pocstars_groups.company_id),
            active = true,
            last_seen_at = NOW()
          RETURNING (xmax = 0) AS inserted`,
-        [group.id, group.name, group.type, dispatcherUid],
+        [group.id, group.name, group.type, dispatcherUid, group.companyId],
       );
       if (rows[0]?.inserted) groupsCreated += 1;
       else groupsUpdated += 1;
@@ -3025,8 +3037,39 @@ async function syncPocstarsPlatformInventory(inventory: any) {
       );
     }
 
-    // Channels already claimed by an organization. Radios in these groups
-    // follow the channel's owner automatically.
+    // Channels follow their vendor company, exactly as radios do. Every company
+    // the sync enumerates is already an organization here, so a talk group's
+    // owner is known without anybody claiming it by hand - and claiming each
+    // one by hand is the whole job this removes.
+    //
+    // Two rules, both borrowed from the radio path because the reasoning is the
+    // same. A channel row that already exists is a decision somebody made here
+    // and is never touched, so an operator's assignment always outranks the
+    // company. And a group whose company maps to no organization is left in the
+    // registry unclaimed rather than guessed at.
+    const organizationByCompanyForGroups = await organizationIdsByCompanyId();
+    let channelsClaimed = 0;
+    for (const group of groups) {
+      if (!group.companyId) continue;
+      const organizationId = organizationByCompanyForGroups.get(group.companyId);
+      if (!organizationId) continue;
+      const { rowCount } = await client.query(
+        // DO NOTHING is the rule, not an optimisation: a group already claimed
+        // belongs to whoever claimed it, whether that was an operator or an
+        // earlier cycle, and it is also what makes this safe against a manual
+        // claim landing while the sync is mid-run.
+        `INSERT INTO channels (organization_id, name, pocstars_group_id, provision_state)
+         VALUES ($1, $2, $3, 'ready')
+         ON CONFLICT (pocstars_group_id) WHERE pocstars_group_id IS NOT NULL
+         DO NOTHING`,
+        [organizationId, group.name || `Channel ${group.id}`, group.id],
+      );
+      channelsClaimed += rowCount || 0;
+    }
+
+    // Channels already claimed by an organization - including any just claimed
+    // above, so a newly discovered channel carries its radios on this same run
+    // rather than the next one. Radios in these groups follow the owner.
     const { rows: claimedChannels } = await client.query(
       `SELECT id, organization_id, unit_id, pocstars_group_id FROM channels
         WHERE pocstars_group_id IS NOT NULL`,
@@ -3292,6 +3335,7 @@ async function syncPocstarsPlatformInventory(inventory: any) {
       radiosSuperseded,
       dispatchersSkipped,
       pooled,
+      channelsClaimed,
       companiesImported: inventory.companiesImported || [],
       source: String(inventory.source || "voice"),
       presenceKnown,
