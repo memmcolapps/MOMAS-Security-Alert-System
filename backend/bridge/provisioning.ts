@@ -93,23 +93,34 @@ export class PocstarsProvisioning {
   async ensurePresenceSeat(companyId: number) {
     const account = `${PocstarsProvisioning.RESERVED_ACCOUNT_PREFIX}presence@${companyId}`;
     const [existing]: any = await this.pool.query(
-      `SELECT User_ID AS uid, User_Account AS account, User_Password AS password
+      `SELECT User_ID AS uid, User_Account AS account, User_Password AS password,
+              User_Enable AS enabled, User_Banned AS banned,
+              User_ServiceEndTime AS serviceEndsAt
          FROM tb_User
         WHERE User_CompanyID = ? AND User_Account = ? AND IsActive = 1
         LIMIT 1`,
       [companyId, account],
     );
     if (existing.length) {
-      // Keep it alive: an expired service window is refused at login, and this
-      // seat has no operator to notice.
-      await this.pool.query(
-        `UPDATE tb_User
-            SET User_ServiceEndTime = ?, User_Enable = 1, User_Banned = 0,
-                User_UpdateTime = NOW(), Last_Update_Time = NOW()
-          WHERE User_ID = ?`,
-        ["2035-01-01 00:00:00", existing[0].uid],
-      );
-      return existing[0] as { uid: number; account: string; password: string };
+      const seat = existing[0];
+      // Only write when the seat actually needs it. Bumping the timestamps is
+      // not free: echat's sync is incremental over a changed-since window, so
+      // an unconditional write here made it reload these rows and push
+      // Reconfigured and UsersChanged to every watcher on every cycle - thirty
+      // rows every five minutes, all of it noise in the log people read when
+      // the radio network is being diagnosed.
+      const expiresSoon = !seat.serviceEndsAt
+        || new Date(seat.serviceEndsAt).getTime() < Date.now() + 30 * 86400 * 1000;
+      if (expiresSoon || Number(seat.enabled) !== 1 || Number(seat.banned) !== 0) {
+        await this.pool.query(
+          `UPDATE tb_User
+              SET User_ServiceEndTime = ?, User_Enable = 1, User_Banned = 0,
+                  User_UpdateTime = NOW(), Last_Update_Time = NOW()
+            WHERE User_ID = ?`,
+          ["2035-01-01 00:00:00", seat.uid],
+        );
+      }
+      return seat as { uid: number; account: string; password: string };
     }
 
     const password = this.newSeatPasswordHash();
