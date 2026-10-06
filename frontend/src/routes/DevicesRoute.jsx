@@ -15,7 +15,7 @@ import {
 } from "../lib/api";
 import { isPlatformOperator, isPlatformStaff } from "../lib/platform-roles";
 import { FilterBar } from "../components/FilterBar";
-import { RadioConsole } from "../components/RadioConsole";
+import { RadioConsole, radioChannelLabel } from "../components/RadioConsole";
 import { Toast, useToast } from "../components/Toast";
 import { deviceTypeLabel } from "../lib/domain";
 
@@ -752,15 +752,12 @@ export function DevicesRoute() {
                 <h2 className="mt-1 text-base font-bold text-neutral-100">
                   {selectedRadio.name || `Radio ${selectedRadio.device_id}`}
                 </h2>
-                <p className="mt-1 font-mono text-[10px] text-neutral-500">
-                  UID {selectedRadio.device_id}
+                <p className="mt-1 text-[10px] text-neutral-500">
+                  {radioChannelLabel(selectedRadio)}
                   {selectedRadio.operator ? ` · ${selectedRadio.operator}` : ""}
                 </p>
                 <p className="mt-1 text-[10px] text-neutral-500">
                   {selectedRadio.organization_name || "Unallocated"}
-                  {(selectedRadio.channels || []).length
-                    ? ` · ${selectedRadio.channels.map((channel) => channel.name).join(", ")}`
-                    : " · on no channel"}
                 </p>
               </div>
               <button className="rounded p-2 text-neutral-500 hover:bg-white/5 hover:text-neutral-100" onClick={() => setSelectedRadio(null)}>

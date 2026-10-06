@@ -34,6 +34,12 @@ function coordsOf(location) {
   return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
 }
 
+// The channels a radio belongs to, said outright when it belongs to none.
+export function radioChannelLabel(device) {
+  if ((device.channels || []).length) return device.channels.map((channel) => channel.name).join(", ");
+  return "No channel";
+}
+
 /**
  * Everything you can know about, or do to, one handset. Rendered inside a
  * floating card on the map and docked in the device registry, so it carries no
@@ -142,12 +148,6 @@ export function RadioConsole({ device, location, onShowOnMap }) {
               </p>
             )}
           </div>
-
-          {(device.channels || []).length ? (
-            <p className="mt-3 border-t border-white/5 pt-3 text-[10px] text-neutral-500">
-              On {device.channels.map((channel) => channel.name).join(", ")}
-            </p>
-          ) : null}
         </section>
 
         <section className="rounded-lg border border-green-500/25 bg-green-500/[0.04] p-3">
@@ -402,8 +402,8 @@ export function FloatingRadioCard({ device, location, position, zIndex, onFocus,
           <h2 className="mt-0.5 truncate text-sm font-bold text-neutral-100">
             {device.name || `Radio ${device.device_id}`}
           </h2>
-          <p className="truncate font-mono text-[9px] text-neutral-500">
-            UID {device.device_id}
+          <p className="truncate text-[10px] text-neutral-500">
+            {radioChannelLabel(device)}
             {device.operator ? ` · ${device.operator}` : ""}
           </p>
         </div>

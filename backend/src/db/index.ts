@@ -2481,7 +2481,17 @@ async function listDevices(scope: any = {}) {
                  JOIN channels c ON c.id = cd.channel_id
                 WHERE cd.device_id = d.device_id AND c.active),
               '[]'::json
-            ) AS channels
+            ) AS channels,
+            -- The talk groups the radio network itself has the radio in, so a
+            -- radio on no claimed channel can still say where it is listening.
+            -- Temporary private-call groups (type 2) are left out.
+            COALESCE(
+              (SELECT json_agg(COALESCE(m.group_name, m.group_id) ORDER BY m.group_name)
+                 FROM pocstars_radio_group_memberships m
+                WHERE m.device_id = d.device_id
+                  AND m.group_type IS DISTINCT FROM 2),
+              '[]'::json
+            ) AS talk_groups
        FROM devices d
        LEFT JOIN organizations o ON o.id = d.organization_id
        LEFT JOIN organization_units ou ON ou.id = d.unit_id
