@@ -70,7 +70,9 @@ let fallbackSeatUid: number | null = null;
 async function fallbackSeatKey() {
   if (!provisioning) return FALLBACK_SEAT_UID;
   if (fallbackSeatUid !== null) return fallbackSeatUid;
-  fallbackSeatUid = (await provisioning.uidForAccount(account).catch(() => null)) ?? FALLBACK_SEAT_UID;
+  fallbackSeatUid =
+    (await provisioning.uidForAccount(account).catch(() => null)) ??
+    FALLBACK_SEAT_UID;
   return fallbackSeatUid;
 }
 
@@ -85,14 +87,22 @@ async function leaseSeat(companyId: number | null) {
   }
   const seats = await provisioning.listSeats(companyId);
   if (!seats.length) {
-    throw new Error("This organization has no usable dispatcher seats on the radio network.");
+    throw new Error(
+      "This organization has no usable dispatcher seats on the radio network.",
+    );
   }
   const free = seats.find((seat) => !leasedSeatUids.has(Number(seat.uid)));
   if (!free) {
-    throw new Error(`All ${seats.length} radio consoles for this organization are in use.`);
+    throw new Error(
+      `All ${seats.length} radio consoles for this organization are in use.`,
+    );
   }
   leasedSeatUids.add(Number(free.uid));
-  return { uid: Number(free.uid), account: free.account, password: free.password };
+  return {
+    uid: Number(free.uid),
+    account: free.account,
+    password: free.password,
+  };
 }
 
 function releaseSeat(ws: ServerWebSocket<BridgeSession>) {
@@ -119,8 +129,8 @@ setInterval(() => {
     const idleFor = Date.now() - (ws.data.lastSeenAt || Date.now());
     if (idleFor >= CLIENT_IDLE_LIMIT_MS) {
       console.warn(
-        `Reaping stale bridge session (seat ${ws.data.seatAccount || "fallback"}): `
-        + `no client response for ${Math.round(idleFor / 1000)}s`,
+        `Reaping stale bridge session (seat ${ws.data.seatAccount || "fallback"}): ` +
+          `no client response for ${Math.round(idleFor / 1000)}s`,
       );
       void closeSession(ws);
       try {
@@ -142,10 +152,15 @@ setInterval(() => {
 function tokenMatches(candidate: string) {
   const expected = Buffer.from(token);
   const supplied = Buffer.from(candidate);
-  return expected.length === supplied.length && timingSafeEqual(expected, supplied);
+  return (
+    expected.length === supplied.length && timingSafeEqual(expected, supplied)
+  );
 }
 
-function send(ws: ServerWebSocket<BridgeSession>, value: Record<string, unknown>) {
+function send(
+  ws: ServerWebSocket<BridgeSession>,
+  value: Record<string, unknown>,
+) {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value));
 }
 
@@ -192,7 +207,10 @@ function attachClientEvents(
 // Lease a seat for this session and build a voice client bound to it. The seat
 // password comes straight from the vendor database, so no credential for a
 // provisioned organization ever needs to be configured anywhere.
-async function openLeasedClient(ws: ServerWebSocket<BridgeSession>, companyId: number | null) {
+async function openLeasedClient(
+  ws: ServerWebSocket<BridgeSession>,
+  companyId: number | null,
+) {
   const seat = await leaseSeat(companyId);
   ws.data.seatUid = seat.uid;
   ws.data.seatAccount = seat.account;
@@ -212,7 +230,10 @@ async function openLeasedClient(ws: ServerWebSocket<BridgeSession>, companyId: n
 
 // Provisioning commands are request/response and carry a caller-supplied id so
 // the MOMAS backend can correlate replies. They never touch the voice session.
-async function handleProvisioning(ws: ServerWebSocket<BridgeSession>, message: any) {
+async function handleProvisioning(
+  ws: ServerWebSocket<BridgeSession>,
+  message: any,
+) {
   const requestId = message.requestId ?? null;
   const fail = (error: string) =>
     send(ws, { type: "provision.result", requestId, ok: false, error });
@@ -223,56 +244,92 @@ async function handleProvisioning(ws: ServerWebSocket<BridgeSession>, message: a
   try {
     switch (message.type) {
       case "provision.ping": {
-        return send(ws, { type: "provision.result", requestId, ok: true, result: { ok: await provisioning.ping() } });
+        return send(ws, {
+          type: "provision.result",
+          requestId,
+          ok: true,
+          result: { ok: await provisioning.ping() },
+        });
       }
       case "provision.seats": {
         const seats = await provisioning.listSeats(companyId);
         // Never hand the password hashes to the MOMAS backend; the bridge is
         // the only component that needs them.
         return send(ws, {
-          type: "provision.result", requestId, ok: true,
-          result: seats.map((seat) => ({ uid: seat.uid, account: seat.account, serviceEndsAt: seat.serviceEndsAt })),
+          type: "provision.result",
+          requestId,
+          ok: true,
+          result: seats.map((seat) => ({
+            uid: seat.uid,
+            account: seat.account,
+            serviceEndsAt: seat.serviceEndsAt,
+          })),
         });
       }
       case "provision.company.create": {
         const name = String(message.name || "").trim();
         const slug = String(message.slug || "").trim();
-        if (!name || !slug) return fail("A company name and slug are required.");
+        if (!name || !slug)
+          return fail("A company name and slug are required.");
         return send(ws, {
-          type: "provision.result", requestId, ok: true,
+          type: "provision.result",
+          requestId,
+          ok: true,
           result: await provisioning.createCompany({
-            name, slug,
+            name,
+            slug,
             seats: Number(message.seats || 3),
-            serviceEndsAt: String(message.serviceEndsAt || "2035-01-01 00:00:00"),
+            serviceEndsAt: String(
+              message.serviceEndsAt || "2035-01-01 00:00:00",
+            ),
           }),
         });
       }
       case "provision.company.forGroup": {
         return send(ws, {
-          type: "provision.result", requestId, ok: true,
-          result: { companyId: await provisioning.companyForGroup(Number(message.groupId)) },
+          type: "provision.result",
+          requestId,
+          ok: true,
+          result: {
+            companyId: await provisioning.companyForGroup(
+              Number(message.groupId),
+            ),
+          },
         });
       }
       case "provision.seats.add": {
         const count = Number(message.count);
-        if (!Number.isSafeInteger(count) || count <= 0) return fail("A seat count is required.");
+        if (!Number.isSafeInteger(count) || count <= 0)
+          return fail("A seat count is required.");
         const added = await provisioning.addSeats({
-          companyId, count,
+          companyId,
+          count,
           slug: message.slug ? String(message.slug) : undefined,
           serviceEndsAt: String(message.serviceEndsAt || "2035-01-01 00:00:00"),
         });
+        console.log(
+          `Provisioned ${count} seats for company ${companyId} (now ${added.seats} total).`,
+        );
         // The accounts are named, never their passwords: the bridge signs in
         // with the stored hash and nothing else ever needs them.
         return send(ws, {
-          type: "provision.result", requestId, ok: true,
-          result: { companyId: added.companyId, realm: added.realm, seats: added.seats },
+          type: "provision.result",
+          requestId,
+          ok: true,
+          result: {
+            companyId: added.companyId,
+            realm: added.realm,
+            seats: added.seats,
+          },
         });
       }
       case "provision.companies": {
         // Read-only discovery. It enumerates companies MOMAS does not own, so
         // it is deliberately the one company command that writes nothing.
         return send(ws, {
-          type: "provision.result", requestId, ok: true,
+          type: "provision.result",
+          requestId,
+          ok: true,
           result: await provisioning.listCompanies(),
         });
       }
@@ -282,35 +339,53 @@ async function handleProvisioning(ws: ServerWebSocket<BridgeSession>, message: a
           ? await provisioning.ensurePoolCompany()
           : await provisioning.findPoolCompany();
         return send(ws, {
-          type: "provision.result", requestId, ok: true, result: { companyId: poolId },
+          type: "provision.result",
+          requestId,
+          ok: true,
+          result: { companyId: poolId },
         });
       }
       case "provision.radio.reassign": {
         return send(ws, {
-          type: "provision.result", requestId, ok: true,
+          type: "provision.result",
+          requestId,
+          ok: true,
           result: await provisioning.reassignRadio({
             uid: Number(message.uid),
             toCompanyId: companyId,
-            channelIds: Array.isArray(message.channelIds) ? message.channelIds.map(Number) : [],
-            defaultChannelId: message.defaultChannelId ? Number(message.defaultChannelId) : null,
+            channelIds: Array.isArray(message.channelIds)
+              ? message.channelIds.map(Number)
+              : [],
+            defaultChannelId: message.defaultChannelId
+              ? Number(message.defaultChannelId)
+              : null,
           }),
         });
       }
       case "provision.radio.create": {
         // No organization chosen yet: the radio is real hardware that nobody
         // has been given, so it lands in the pool rather than inside a tenant.
-        const target = Number.isSafeInteger(companyId) && companyId > 0
-          ? companyId
-          : await provisioning.ensurePoolCompany();
+        const target =
+          Number.isSafeInteger(companyId) && companyId > 0
+            ? companyId
+            : await provisioning.ensurePoolCompany();
         return send(ws, {
-          type: "provision.result", requestId, ok: true,
+          type: "provision.result",
+          requestId,
+          ok: true,
           result: await provisioning.createRadio({
             companyId: target,
             imei: String(message.imei || "").trim(),
             name: String(message.name || "").trim(),
-            channelIds: Array.isArray(message.channelIds) ? message.channelIds.map(Number) : [],
-            defaultChannelId: message.defaultChannelId ? Number(message.defaultChannelId) : null,
-            serviceEndsAt: String(message.serviceEndsAt || "2030-01-01 00:00:00"),
+            channelIds: Array.isArray(message.channelIds)
+              ? message.channelIds.map(Number)
+              : [],
+            defaultChannelId: message.defaultChannelId
+              ? Number(message.defaultChannelId)
+              : null,
+            serviceEndsAt: String(
+              message.serviceEndsAt || "2030-01-01 00:00:00",
+            ),
             gpsEnabled: message.gpsEnabled !== false,
             gpsFrequency: Number(message.gpsFrequency || 30),
           }),
@@ -318,38 +393,58 @@ async function handleProvisioning(ws: ServerWebSocket<BridgeSession>, message: a
       }
       case "provision.radios": {
         return send(ws, {
-          type: "provision.result", requestId, ok: true,
+          type: "provision.result",
+          requestId,
+          ok: true,
           result: await provisioning.listRadios(companyId),
         });
       }
       case "provision.groups": {
-        return send(ws, { type: "provision.result", requestId, ok: true, result: await provisioning.listGroups(companyId) });
+        return send(ws, {
+          type: "provision.result",
+          requestId,
+          ok: true,
+          result: await provisioning.listGroups(companyId),
+        });
       }
       case "provision.channel.create": {
         const name = String(message.name || "").trim();
         if (!name) return fail("A channel name is required.");
         return send(ws, {
-          type: "provision.result", requestId, ok: true,
+          type: "provision.result",
+          requestId,
+          ok: true,
           result: await provisioning.createChannel({ companyId, name }),
         });
       }
       case "provision.channel.rename": {
         return send(ws, {
-          type: "provision.result", requestId, ok: true,
+          type: "provision.result",
+          requestId,
+          ok: true,
           result: await provisioning.renameChannel({
-            groupId: Number(message.groupId), companyId, name: String(message.name || "").trim(),
+            groupId: Number(message.groupId),
+            companyId,
+            name: String(message.name || "").trim(),
           }),
         });
       }
       case "provision.channel.retire": {
         return send(ws, {
-          type: "provision.result", requestId, ok: true,
-          result: await provisioning.retireChannel({ groupId: Number(message.groupId), companyId }),
+          type: "provision.result",
+          requestId,
+          ok: true,
+          result: await provisioning.retireChannel({
+            groupId: Number(message.groupId),
+            companyId,
+          }),
         });
       }
       case "provision.radio.channel": {
         return send(ws, {
-          type: "provision.result", requestId, ok: true,
+          type: "provision.result",
+          requestId,
+          ok: true,
           result: await provisioning.setRadioOnChannel({
             companyId,
             groupId: Number(message.groupId),
@@ -360,13 +455,20 @@ async function handleProvisioning(ws: ServerWebSocket<BridgeSession>, message: a
       }
       case "provision.seat.renew": {
         return send(ws, {
-          type: "provision.result", requestId, ok: true,
-          result: await provisioning.renewSeat({ uid: Number(message.uid), until: String(message.until) }),
+          type: "provision.result",
+          requestId,
+          ok: true,
+          result: await provisioning.renewSeat({
+            uid: Number(message.uid),
+            until: String(message.until),
+          }),
         });
       }
       case "provision.radio.retire": {
         return send(ws, {
-          type: "provision.result", requestId, ok: true,
+          type: "provision.result",
+          requestId,
+          ok: true,
           result: await provisioning.retireRadio({
             uid: Number(message.uid),
             companyId: Number(message.companyId) || null,
@@ -396,8 +498,11 @@ const server = Bun.serve<BridgeSession>({
         // connection and must not be reported as a leased console.
         active: leasedSeatUids.size > 0,
         seatsInUse: leasedSeatUids.size,
-        presenceWatchers: [...sessions].filter((ws) => ws.data.presenceWatch).length,
-        idleConnections: [...sessions].filter((ws) => ws.data.seatUid === null && !ws.data.presenceWatch).length,
+        presenceWatchers: [...sessions].filter((ws) => ws.data.presenceWatch)
+          .length,
+        idleConnections: [...sessions].filter(
+          (ws) => ws.data.seatUid === null && !ws.data.presenceWatch,
+        ).length,
         sessions: [...sessions]
           .filter((ws) => ws.data.seatUid !== null)
           .map((ws) => ({
@@ -405,7 +510,9 @@ const server = Bun.serve<BridgeSession>({
             companyId: ws.data.companyId,
             mode: ws.data.mode,
             sinceSeconds: Math.round((Date.now() - ws.data.openedAt) / 1000),
-            lastSeenSecondsAgo: Math.round((Date.now() - ws.data.lastSeenAt) / 1000),
+            lastSeenSecondsAgo: Math.round(
+              (Date.now() - ws.data.lastSeenAt) / 1000,
+            ),
           })),
       });
     }
@@ -420,12 +527,21 @@ const server = Bun.serve<BridgeSession>({
     // when the session asks to start and a seat is leased.
     const upgraded = server.upgrade(request, {
       data: {
-        client: null, mode: null, closing: false, pttTimer: null,
-        seatUid: null, seatAccount: null, companyId: null,
-        openedAt: Date.now(), lastSeenAt: Date.now(), presenceWatch: false,
+        client: null,
+        mode: null,
+        closing: false,
+        pttTimer: null,
+        seatUid: null,
+        seatAccount: null,
+        companyId: null,
+        openedAt: Date.now(),
+        lastSeenAt: Date.now(),
+        presenceWatch: false,
       },
     });
-    return upgraded ? undefined : new Response("WebSocket upgrade required", { status: 426 });
+    return upgraded
+      ? undefined
+      : new Response("WebSocket upgrade required", { status: 426 });
   },
   websocket: {
     // Backstop for the half-open tunnel case: Bun drops the socket when no
@@ -441,9 +557,14 @@ const server = Bun.serve<BridgeSession>({
       ws.data.lastSeenAt = Date.now();
       if (typeof incoming !== "string") {
         if (ws.data.client?.speaking) {
-          const bytes = incoming instanceof ArrayBuffer
-            ? new Uint8Array(incoming)
-            : new Uint8Array(incoming.buffer, incoming.byteOffset, incoming.byteLength);
+          const bytes =
+            incoming instanceof ArrayBuffer
+              ? new Uint8Array(incoming)
+              : new Uint8Array(
+                  incoming.buffer,
+                  incoming.byteOffset,
+                  incoming.byteLength,
+                );
           if (bytes.byteLength <= 16 * 1024) ws.data.client.sendAmr(bytes);
         }
         return;
@@ -453,7 +574,11 @@ const server = Bun.serve<BridgeSession>({
       try {
         message = JSON.parse(incoming);
       } catch {
-        send(ws, { type: "error", code: "invalid_message", message: "Invalid bridge command." });
+        send(ws, {
+          type: "error",
+          code: "invalid_message",
+          message: "Invalid bridge command.",
+        });
         return;
       }
 
@@ -462,7 +587,10 @@ const server = Bun.serve<BridgeSession>({
         return;
       }
 
-      if (typeof message.type === "string" && message.type.startsWith("provision.")) {
+      if (
+        typeof message.type === "string" &&
+        message.type.startsWith("provision.")
+      ) {
         await handleProvisioning(ws, message);
         return;
       }
@@ -475,14 +603,20 @@ const server = Bun.serve<BridgeSession>({
         if (ws.data.client) return;
         if (!provisioning) {
           send(ws, {
-            type: "error", code: "provisioning_disabled",
-            message: "This bridge has no database plane, so it cannot reserve a presence seat.",
+            type: "error",
+            code: "provisioning_disabled",
+            message:
+              "This bridge has no database plane, so it cannot reserve a presence seat.",
           });
           return;
         }
         const watchCompanyId = Number(message.companyId);
         if (!Number.isSafeInteger(watchCompanyId) || watchCompanyId <= 0) {
-          send(ws, { type: "error", code: "invalid_company_id", message: "Invalid company ID." });
+          send(ws, {
+            type: "error",
+            code: "invalid_company_id",
+            message: "Invalid company ID.",
+          });
           return;
         }
         try {
@@ -492,7 +626,12 @@ const server = Bun.serve<BridgeSession>({
           // plainly instead of creating a seat and retrying forever.
           const watchGroups = await provisioning.listGroups(watchCompanyId);
           if (!watchGroups.length) {
-            send(ws, { type: "presence.baseline", seat: null, idle: true, radios: [] });
+            send(ws, {
+              type: "presence.baseline",
+              seat: null,
+              idle: true,
+              radios: [],
+            });
             return;
           }
           const seat = await provisioning.ensurePresenceSeat(watchCompanyId);
@@ -507,9 +646,15 @@ const server = Bun.serve<BridgeSession>({
           ws.data.client = client;
           ws.data.presenceWatch = true;
           ws.data.companyId = watchCompanyId;
-          client.on("presence", (users: any) => send(ws, { type: "presence.delta", users }));
+          client.on("presence", (users: any) =>
+            send(ws, { type: "presence.delta", users }),
+          );
           client.on("error", (error: Error) => {
-            send(ws, { type: "error", code: "pocstars_voice_error", message: error.message });
+            send(ws, {
+              type: "error",
+              code: "pocstars_voice_error",
+              message: error.message,
+            });
           });
           await client.connect();
           // Deltas are meaningless without a starting point, so the watcher
@@ -519,14 +664,19 @@ const server = Bun.serve<BridgeSession>({
             type: "presence.baseline",
             seat: seat.account,
             radios: inventory.radios.map((radio: any) => ({
-              uid: Number(radio.id), online: Boolean(radio.online), role: Number(radio.role || 0),
+              uid: Number(radio.id),
+              online: Boolean(radio.online),
+              role: Number(radio.role || 0),
             })),
           });
         } catch (error) {
           send(ws, {
             type: "error",
             code: "presence_watch_failed",
-            message: error instanceof Error ? error.message : "The presence watcher could not start.",
+            message:
+              error instanceof Error
+                ? error.message
+                : "The presence watcher could not start.",
           });
           await closeSession(ws);
         }
@@ -537,11 +687,18 @@ const server = Bun.serve<BridgeSession>({
         if (ws.data.client) return;
         let client: PocstarsLiveClient;
         try {
-          client = await openLeasedClient(ws, message.companyId ? Number(message.companyId) : null);
+          client = await openLeasedClient(
+            ws,
+            message.companyId ? Number(message.companyId) : null,
+          );
         } catch (error) {
           send(ws, {
-            type: "error", code: "radio_console_busy",
-            message: error instanceof Error ? error.message : "No radio console is free.",
+            type: "error",
+            code: "radio_console_busy",
+            message:
+              error instanceof Error
+                ? error.message
+                : "No radio console is free.",
           });
           return;
         }
@@ -553,7 +710,10 @@ const server = Bun.serve<BridgeSession>({
           send(ws, {
             type: "error",
             code: "pocstars_inventory_failed",
-            message: error instanceof Error ? error.message : "The radio network inventory query failed.",
+            message:
+              error instanceof Error
+                ? error.message
+                : "The radio network inventory query failed.",
           });
         } finally {
           await closeSession(ws);
@@ -562,16 +722,27 @@ const server = Bun.serve<BridgeSession>({
         if (ws.data.client) return;
         const deviceId = Number(message.deviceId);
         if (!Number.isSafeInteger(deviceId) || deviceId <= 0) {
-          send(ws, { type: "error", code: "invalid_radio_uid", message: "Invalid radio ID." });
+          send(ws, {
+            type: "error",
+            code: "invalid_radio_uid",
+            message: "Invalid radio ID.",
+          });
           return;
         }
         let client: PocstarsLiveClient;
         try {
-          client = await openLeasedClient(ws, message.companyId ? Number(message.companyId) : null);
+          client = await openLeasedClient(
+            ws,
+            message.companyId ? Number(message.companyId) : null,
+          );
         } catch (error) {
           send(ws, {
-            type: "error", code: "radio_console_busy",
-            message: error instanceof Error ? error.message : "No radio console is free.",
+            type: "error",
+            code: "radio_console_busy",
+            message:
+              error instanceof Error
+                ? error.message
+                : "No radio console is free.",
           });
           return;
         }
@@ -590,7 +761,8 @@ const server = Bun.serve<BridgeSession>({
           send(ws, {
             type: "error",
             code: "pocstars_call_failed",
-            message: error instanceof Error ? error.message : "The call failed.",
+            message:
+              error instanceof Error ? error.message : "The call failed.",
           });
           await closeSession(ws);
         }
@@ -598,16 +770,27 @@ const server = Bun.serve<BridgeSession>({
         if (ws.data.client) return;
         const groupId = Number(message.groupId);
         if (!Number.isSafeInteger(groupId) || groupId <= 0) {
-          send(ws, { type: "error", code: "invalid_group_id", message: "Invalid channel ID." });
+          send(ws, {
+            type: "error",
+            code: "invalid_group_id",
+            message: "Invalid channel ID.",
+          });
           return;
         }
         let client: PocstarsLiveClient;
         try {
-          client = await openLeasedClient(ws, message.companyId ? Number(message.companyId) : null);
+          client = await openLeasedClient(
+            ws,
+            message.companyId ? Number(message.companyId) : null,
+          );
         } catch (error) {
           send(ws, {
-            type: "error", code: "radio_console_busy",
-            message: error instanceof Error ? error.message : "No radio console is free.",
+            type: "error",
+            code: "radio_console_busy",
+            message:
+              error instanceof Error
+                ? error.message
+                : "No radio console is free.",
           });
           return;
         }
@@ -625,11 +808,18 @@ const server = Bun.serve<BridgeSession>({
           send(ws, {
             type: "error",
             code: "pocstars_monitor_failed",
-            message: error instanceof Error ? error.message : "Channel monitoring failed.",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Channel monitoring failed.",
           });
           await closeSession(ws);
         }
-      } else if (message.type === "ptt.start" && ws.data.client && ws.data.mode === "private") {
+      } else if (
+        message.type === "ptt.start" &&
+        ws.data.client &&
+        ws.data.mode === "private"
+      ) {
         try {
           send(ws, { type: "ptt.state", state: "requesting" });
           await ws.data.client.requestMic();
@@ -646,11 +836,18 @@ const server = Bun.serve<BridgeSession>({
           send(ws, {
             type: "error",
             code: "microphone_not_granted",
-            message: error instanceof Error ? error.message : "The radio network did not grant the microphone.",
+            message:
+              error instanceof Error
+                ? error.message
+                : "The radio network did not grant the microphone.",
           });
           send(ws, { type: "ptt.state", state: "idle" });
         }
-      } else if (message.type === "ptt.stop" && ws.data.client && ws.data.mode === "private") {
+      } else if (
+        message.type === "ptt.stop" &&
+        ws.data.client &&
+        ws.data.mode === "private"
+      ) {
         if (ws.data.pttTimer) clearTimeout(ws.data.pttTimer);
         ws.data.pttTimer = null;
         await ws.data.client.releaseMic().catch(() => {});
@@ -672,4 +869,6 @@ const server = Bun.serve<BridgeSession>({
   },
 });
 
-console.log(`POCSTARS bridge listening on http://${server.hostname}:${server.port}`);
+console.log(
+  `POCSTARS bridge listening on http://${server.hostname}:${server.port}`,
+);
