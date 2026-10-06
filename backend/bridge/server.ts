@@ -307,9 +307,7 @@ async function handleProvisioning(
           slug: message.slug ? String(message.slug) : undefined,
           serviceEndsAt: String(message.serviceEndsAt || "2035-01-01 00:00:00"),
         });
-        console.log(
-          `Provisioned ${count} seats for company ${companyId} (now ${added.seats} total).`,
-        );
+
         // The accounts are named, never their passwords: the bridge signs in
         // with the stored hash and nothing else ever needs them.
         return send(ws, {
