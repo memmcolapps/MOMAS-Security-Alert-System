@@ -43,9 +43,6 @@ if (env.environment === "local") {
   app.use(cors());
 }
 
-// Quick toFixed
-app.use(cors())
-
 function isDatabaseQuotaError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || "");
   return /exceeded the data transfer quota/i.test(message);
