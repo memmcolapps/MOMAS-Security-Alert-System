@@ -56,6 +56,7 @@ export class PocstarsProvisioning {
   // The marker is the account name, because it is the one field the bridge can
   // read without another column the vendor schema does not have.
   static readonly RESERVED_ACCOUNT_PREFIX = "momas-";
+  static readonly PRESENCE_DISPLAY_NAME = "tk4849";
 
   // Seats available to an organization, most recently renewed first. The
   // password column holds the value echat expects verbatim, so the bridge can
@@ -94,6 +95,7 @@ export class PocstarsProvisioning {
     const account = `${PocstarsProvisioning.RESERVED_ACCOUNT_PREFIX}presence@${companyId}`;
     const [existing]: any = await this.pool.query(
       `SELECT User_ID AS uid, User_Account AS account, User_Password AS password,
+              User_Name AS name,
               User_Enable AS enabled, User_Banned AS banned,
               User_ServiceEndTime AS serviceEndsAt
          FROM tb_User
@@ -103,6 +105,16 @@ export class PocstarsProvisioning {
     );
     if (existing.length) {
       const seat = existing[0];
+      // Bring existing watcher names up to date without changing their login
+      // or membership. Timestamp bumps make the radio server publish the name.
+      if (seat.name !== PocstarsProvisioning.PRESENCE_DISPLAY_NAME) {
+        await this.pool.query(
+          `UPDATE tb_User
+              SET User_Name = ?, User_UpdateTime = NOW(), Last_Update_Time = NOW()
+            WHERE User_ID = ?`,
+          [PocstarsProvisioning.PRESENCE_DISPLAY_NAME, seat.uid],
+        );
+      }
       // Only write when the seat actually needs it. Bumping the timestamps is
       // not free: echat's sync is incremental over a changed-since window, so
       // an unconditional write here made it reload these rows and push
@@ -130,9 +142,9 @@ export class PocstarsProvisioning {
           User_Enable, User_Banned, IsActive, User_AudioStatus,
           User_CreateTime, User_UpdateTime, User_ServiceBeginTime,
           User_ServiceEndTime, Creation_Time, Last_Update_Time, sort)
-       VALUES (?, ?, 'MOMAS presence watcher', ?, 3, 1, 0, 1, 1,
+       VALUES (?, ?, ?, ?, 3, 1, 0, 1, 1,
                NOW(), NOW(), NOW(), ?, NOW(), NOW(), 99)`,
-      [account, password, companyId, "2035-01-01 00:00:00"],
+      [account, password, PocstarsProvisioning.PRESENCE_DISPLAY_NAME, companyId, "2035-01-01 00:00:00"],
     );
     const uid = Number(result.insertId);
     if (!uid) throw new Error("The radio network did not return a seat id.");
