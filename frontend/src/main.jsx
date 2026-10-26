@@ -7,6 +7,7 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  lazyRouteComponent,
   redirect,
   useRouterState,
 } from "@tanstack/react-router";
@@ -18,19 +19,12 @@ import { FollowProvider } from "./lib/follow-session";
 import { LiveRadioProvider } from "./lib/live-radio-session";
 import { getAuthToken, getMe } from "./lib/api";
 import { PLATFORM_RANK, platformRank } from "./lib/platform-roles";
-import { AlarmsRoute } from "./routes/AlarmsRoute";
-import { AdminOrganizationDetailRoute } from "./routes/AdminOrganizationDetailRoute";
-import { AdminOrganizationsRoute } from "./routes/AdminOrganizationsRoute";
-import { PlatformStaffRoute } from "./routes/PlatformStaffRoute";
-import { ChangePasswordRoute } from "./routes/ChangePasswordRoute";
-import { DevicesRoute } from "./routes/DevicesRoute";
-import { DronesRoute } from "./routes/DronesRoute";
-import { GeofencesRoute } from "./routes/GeofencesRoute";
-import { LoginRoute } from "./routes/LoginRoute";
-import { OrgAdminRoute } from "./routes/OrgAdminRoute";
-import { OperationsRoute } from "./routes/OperationsRoute";
-import { OsintRoute } from "./routes/OsintRoute";
 import "./styles.css";
+
+// Each screen is its own chunk, fetched on first visit (or on hover, through
+// defaultPreload: "intent"), so the login page and the map do not pay for the
+// OSINT graph, the geofence editor and the admin consoles up front.
+const page = (name) => lazyRouteComponent(() => import(`./routes/${name}.jsx`), name);
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -151,83 +145,83 @@ const indexRoute = createRoute({
   // `focus` carries an alarm key so the alarms screen can hand an alarm to the
   // operations map ("Show on operations map").
   validateSearch: (search) => (search.focus ? { focus: String(search.focus) } : {}),
-  component: OperationsRoute,
+  component: page("OperationsRoute"),
 });
 
 const devicesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/devices",
   beforeLoad: requireReadySession,
-  component: DevicesRoute,
+  component: page("DevicesRoute"),
 });
 
 const alarmsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/alarms",
   beforeLoad: requireReadySession,
-  component: AlarmsRoute,
+  component: page("AlarmsRoute"),
 });
 
 const dronesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/drones",
   beforeLoad: requireReadySession,
-  component: DronesRoute,
+  component: page("DronesRoute"),
 });
 
 const geofencesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/geofences",
   beforeLoad: requireReadySession,
-  component: GeofencesRoute,
+  component: page("GeofencesRoute"),
 });
 
 const osintRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/osint",
   beforeLoad: requireReadySession,
-  component: OsintRoute,
+  component: page("OsintRoute"),
 });
 
 const changePasswordRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/change-password",
   beforeLoad: requireSession,
-  component: ChangePasswordRoute,
+  component: page("ChangePasswordRoute"),
 });
 
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/login",
-  component: LoginRoute,
+  component: page("LoginRoute"),
 });
 
 const adminOrganizationsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/organizations",
   beforeLoad: requireAdmin,
-  component: AdminOrganizationsRoute,
+  component: page("AdminOrganizationsRoute"),
 });
 
 const adminOrganizationDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/organizations/$id",
   beforeLoad: requireAdmin,
-  component: AdminOrganizationDetailRoute,
+  component: page("AdminOrganizationDetailRoute"),
 });
 
 const platformStaffRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/team",
   beforeLoad: requireOwner,
-  component: PlatformStaffRoute,
+  component: page("PlatformStaffRoute"),
 });
 
 const orgAdminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/org/admin",
   beforeLoad: requireOrgAdmin,
-  component: OrgAdminRoute,
+  component: page("OrgAdminRoute"),
 });
 
 const routeTree = rootRoute.addChildren([

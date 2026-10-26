@@ -609,6 +609,13 @@ export function getDronePositions() {
   return request("/api/drones/positions");
 }
 
+// React Query refetchInterval for drone positions: a flying drone is tracked at
+// 3s, but with none online the map was still asking every 3s all shift.
+export function dronePollInterval(query) {
+  const drones = query.state.data?.drones || [];
+  return drones.some((drone) => drone.online) ? 3_000 : 15_000;
+}
+
 export function getDroneRegistry() {
   return request("/api/drones/registry");
 }

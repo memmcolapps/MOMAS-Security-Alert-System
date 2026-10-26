@@ -22,6 +22,7 @@ import { OperationsMap, devicePopup, dronePopup, incidentPopup, sosPopup } from 
 import { FloatingRadioCard } from "../components/RadioConsole";
 import { useFollow } from "../lib/follow-session";
 import {
+  dronePollInterval,
   getDronePositions,
   getIncidentEvidence,
   getIncidentReport,
@@ -178,13 +179,15 @@ export function OperationsRoute() {
   const alertsQuery = useQuery({
     queryKey: ["alarms", "operations"],
     queryFn: () => listAlarms({ status: "open", limit: 500 }),
-    refetchInterval: 15000,
+    // The alerts stream below refetches this the moment an alarm is raised or
+    // changes; the poll is only a backstop for a dropped stream.
+    refetchInterval: 60_000,
   });
 
   const dronesQuery = useQuery({
     queryKey: ["drone-positions"],
     queryFn: getDronePositions,
-    refetchInterval: 3000,
+    refetchInterval: dronePollInterval,
   });
 
   const geofencesQuery = useQuery({

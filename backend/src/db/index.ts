@@ -25,6 +25,9 @@ const pool = new Pool({
   ssl: process.env.DATABASE_URL?.includes("sslmode=require")
     ? { rejectUnauthorized: false }
     : false,
+  // pg defaults to 10, shared by every scrape tier, the geofence and SOS
+  // pollers and user requests; a long scrape cycle used to queue the UI.
+  max: Number(process.env.DATABASE_POOL_MAX) || 20,
 });
 
 pool.on("error", (err) => {
@@ -624,6 +627,14 @@ async function init() {
   } catch (err) {
     console.warn("[DB] Column migration note:", err.message);
   }
+
+  // The incident list counts evidence per incident on every map refresh. Kept
+  // apart from the block above so a failed column migration cannot skip it.
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_source_items_incident
+      ON source_items(incident_id) WHERE incident_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_incidents_date_id ON incidents(date DESC, id DESC);
+  `).catch((err) => console.warn("[DB] Incident index note:", err.message));
 
   try {
     await pool.query(`
@@ -1237,23 +1248,29 @@ async function getIncidents({
 
   vals.push(Math.min(Number(limit) || 100, 500), Number(offset) || 0);
 
+  // Page the incidents first, then count evidence for that page only. Joining
+  // a GROUP BY over source_items aggregated the whole scraped archive on every
+  // request, however few incidents came back.
   const { rows } = await queryWithRetry(
     `
-    SELECT i.*,
+    WITH page AS (
+      SELECT i.*
+        FROM incidents i
+       WHERE ${conds.join(" AND ")}
+       ORDER BY i.date DESC, i.id DESC
+       LIMIT $${i++} OFFSET $${i}
+    )
+    SELECT page.*,
            COALESCE(ev.evidence_count, 0)::int AS evidence_count,
            COALESCE(ev.source_count, 0)::int AS evidence_source_count
-      FROM incidents i
-      LEFT JOIN (
-        SELECT incident_id,
-               COUNT(*)::int AS evidence_count,
+      FROM page
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS evidence_count,
                COUNT(DISTINCT COALESCE(source_type, '') || ':' || COALESCE(source, ''))::int AS source_count
           FROM source_items
-         WHERE incident_id IS NOT NULL
-         GROUP BY incident_id
-      ) ev ON ev.incident_id = i.id
-    WHERE ${conds.join(" AND ")}
-    ORDER BY i.date DESC, i.id DESC
-    LIMIT $${i++} OFFSET $${i}
+         WHERE incident_id = page.id
+      ) ev ON true
+     ORDER BY page.date DESC, page.id DESC
   `,
     vals,
   );

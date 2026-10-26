@@ -9,7 +9,9 @@ export default defineConfig({
         manualChunks(id) {
           if (id.includes("leaflet")) return "maps";
           if (id.includes("@tanstack")) return "tanstack";
-          if (id.includes("node_modules/react")) return "react";
+          // Exact package names: a bare "node_modules/react" prefix also caught
+          // react-force-graph-2d and dragged d3 into the chunk every page loads.
+          if (/node_modules\/(react|react-dom|scheduler)\//.test(id)) return "react";
           if (id.includes("lucide-react")) return "icons";
         },
       },

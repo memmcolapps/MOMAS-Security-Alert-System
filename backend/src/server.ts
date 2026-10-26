@@ -26,8 +26,9 @@ import {
   isTelegramMtprotoEnabled,
   startTelegramMtproto,
 } from "./scrapers/telegram-mtproto";
+import { compress } from "hono/compress";
 import { cors } from "hono/cors";
-import { requireAuth } from "./auth";
+import { invalidateAuthCache, requireAuth } from "./auth";
 import { liveRadioWebSocket } from "./pocstars/live-gateway";
 import { checkClassifierModels, getClassifierHealth } from "./classifier";
 
@@ -65,6 +66,23 @@ app.onError((error, c) => {
     error instanceof Error ? error.message : error,
   );
   return c.json({ error: "Internal server error" }, 500);
+});
+
+// Older Bun releases have no CompressionStream, and there the middleware would
+// throw on every response, so it is skipped rather than trusted. SSE is
+// never compressed (Hono excludes text/event-stream), which keeps it live.
+if (typeof CompressionStream === "function") {
+  app.use("/api/*", compress());
+} else {
+  console.warn("[Startup] CompressionStream unavailable in this Bun; API responses go uncompressed");
+}
+
+// Auth lookups are cached for a few seconds (see auth.ts). Any write through
+// the API may have changed a user, a membership or an organization's states,
+// so it drops that cache once the handler has finished.
+app.use("/api/*", async (c, next) => {
+  await next();
+  if (!["GET", "HEAD", "OPTIONS"].includes(c.req.method)) invalidateAuthCache();
 });
 
 app.route("/api/incidents", incidentsRouter);
@@ -122,6 +140,12 @@ app.get("/api/health", async (c) => {
   });
 });
 
+// Vite fingerprints everything under /assets, so a file there never changes
+// under the same name and the browser can keep it for good.
+app.use("/assets/*", async (c, next) => {
+  await next();
+  if (c.res.ok) c.header("Cache-Control", "public, max-age=31536000, immutable");
+});
 app.use("/*", serveStatic({ root: "../frontend/dist" }));
 app.get("*", serveStatic({ path: "../frontend/dist/index.html" }));
 

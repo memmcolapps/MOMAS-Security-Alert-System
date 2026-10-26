@@ -5,6 +5,7 @@ import { FilterBar } from "../components/FilterBar";
 import { Toast, useToast } from "../components/Toast";
 import {
   deleteDrone,
+  dronePollInterval,
   getDronePositions,
   getDroneRegistry,
   getMe,
@@ -54,7 +55,7 @@ export function DronesRoute() {
   const positionsQuery = useQuery({
     queryKey: ["drone-positions"],
     queryFn: getDronePositions,
-    refetchInterval: 5000,
+    refetchInterval: dronePollInterval,
   });
 
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });

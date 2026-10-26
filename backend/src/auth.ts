@@ -47,6 +47,44 @@ function verifyToken(token: string): TokenPayload | null {
   return payload;
 }
 
+// Every authenticated request used to spend two or three sequential database
+// round trips (user, memberships, organization scope) before doing any work,
+// and the operations map fires half a dozen requests at once. The lookups are
+// held briefly and shared between concurrent requests. Any write through the
+// API drops the lot (invalidateAuthCache, wired in server.ts), so a disabled
+// account, a role change or a cleared must_change_password is seen on the very
+// next request; only changes made outside the API wait out the TTL.
+const AUTH_CACHE_MS = 15_000;
+type Cached<T> = { at: number; value: Promise<T> };
+const identityCache = new Map<number, Cached<{ user: any; memberships: any[] } | null>>();
+const scopeCache = new Map<number, Cached<any>>();
+
+function cached<K, T>(cache: Map<K, Cached<T>>, key: K, load: () => Promise<T>): Promise<T> {
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < AUTH_CACHE_MS) return hit.value;
+  const value = load();
+  const entry = { at: Date.now(), value };
+  cache.set(key, entry);
+  // A failed lookup must not be served to the next request.
+  value.catch(() => {
+    if (cache.get(key) === entry) cache.delete(key);
+  });
+  return value;
+}
+
+function invalidateAuthCache() {
+  identityCache.clear();
+  scopeCache.clear();
+}
+
+function loadIdentity(userId: number) {
+  return cached(identityCache, userId, async () => {
+    const user = await db.getUserById(userId);
+    if (!user) return null;
+    return { user, memberships: await db.getMembershipsForUser(user.id) };
+  });
+}
+
 async function currentUserFromRequest(c: Context) {
   const auth = c.req.header("authorization") || "";
   // EventSource (used by the OSINT live alert stream) cannot set headers, so we
@@ -55,9 +93,9 @@ async function currentUserFromRequest(c: Context) {
   if (!token) return null;
   const payload = verifyToken(token);
   if (!payload) return null;
-  const user = await db.getUserById(payload.sub);
-  if (!user || user.status !== "active") return null;
-  const memberships = await db.getMembershipsForUser(user.id);
+  const identity = await loadIdentity(payload.sub);
+  if (!identity || identity.user.status !== "active") return null;
+  const { user, memberships } = identity;
   const requestedOrganizationId = Number(c.req.header("x-organization-id") || c.req.query("organization_id") || "");
   const activeMembership =
     memberships.find((membership) => Number(membership.organization_id) === requestedOrganizationId) ||
@@ -216,7 +254,8 @@ async function scopeForUser(user: any) {
   }
   const org = primaryOrganization(user);
   if (!org) return { allStates: false, allowedStates: [], organizationId: null, unitId: null };
-  const organizationScope = await db.getOrganizationScope(org.organization_id);
+  const organizationId = Number(org.organization_id);
+  const organizationScope = await cached(scopeCache, organizationId, () => db.getOrganizationScope(organizationId));
   if (!organizationScope) return { allStates: false, allowedStates: [], organizationId: null, unitId: null };
   if (org.scope_level === "unit" && org.unit_id) {
     return {
@@ -263,6 +302,7 @@ export {
   requireOrgManager,
   optionalAuth,
   currentUserFromRequest,
+  invalidateAuthCache,
   primaryOrganization,
   canManageOrganization,
   canManageUnit,

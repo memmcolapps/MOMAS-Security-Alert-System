@@ -1,4 +1,3 @@
-import BenzAMRRecorder from "benz-amr-recorder";
 import { config } from "./app-config";
 import { getActiveOrganizationId, getAuthToken } from "./api";
 import { buildLiveRadioUrl } from "./live-radio-url";
@@ -37,7 +36,9 @@ export class BrowserRadioAudio {
     this.capture = [];
     this.captureLength = 0;
     this.encodeQueue = Promise.resolve();
-    this.decoder = new BenzAMRRecorder();
+    // The AMR codec is a large bundle that only a radio call needs, so it
+    // is fetched by prepare() rather than shipped with every page.
+    this.decoder = null;
     this.incoming = [];
     this.incomingTimer = null;
     this.playhead = 0;
@@ -51,6 +52,11 @@ export class BrowserRadioAudio {
     }
     if (!this.context) this.context = new AudioContext();
     await this.context.resume();
+    if (!this.decoder) {
+      const { default: BenzAMRRecorder } = await import("benz-amr-recorder");
+      if (this.closed) return;
+      this.decoder = new BenzAMRRecorder();
+    }
     if (!microphone || this.stream) return;
     if (!window.navigator.mediaDevices?.getUserMedia) {
       throw new Error("This browser cannot use a microphone for live radio.");

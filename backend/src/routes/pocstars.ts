@@ -919,6 +919,30 @@ router.get("/config", async (c) => {
   });
 });
 
+// Every open map polls this, and each poll was a round trip to the vendor GPS
+// service. Tabs asking for the same radios within a few seconds share one
+// upstream call. Only this route is cached: the geofence engine calls
+// fetchLastLocations directly and needs every fix as soon as it lands.
+const LOCATIONS_CACHE_MS = 10_000;
+const locationsCache = new Map<string, { at: number; value: Promise<any> }>();
+
+function cachedLastLocations(uids: string[]) {
+  const key = [...new Set(uids)].sort().join(",");
+  const now = Date.now();
+  for (const [cachedKey, entry] of locationsCache) {
+    if (now - entry.at >= LOCATIONS_CACHE_MS) locationsCache.delete(cachedKey);
+  }
+  const hit = locationsCache.get(key);
+  if (hit) return hit.value;
+  const value = fetchLastLocations(uids);
+  const entry = { at: now, value };
+  locationsCache.set(key, entry);
+  value.catch(() => {
+    if (locationsCache.get(key) === entry) locationsCache.delete(key);
+  });
+  return value;
+}
+
 router.get("/locations", async (c) => {
   let uids = c.req.query("uids");
   if (!uids) {
@@ -934,7 +958,7 @@ router.get("/locations", async (c) => {
     return c.json({ error: "One or more devices are outside your operational scope." }, 403);
   }
   try {
-    return c.json(await fetchLastLocations(requestedIds));
+    return c.json(await cachedLastLocations(requestedIds));
   } catch (error: any) {
     return c.json({ error: "pocstars_locations_failed", message: error.message }, statusFromAxios(error));
   }

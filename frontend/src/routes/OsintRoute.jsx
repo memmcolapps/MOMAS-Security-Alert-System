@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, AlertTriangle, Bell, CheckCircle2, Database, Download, ExternalLink, FileSearch, GitBranch, Link2, Network, Plus, RefreshCw, Search, ShieldCheck, Tags, Trash2, XCircle } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import ForceGraph2D from "react-force-graph-2d";
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Toast, useToast } from "../components/Toast";
 import {
   deleteOsintSource,
@@ -26,6 +25,9 @@ import {
   saveOsintWatchlist,
   updateOsintAlertStatus,
 } from "../lib/api";
+
+// Only the graph tab draws this, and it carries d3 and a canvas engine.
+const ForceGraph2D = lazy(() => import("react-force-graph-2d"));
 
 const statuses = [
   { value: "attention", label: "Needs approval" },
@@ -1472,30 +1474,32 @@ function GraphPanel({ graph, loading, minEdge, onMinEdge, showSources, onToggleS
               <span className="pointer-events-none absolute right-2 top-2 z-10 rounded bg-black/60 px-2 py-0.5 text-[10px] text-neutral-400">
                 {data.nodes.length} nodes · {data.links.length} links · {size.width}×{size.height}
               </span>
-              <ForceGraph2D
-                ref={fgRef}
-                graphData={data}
-                width={size.width}
-                height={size.height}
-                backgroundColor="rgba(0,0,0,0)"
-                cooldownTicks={120}
-                onEngineStop={() => fgRef.current?.zoomToFit(400, 50)}
-                nodeRelSize={4}
-                nodeLabel={(node) => {
-                  const head = `${node.label} · ${node.type}${node.weight ? ` · ${node.weight} mention(s)` : ""}`;
-                  const prov = (node.sources || []).length ? `\nseen in: ${node.sources.slice(0, 5).join(", ")}` : "";
-                  return `${head}${prov}`;
-                }}
-                nodeCanvasObject={paintNode}
-                nodePointerAreaPaint={paintPointerArea}
-                linkColor={linkColor}
-                linkWidth={(link) => Math.max(0.5, Math.min(3, link.weight || 1))}
-                linkDirectionalParticles={(link) => (focusActive && link.type === "supports" ? 2 : 0)}
-                linkDirectionalParticleWidth={2}
-                onNodeHover={(node) => setHoverId(node ? node.id : null)}
-                onNodeClick={(node) => setSelectedId((prev) => (prev === node.id ? null : node.id))}
-                onBackgroundClick={() => setSelectedId(null)}
-              />
+              <Suspense fallback={<div className="p-4 text-xs text-neutral-500">Loading graph…</div>}>
+                <ForceGraph2D
+                  ref={fgRef}
+                  graphData={data}
+                  width={size.width}
+                  height={size.height}
+                  backgroundColor="rgba(0,0,0,0)"
+                  cooldownTicks={120}
+                  onEngineStop={() => fgRef.current?.zoomToFit(400, 50)}
+                  nodeRelSize={4}
+                  nodeLabel={(node) => {
+                    const head = `${node.label} · ${node.type}${node.weight ? ` · ${node.weight} mention(s)` : ""}`;
+                    const prov = (node.sources || []).length ? `\nseen in: ${node.sources.slice(0, 5).join(", ")}` : "";
+                    return `${head}${prov}`;
+                  }}
+                  nodeCanvasObject={paintNode}
+                  nodePointerAreaPaint={paintPointerArea}
+                  linkColor={linkColor}
+                  linkWidth={(link) => Math.max(0.5, Math.min(3, link.weight || 1))}
+                  linkDirectionalParticles={(link) => (focusActive && link.type === "supports" ? 2 : 0)}
+                  linkDirectionalParticleWidth={2}
+                  onNodeHover={(node) => setHoverId(node ? node.id : null)}
+                  onNodeClick={(node) => setSelectedId((prev) => (prev === node.id ? null : node.id))}
+                  onBackgroundClick={() => setSelectedId(null)}
+                />
+              </Suspense>
             </div>
 
             <p className="text-[11px] text-neutral-600">
