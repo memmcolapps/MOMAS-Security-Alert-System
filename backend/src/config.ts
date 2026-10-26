@@ -34,6 +34,9 @@ const envSchema = z.object({
   POCSTARS_RECORDINGS_USERNAME: z.string().default("aud"),
   POCSTARS_RECORDINGS_PASSWORD: z.string().default("l231sItal"),
   POCSTARS_TARGET_UID: z.string().default("583"),
+  // How often the radio network is asked for new SOS alarms. The request is a
+  // single small page, and every second here is a second an operator waits.
+  POCSTARS_SOS_POLL_SEC: intFromEnv(4),
   // POCSTARS dispatcher/recipient account used to claim and close SOS alarms.
   POCSTARS_DISPATCHER_UID: z.string().default("583"),
   // Dedicated POCSTARS dispatcher identity for live private calls. Keep host

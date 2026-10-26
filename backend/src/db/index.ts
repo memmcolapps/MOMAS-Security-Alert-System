@@ -2099,6 +2099,19 @@ async function insertSosAlert({
  * Processing/resolved rows that MOMAS never imported are intentionally ignored
  * so enabling reconciliation does not backfill the entire POCSTARS archive.
  */
+/** MOMAS's own status for each of these vendor alarm ids, in one round trip. */
+async function sosStatusesByMsgId(sosMsgIds: number[]) {
+  const ids = [...new Set(sosMsgIds.filter((id) => Number.isFinite(id)))];
+  const statuses = new Map<number, number>();
+  if (!ids.length) return statuses;
+  const { rows } = await pool.query(
+    `SELECT sos_msg_id, status FROM sos_alerts WHERE sos_msg_id = ANY($1::int[])`,
+    [ids],
+  );
+  for (const row of rows) statuses.set(Number(row.sos_msg_id), Number(row.status));
+  return statuses;
+}
+
 async function reconcileSosAlert({
   sos_msg_id,
   upstream_status,
@@ -4721,6 +4734,7 @@ export {
   insertSosAlert,
   getSosAlert,
   reconcileSosAlert,
+  sosStatusesByMsgId,
   beginSosAction,
   completeSosAction,
   failSosAction,

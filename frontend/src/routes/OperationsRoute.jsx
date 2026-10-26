@@ -180,8 +180,9 @@ export function OperationsRoute() {
     queryKey: ["alarms", "operations"],
     queryFn: () => listAlarms({ status: "open", limit: 500 }),
     // The alerts stream below refetches this the moment an alarm is raised or
-    // changes; the poll is only a backstop for a dropped stream.
-    refetchInterval: 60_000,
+    // changes. The poll is the backstop for when the stream is down, and on a
+    // flaky link that is exactly when an SOS matters, so it stays short.
+    refetchInterval: 15_000,
   });
 
   const dronesQuery = useQuery({

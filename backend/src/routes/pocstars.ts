@@ -81,8 +81,8 @@ async function ensureDeviceAccess(c: any, deviceIds: string[]) {
 
 let lastPocstarsOk: number | null = null;
 let lastPocstarsErr: string | null = null;
-let lastPocstarsReconcileAt: number | null = null;
-let sosSyncRunning = false;
+let sosPollRunning = false;
+let sosReconcileRunning = false;
 
 const formUrlencoded = (obj: Record<string, unknown>) =>
   Object.entries(obj)
@@ -299,14 +299,18 @@ function broadcastSse(event: string, data: unknown) {
   }
 }
 
-async function fetchPocstarsSos(targetUid: string, extra: Record<string, unknown> = {}) {
+async function fetchPocstarsSos(
+  targetUid: string,
+  extra: Record<string, unknown> = {},
+  { timeoutMs = 8000, attempts = 3 } = {},
+) {
   const params = { targetUid, status: 0, pageNum: 1, pageSize: 50, ...extra };
   let lastError: any;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     try {
       const { data } = await axios.get(`${SOS_BASE}/sos/mg/records`, {
         params,
-        timeout: 8000,
+        timeout: timeoutMs,
       });
       lastPocstarsOk = Date.now();
       lastPocstarsErr = null;
@@ -314,7 +318,7 @@ async function fetchPocstarsSos(targetUid: string, extra: Record<string, unknown
     } catch (error: any) {
       lastError = error;
       lastPocstarsErr = error.message;
-      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+      if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
     }
   }
   throw lastError;
@@ -359,9 +363,17 @@ function upstreamDate(value: unknown) {
 }
 
 async function reconcileAndBroadcast(rows: any[]) {
-  for (const row of rows) {
+  // The archive pages hold every alarm the radio network has ever handled, and
+  // nearly all of them already match. Reading MOMAS's statuses in one query
+  // and opening a locked transaction only for the rows that moved replaces a
+  // few hundred sequential round trips per pass.
+  const candidates = rows.filter((row) => [1, 2].includes(Number(row.sosStatus ?? row.status)));
+  if (!candidates.length) return;
+  const known = await db.sosStatusesByMsgId(candidates.map((row) => Number(row.sosMsgId)));
+  for (const row of candidates) {
     const upstreamStatus = Number(row.sosStatus ?? row.status);
-    if (![1, 2].includes(upstreamStatus)) continue;
+    const localStatus = known.get(Number(row.sosMsgId));
+    if (localStatus === undefined || localStatus >= upstreamStatus) continue;
     const alert = await db.reconcileSosAlert({
       sos_msg_id: row.sosMsgId,
       upstream_status: upstreamStatus,
@@ -486,38 +498,59 @@ async function handleSosAction(c: any, action: SosAction) {
   }
 }
 
-async function syncPocstarsSos({ notifyHealth = true } = {}) {
-  if (sosSyncRunning) return;
-  sosSyncRunning = true;
+// New alarms and status reconciliation run as two separate loops. They used to
+// share one cycle and one lock, so a reconcile pass over the archive (two large
+// vendor pages plus a database round trip per row) or a run of vendor timeouts
+// held back the check for new alarms, and a pressed SOS button reached the
+// console one to two and a half minutes late.
+//
+// The new-alarm check fails fast: one short attempt and no retry inside the
+// cycle, because the next poll a few seconds later is the retry.
+async function pollNewSos({ notifyHealth = true } = {}) {
+  if (sosPollRunning) return;
+  sosPollRunning = true;
   try {
-    // New alarms are imported. Processing/resolved rows only reconcile records
-    // MOMAS already knows about, so polling cannot backfill the vendor archive.
-    const newData = await fetchPocstarsSos(DEFAULT_TARGET_UID, { status: 0, pageSize: 50 });
+    const newData = await fetchPocstarsSos(
+      DEFAULT_TARGET_UID,
+      { status: 0, pageSize: 50 },
+      { timeoutMs: 4000, attempts: 1 },
+    );
     await persistAndBroadcast(newData?.data?.rows || []);
-
-    // Alarm-list requests can also trigger a sync, so keep the heavier archive
-    // reads on their own cadence instead of tripling vendor traffic per request.
-    const reconcileDue = !lastPocstarsReconcileAt || Date.now() - lastPocstarsReconcileAt >= 30_000;
-    if (reconcileDue) {
-      const [processingData, resolvedData] = await Promise.all([
-        fetchPocstarsSos(DEFAULT_TARGET_UID, { status: 1, pageSize: 200 }),
-        fetchPocstarsSos(DEFAULT_TARGET_UID, { status: 2, pageSize: 200 }),
-      ]);
-      await reconcileAndBroadcast(processingData?.data?.rows || []);
-      await reconcileAndBroadcast(resolvedData?.data?.rows || []);
-      lastPocstarsReconcileAt = Date.now();
-    }
     if (notifyHealth) broadcastSse("pocstars_health", { ok: true, ts: lastPocstarsOk });
   } catch (error: any) {
     if (notifyHealth) broadcastSse("pocstars_health", { ok: false, err: error.message, ts: Date.now() });
   } finally {
-    sosSyncRunning = false;
+    sosPollRunning = false;
+  }
+}
+
+// Processing/resolved rows only reconcile records MOMAS already knows about, so
+// this cannot backfill the vendor archive. Nothing here is time-critical: it
+// moves alarms that were handled on the radio network itself.
+async function reconcileSosStatuses() {
+  if (sosReconcileRunning) return;
+  sosReconcileRunning = true;
+  try {
+    const [processingData, resolvedData] = await Promise.all([
+      fetchPocstarsSos(DEFAULT_TARGET_UID, { status: 1, pageSize: 200 }),
+      fetchPocstarsSos(DEFAULT_TARGET_UID, { status: 2, pageSize: 200 }),
+    ]);
+    await reconcileAndBroadcast(processingData?.data?.rows || []);
+    await reconcileAndBroadcast(resolvedData?.data?.rows || []);
+  } catch (error: any) {
+    console.warn("[SOS] Status reconciliation failed:", error?.message || error);
+  } finally {
+    sosReconcileRunning = false;
   }
 }
 
 setInterval(() => {
-  void syncPocstarsSos();
-}, 12_000);
+  void pollNewSos();
+}, env.POCSTARS_SOS_POLL_SEC * 1000);
+
+setInterval(() => {
+  void reconcileSosStatuses();
+}, 30_000);
 
 router.get("/devices", async (c) => {
   try {
@@ -648,7 +681,7 @@ router.get("/sos/seen-ids", async (c) => {
 
 router.get("/sos/log", async (c) => {
   try {
-    await syncPocstarsSos({ notifyHealth: false });
+    await pollNewSos({ notifyHealth: false });
     const alerts = await db.listSosAlerts(orgScope(c), { status: "open" });
     return c.json({ alerts, pocstarsLastOk: lastPocstarsOk, pocstarsLastErr: lastPocstarsErr });
   } catch (error) {
@@ -666,7 +699,7 @@ router.post("/sos/:sosMsgId/resolve", async (c) => {
 
 router.get("/alarms", async (c) => {
   try {
-    await syncPocstarsSos({ notifyHealth: false });
+    await pollNewSos({ notifyHealth: false });
     const query = c.req.query();
     const alerts = await db.listSosAlerts(orgScope(c), {
       status: query.status || "all",
