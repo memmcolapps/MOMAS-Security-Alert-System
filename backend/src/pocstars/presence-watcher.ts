@@ -18,6 +18,14 @@ import { liveRadioConfigured } from "./live-gateway";
 
 const RECONNECT_MIN_MS = 5_000;
 const RECONNECT_MAX_MS = 5 * 60 * 1000;
+// A company with no channels has nothing to watch, and channels are created by
+// people, not by the minute. Checking every five minutes was eight wasted
+// sign-ins per cycle.
+const NO_CHANNEL_RETRY_MS = 30 * 60 * 1000;
+// Every watcher signs in to the same voice server, which every tenant on the
+// install depends on. After a restart or a dropped tunnel they all used to sign
+// in within the same couple of seconds; they now queue, one per second.
+const LOGIN_SPACING_MS = 1_000;
 
 type Watcher = {
   companyId: number;
@@ -25,6 +33,8 @@ type Watcher = {
   backoffMs: number;
   stopped: boolean;
   timer: ReturnType<typeof setTimeout> | null;
+  // Waiting for the company to get a channel, which is not a fault.
+  idle: boolean;
 };
 
 const watchers = new Map<number, Watcher>();
@@ -33,17 +43,34 @@ export function presenceWatcherStatus() {
   return [...watchers.values()].map((watcher) => ({
     companyId: watcher.companyId,
     connected: Boolean(watcher.client),
+    idle: watcher.idle,
     retryInMs: watcher.client ? null : watcher.backoffMs,
   }));
+}
+
+let nextLoginAt = 0;
+
+// Waits out the watcher's own delay first and only then claims a login slot, so
+// one company sleeping for half an hour never holds the queue up for the rest.
+function queueConnect(watcher: Watcher, earliestInMs: number) {
+  watcher.timer = setTimeout(() => {
+    const now = Date.now();
+    const at = Math.max(now, nextLoginAt);
+    nextLoginAt = at + LOGIN_SPACING_MS;
+    watcher.timer = setTimeout(() => {
+      watcher.timer = null;
+      void connect(watcher);
+    }, at - now);
+  }, earliestInMs);
 }
 
 export function startPresenceWatcher(companyId: number) {
   if (!liveRadioConfigured() || watchers.has(companyId)) return;
   const watcher: Watcher = {
-    companyId, client: null, backoffMs: RECONNECT_MIN_MS, stopped: false, timer: null,
+    companyId, client: null, backoffMs: RECONNECT_MIN_MS, stopped: false, timer: null, idle: false,
   };
   watchers.set(companyId, watcher);
-  void connect(watcher);
+  queueConnect(watcher, 0);
 }
 
 export async function stopPresenceWatchers() {
@@ -65,10 +92,7 @@ function scheduleReconnect(watcher: Watcher, reason?: string) {
     `[Radio] presence watcher for company ${watcher.companyId} `
     + `${reason || "down"}, retrying in ${Math.round(delay / 1000)}s`,
   );
-  watcher.timer = setTimeout(() => {
-    watcher.timer = null;
-    void connect(watcher);
-  }, delay);
+  queueConnect(watcher, delay);
   watcher.backoffMs = Math.min(watcher.backoffMs * 2, RECONNECT_MAX_MS);
 }
 
@@ -103,12 +127,14 @@ async function connect(watcher: Watcher) {
     if (baseline.idle) {
       await client.close().catch(() => {});
       if (watcher.client === client) watcher.client = null;
-      watcher.backoffMs = RECONNECT_MAX_MS;
+      watcher.idle = true;
+      watcher.backoffMs = NO_CHANNEL_RETRY_MS;
       scheduleReconnect(watcher, `company ${watcher.companyId} has no channels yet`);
       return;
     }
 
     watcher.client = client;
+    watcher.idle = false;
     watcher.backoffMs = RECONNECT_MIN_MS;
 
     // The baseline is a full picture; deltas after it are single radios. Skip

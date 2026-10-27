@@ -224,8 +224,15 @@ async function importVendorCompanies(client: PocstarsBridgeClient) {
 // per-tenant provisioning and is recorded nowhere else.
 async function resolveCompanyIds(client: PocstarsBridgeClient) {
   const companyIds = new Set<number>(await db.listOrganizationCompanyIds());
-  for (const groupId of await db.listRegistryGroupIds()) {
-    if (!companyIdByGroupId.has(groupId)) {
+  const registryGroupIds = await db.listRegistryGroupIds();
+  // Unknown groups are looked up a few at a time: after a restart that is every
+  // group, and one by one over the tunnel it held the first sync up by twenty
+  // seconds or so.
+  const unresolved = registryGroupIds.filter((groupId) => !companyIdByGroupId.has(groupId));
+  let next = 0;
+  const lookUp = async () => {
+    while (next < unresolved.length) {
+      const groupId = unresolved[next++];
       // Only a successful lookup is remembered. Caching a failure would strand
       // a whole company's radios until the next restart.
       const result = await client.provision("provision.company.forGroup", { groupId })
@@ -235,6 +242,9 @@ async function resolveCompanyIds(client: PocstarsBridgeClient) {
         companyIdByGroupId.set(groupId, companyId);
       }
     }
+  };
+  await Promise.all(Array.from({ length: Math.min(PER_COMPANY_CONCURRENCY, unresolved.length) }, lookUp));
+  for (const groupId of registryGroupIds) {
     const cached = companyIdByGroupId.get(groupId);
     if (cached) companyIds.add(cached);
   }
@@ -290,19 +300,43 @@ async function queryInventoryFromDatabase() {
   }
 }
 
+// Every request here crosses the reverse tunnel to the radio site, about half
+// a second each on its link. Asking company by company, one after another,
+// made the five-minute sync spend some twenty seconds just waiting. A current
+// bridge answers for every company in a single call; an older one is asked a
+// few companies at a time instead, in the order the companies were given.
+const PER_COMPANY_CONCURRENCY = 6;
+
+export async function readCompanySnapshots(client: PocstarsBridgeClient, companyIds: number[]) {
+  try {
+    return (await client.provision("provision.inventory", { companyIds })) as CompanySnapshot[];
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.startsWith("Unknown provisioning command")) throw error;
+  }
+  const snapshots: CompanySnapshot[] = new Array(companyIds.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < companyIds.length) {
+      const index = next++;
+      const companyId = companyIds[index];
+      const [groups, radios] = await Promise.all([
+        client.provision("provision.groups", { companyId }),
+        client.provision("provision.radios", { companyId }),
+      ]);
+      snapshots[index] = { companyId, groups, radios };
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(PER_COMPANY_CONCURRENCY, companyIds.length) }, worker));
+  return snapshots;
+}
+
 async function buildDatabaseInventory(
   client: PocstarsBridgeClient,
   companyIds: number[],
   companiesImported: any[] = [],
 ) {
-  const companySnapshots: CompanySnapshot[] = [];
-  for (const companyId of companyIds) {
-    const [groups, radios] = await Promise.all([
-      client.provision("provision.groups", { companyId }),
-      client.provision("provision.radios", { companyId }),
-    ]);
-    companySnapshots.push({ companyId, groups, radios });
-  }
+  const companySnapshots = await readCompanySnapshots(client, companyIds);
 
   // Keep reporting the configured dispatcher as the source. It is what the
   // registry rows are already tagged with, so switching planes does not orphan

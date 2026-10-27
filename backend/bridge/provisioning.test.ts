@@ -98,3 +98,60 @@ describe("retiring a radio", () => {
     expect(vendor.statements.some((sql) => sql.includes("UPDATE tb_User"))).toBe(true);
   });
 });
+
+describe("listInventory", () => {
+  // Vendor rows for two companies, in the order MySQL would return them.
+  const groupRows = [
+    { companyId: 13, id: 1001, name: "EPAIL", type: 0 },
+    { companyId: 95, id: 2001, name: "STEEL", type: 1 },
+    { companyId: 13, id: 1002, name: "EPAIL OPS", type: 0 },
+  ];
+  const radioRows = [
+    { companyId: 13, uid: 39, account: "359000000000039", name: "", enabled: 1, serviceEndsAt: null, groupIds: "1001,1002" },
+    { companyId: 95, uid: 401, account: "359000000000401", name: "Steel 1", enabled: 0, serviceEndsAt: null, groupIds: "" },
+    { companyId: 13, uid: 402, account: "359000000000402", name: "Ops 2", enabled: 1, serviceEndsAt: null, groupIds: "1002" },
+  ];
+
+  function vendorWith(queries: Array<{ sql: string; args: unknown[] }>) {
+    const provisioning = new PocstarsProvisioning({
+      host: "127.0.0.1", port: 3306, user: "test", password: "test", database: "test",
+    });
+    (provisioning as any).pool = {
+      query: async (sql: string, args: unknown[] = []) => {
+        queries.push({ sql, args });
+        const companyIds = (args[0] as number[]) || [];
+        const single = typeof args[0] === "number" ? [args[0]] : companyIds;
+        if (sql.includes("FROM tb_ChatGroup")) {
+          return [groupRows.filter((row) => single.includes(row.companyId))
+            .map(({ companyId, ...rest }) => (sql.includes("Cg_ComID AS companyId") ? { companyId, ...rest } : rest)), []];
+        }
+        return [radioRows.filter((row) => single.includes(row.companyId))
+          .map(({ companyId, ...rest }) => (sql.includes("User_CompanyID AS companyId") ? { companyId, ...rest } : rest)), []];
+      },
+      end: async () => {},
+    };
+    return provisioning;
+  }
+
+  test("returns exactly what the per-company reads return, for every company", async () => {
+    const queries: Array<{ sql: string; args: unknown[] }> = [];
+    const provisioning = vendorWith(queries);
+    const bulk = await provisioning.listInventory([13, 95, 777]);
+    for (const companyId of [13, 95, 777]) {
+      expect(bulk.get(companyId)).toEqual({
+        groups: await provisioning.listGroups(companyId),
+        radios: await provisioning.listRadios(companyId),
+      });
+    }
+    // Two queries for all three companies, each given the whole id list.
+    const bulkQueries = queries.filter((query) => Array.isArray(query.args[0]));
+    expect(bulkQueries).toHaveLength(2);
+    expect(bulkQueries.every((query) => /IN \(\?\)/.test(query.sql))).toBe(true);
+  });
+
+  test("asks nothing when there are no companies", async () => {
+    const queries: Array<{ sql: string; args: unknown[] }> = [];
+    expect((await vendorWith(queries).listInventory([])).size).toBe(0);
+    expect(queries).toHaveLength(0);
+  });
+});

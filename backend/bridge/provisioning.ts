@@ -850,6 +850,58 @@ export class PocstarsProvisioning {
     return rows.length ? Number(rows[0].uid) : null;
   }
 
+  // The whole inventory read in one call: the same two queries listGroups and
+  // listRadios run, but for every company at once. The inventory sync used to
+  // ask company by company, and each ask is a round trip over the reverse
+  // tunnel from the MOMAS server - about half a second on this site's link,
+  // so forty companies cost twenty seconds of waiting every five minutes.
+  async listInventory(companyIds: number[]) {
+    const byCompany = new Map<number, { groups: any[]; radios: any[] }>(
+      companyIds.map((companyId) => [companyId, { groups: [], radios: [] }]),
+    );
+    if (!companyIds.length) return byCompany;
+    const [groupRows]: any = await this.pool.query(
+      `SELECT Cg_ComID AS companyId, Cg_ID AS id, Cg_Name AS name, Cg_Type AS type
+         FROM tb_ChatGroup
+        WHERE Cg_ComID IN (?) AND IsActive = 1
+        ORDER BY Cg_ID`,
+      [companyIds],
+    );
+    const [radioRows]: any = await this.pool.query(
+      `SELECT u.User_CompanyID AS companyId,
+              u.User_ID AS uid, u.User_Account AS account, u.User_Name AS name,
+              u.User_Enable AS enabled, u.User_ServiceEndTime AS serviceEndsAt,
+              COALESCE(
+                (SELECT GROUP_CONCAT(m.UOG_Cgid)
+                   FROM tb_UserOfGroup m
+                   JOIN tb_ChatGroup g ON g.Cg_ID = m.UOG_Cgid
+                  WHERE m.UOG_UserId = u.User_ID AND m.IsActive = 1 AND g.IsActive = 1),
+                ''
+              ) AS groupIds
+         FROM tb_User u
+        WHERE u.User_CompanyID IN (?) AND u.User_Type = 0 AND u.IsActive = 1
+        ORDER BY u.User_ID`,
+      [companyIds],
+    );
+    for (const row of groupRows) {
+      byCompany.get(Number(row.companyId))?.groups.push({ id: row.id, name: row.name, type: row.type });
+    }
+    for (const row of radioRows) {
+      byCompany.get(Number(row.companyId))?.radios.push({
+        uid: Number(row.uid),
+        account: row.account,
+        name: row.name || row.account,
+        enabled: Number(row.enabled) === 1,
+        serviceEndsAt: row.serviceEndsAt,
+        groupIds: String(row.groupIds || "")
+          .split(",")
+          .filter(Boolean)
+          .map(Number),
+      });
+    }
+    return byCompany;
+  }
+
   async listGroups(companyId: number) {
     const [rows]: any = await this.pool.query(
       `SELECT Cg_ID AS id, Cg_Name AS name, Cg_Type AS type

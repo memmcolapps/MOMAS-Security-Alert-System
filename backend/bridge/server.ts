@@ -415,6 +415,23 @@ async function handleProvisioning(
           }),
         });
       }
+      case "provision.inventory": {
+        const companyIds = Array.isArray(message.companyIds)
+          ? [...new Set(message.companyIds.map(Number))].filter(
+              (id) => Number.isSafeInteger(id) && id > 0,
+            )
+          : [];
+        if (!companyIds.length || companyIds.length > 1000) {
+          return fail("provision.inventory needs between 1 and 1000 company ids.");
+        }
+        const byCompany = await provisioning.listInventory(companyIds);
+        return send(ws, {
+          type: "provision.result",
+          requestId,
+          ok: true,
+          result: companyIds.map((id) => ({ companyId: id, ...byCompany.get(id) })),
+        });
+      }
       case "provision.radios": {
         return send(ws, {
           type: "provision.result",

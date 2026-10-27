@@ -7,7 +7,7 @@ import {
   queryPocstarsInventory,
   refreshPresenceOverVoice,
 } from "../pocstars/live-gateway";
-import { startPresenceWatcher } from "../pocstars/presence-watcher";
+import { presenceWatcherStatus, startPresenceWatcher } from "../pocstars/presence-watcher";
 
 const router = new Hono();
 
@@ -423,6 +423,15 @@ setInterval(() => {
 let presenceRefreshRunning = false;
 async function refreshPresence(reason: string) {
   if (!liveRadioConfigured() || presenceRefreshRunning) return;
+  // The live watchers report each radio as it comes and goes. While every one
+  // of them is up, this full re-read - which signs in a real dispatcher seat
+  // and can collide with an operator using the console - repeats what they
+  // already said, so it only runs as the backstop when one is down. The
+  // startup run still happens: no watcher exists until the first inventory sync.
+  const watchers = presenceWatcherStatus();
+  if (reason !== "startup" && watchers.length && watchers.every((watcher) => watcher.connected || watcher.idle)) {
+    return;
+  }
   presenceRefreshRunning = true;
   try {
     if (!(await db.hasPocstarsDispatchers())) return;

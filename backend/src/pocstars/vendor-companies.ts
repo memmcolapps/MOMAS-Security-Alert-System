@@ -148,6 +148,7 @@ const READ_ONLY_PROVISION_COMMANDS = new Set([
   "provision.seats",
   "provision.groups",
   "provision.radios",
+  "provision.inventory",
   "provision.companies",
   "provision.company.forGroup",
 ]);
