@@ -3026,6 +3026,15 @@ async function getPocstarsDispatcherName(dispatcherUid: string) {
 // pocstars_groups, radios become pool devices (organization_id NULL) until a
 // platform admin assigns their group — or the radio itself — to an
 // organization. Radios whose group is already assigned follow it automatically.
+//
+// The whole network is ~700 radios across every tenant. This used to walk them
+// one at a time - four to six statements each, several thousand in all, every
+// one a round trip to the database - inside a single transaction. A run took
+// about nineteen minutes and held row locks on the devices table throughout,
+// so presence updates queued behind it for minutes at a time. It now reads and
+// locks what it needs in a few queries, decides each radio in memory with
+// exactly the rules below, and writes the outcome in a handful of bulk
+// statements. Same decisions, same order, about twenty round trips.
 async function syncPocstarsPlatformInventory(inventory: any) {
   const dispatcherUid = String(inventory?.dispatcher?.id || "");
   if (!dispatcherUid || !Array.isArray(inventory?.groups) || !Array.isArray(inventory?.radios)) {
@@ -3037,6 +3046,32 @@ async function syncPocstarsPlatformInventory(inventory: any) {
   // found them rather than reporting the whole fleet offline.
   const presenceKnown = inventory.presenceKnown !== false;
 
+  const groups = inventory.groups
+    .map((group: any) => ({
+      id: String(group.id || ""),
+      name: String(group.name || `Group ${group.id}`),
+      type: Number(group.type || 0),
+      // The vendor company that owns the talk group. This is what lets a
+      // channel find its organization without anybody claiming it by hand.
+      companyId: /^\d+$/.test(String(group.companyId || "")) ? String(group.companyId) : null,
+    }))
+    .filter((group: any) => /^\d+$/.test(group.id));
+  // One row per group for the bulk writes, folded the way repeated sequential
+  // upserts would have left it: the last name and type win, and the company
+  // is the last one the vendor actually named.
+  const groupRows = new Map<string, any>();
+  for (const group of groups) {
+    const earlier = groupRows.get(group.id);
+    groupRows.set(group.id, { ...group, companyId: group.companyId ?? earlier?.companyId ?? null });
+  }
+  const uniqueGroups = [...groupRows.values()];
+
+  // Read-only and untouched by this sync, so it is resolved once, up front.
+  // Which organization owns each vendor company. A radio that sits in no
+  // claimed group used to be unattributable however well we knew its company;
+  // now that companies are organizations here, it is not.
+  const organizationByCompany = await organizationIdsByCompanyId();
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -3047,22 +3082,12 @@ async function syncPocstarsPlatformInventory(inventory: any) {
       [dispatcherUid, String(inventory.dispatcher?.name || dispatcherUid)],
     );
 
-    const groups = inventory.groups
-      .map((group: any) => ({
-        id: String(group.id || ""),
-        name: String(group.name || `Group ${group.id}`),
-        type: Number(group.type || 0),
-        // The vendor company that owns the talk group. This is what lets a
-        // channel find its organization without anybody claiming it by hand.
-        companyId: /^\d+$/.test(String(group.companyId || "")) ? String(group.companyId) : null,
-      }))
-      .filter((group: any) => /^\d+$/.test(group.id));
     let groupsCreated = 0;
-    let groupsUpdated = 0;
-    for (const group of groups) {
+    if (uniqueGroups.length) {
       const { rows } = await client.query(
         `INSERT INTO pocstars_groups (group_id, name, type, source_dispatcher_uid, company_id, active, last_seen_at)
-         VALUES ($1,$2,$3,$4,$5,true,NOW())
+         SELECT g.id, g.name, g.type, $5, g.company_id, true, NOW()
+           FROM unnest($1::text[], $2::text[], $3::int[], $4::text[]) AS g(id, name, type, company_id)
          ON CONFLICT (group_id) DO UPDATE SET
            name = EXCLUDED.name,
            type = EXCLUDED.type,
@@ -3071,18 +3096,26 @@ async function syncPocstarsPlatformInventory(inventory: any) {
            active = true,
            last_seen_at = NOW()
          RETURNING (xmax = 0) AS inserted`,
-        [group.id, group.name, group.type, dispatcherUid, group.companyId],
+        [
+          uniqueGroups.map((group) => group.id),
+          uniqueGroups.map((group) => group.name),
+          uniqueGroups.map((group) => group.type),
+          uniqueGroups.map((group) => group.companyId),
+          dispatcherUid,
+        ],
       );
-      if (rows[0]?.inserted) groupsCreated += 1;
-      else groupsUpdated += 1;
+      groupsCreated = rows.filter((row: any) => row.inserted).length;
       // Keep an already-claimed channel's name in step with the vendor.
       await client.query(
-        `UPDATE channels
-            SET name = $2, updated_at = NOW()
-          WHERE pocstars_group_id = $1 AND name IS DISTINCT FROM $2`,
-        [group.id, group.name],
+        `UPDATE channels c
+            SET name = g.name, updated_at = NOW()
+           FROM unnest($1::text[], $2::text[]) AS g(id, name)
+          WHERE c.pocstars_group_id = g.id AND c.name IS DISTINCT FROM g.name`,
+        [uniqueGroups.map((group) => group.id), uniqueGroups.map((group) => group.name)],
       );
     }
+    // Every snapshot entry that was not a first sighting counted as an update.
+    const groupsUpdated = groups.length - groupsCreated;
     const seenGroupIds = groups.map((group: any) => group.id);
     if (seenGroupIds.length) {
       await client.query(
@@ -3102,24 +3135,33 @@ async function syncPocstarsPlatformInventory(inventory: any) {
     // and is never touched, so an operator's assignment always outranks the
     // company. And a group whose company maps to no organization is left in the
     // registry unclaimed rather than guessed at.
-    const organizationByCompanyForGroups = await organizationIdsByCompanyId();
-    let channelsClaimed = 0;
+    const claims = new Map<string, { organizationId: number; name: string }>();
     for (const group of groups) {
-      if (!group.companyId) continue;
-      const organizationId = organizationByCompanyForGroups.get(group.companyId);
+      if (!group.companyId || claims.has(group.id)) continue;
+      const organizationId = organizationByCompany.get(group.companyId);
       if (!organizationId) continue;
+      claims.set(group.id, { organizationId, name: group.name || `Channel ${group.id}` });
+    }
+    let channelsClaimed = 0;
+    if (claims.size) {
       const { rowCount } = await client.query(
         // DO NOTHING is the rule, not an optimisation: a group already claimed
         // belongs to whoever claimed it, whether that was an operator or an
         // earlier cycle, and it is also what makes this safe against a manual
         // claim landing while the sync is mid-run.
         `INSERT INTO channels (organization_id, name, pocstars_group_id, provision_state)
-         VALUES ($1, $2, $3, 'ready')
+         SELECT c.organization_id, c.name, c.group_id, 'ready'
+           FROM unnest($1::int[], $2::text[], $3::text[]) WITH ORDINALITY AS c(organization_id, name, group_id, ord)
+          ORDER BY c.ord
          ON CONFLICT (pocstars_group_id) WHERE pocstars_group_id IS NOT NULL
          DO NOTHING`,
-        [organizationId, group.name || `Channel ${group.id}`, group.id],
+        [
+          [...claims.values()].map((claim) => claim.organizationId),
+          [...claims.values()].map((claim) => claim.name),
+          [...claims.keys()],
+        ],
       );
-      channelsClaimed += rowCount || 0;
+      channelsClaimed = rowCount || 0;
     }
 
     // Channels already claimed by an organization - including any just claimed
@@ -3149,10 +3191,29 @@ async function syncPocstarsPlatformInventory(inventory: any) {
       membershipsByRadio.set(radioId, current);
     }
 
-    // Which organization owns each vendor company. A radio that sits in no
-    // claimed group used to be unattributable however well we knew its company;
-    // now that companies are organizations here, it is not.
-    const organizationByCompany = await organizationIdsByCompanyId();
+    // Every row any radio could touch, read and locked once: the radios
+    // themselves, and the rows holding their IMEIs, which are the only rows
+    // the re-flash rule below can retire.
+    const radioIds = inventory.radios
+      .map((radio: any) => String(radio.id || ""))
+      .filter((radioId: string) => /^\d+$/.test(radioId));
+    const radioImeis = inventory.radios
+      .map((radio: any) => (radio.imei ? String(radio.imei).trim() : ""))
+      .filter(Boolean);
+    const { rows: lockedRows } = await client.query(
+      `SELECT * FROM devices
+        WHERE device_id = ANY($1::text[])
+           OR (imei = ANY($2::text[]) AND pocstars_managed = true)
+        ORDER BY device_id
+          FOR UPDATE`,
+      [radioIds, radioImeis],
+    );
+    // The working copy every decision reads from and writes to, so each radio
+    // sees exactly what the one before it left behind.
+    const rowsById = new Map<string, any>(lockedRows.map((row: any) => [String(row.device_id), { ...row }]));
+    const presentAtStart = new Set<string>(rowsById.keys());
+    const upserted = new Set<string>();
+    const superseded = new Set<string>();
 
     let radiosCreated = 0;
     let radiosUpdated = 0;
@@ -3170,11 +3231,7 @@ async function syncPocstarsPlatformInventory(inventory: any) {
         dispatchersSkipped += 1;
         continue;
       }
-      const { rows: existingDevices } = await client.query(
-        "SELECT * FROM devices WHERE device_id = $1 FOR UPDATE",
-        [radioId],
-      );
-      const existing = existingDevices[0];
+      const existing = rowsById.get(radioId);
       const membershipIds = membershipsByRadio.get(radioId) || [];
       const radioCompanyId = /^\d+$/.test(String(radio.companyId || ""))
         ? String(radio.companyId)
@@ -3194,13 +3251,12 @@ async function syncPocstarsPlatformInventory(inventory: any) {
       // the hardware behind two of them.
       let predecessor: any = null;
       if (!existing && radioImei) {
-        const { rows: predecessors } = await client.query(
-          `SELECT * FROM devices
-            WHERE imei = $1 AND device_id <> $2 AND pocstars_managed = true
-            FOR UPDATE`,
-          [radioImei, radioId],
-        );
-        predecessor = predecessors[0] || null;
+        for (const row of rowsById.values()) {
+          if (row.imei === radioImei && String(row.device_id) !== radioId && row.pocstars_managed === true) {
+            predecessor = row;
+            break;
+          }
+        }
       }
       const prior = existing || predecessor;
 
@@ -3252,33 +3308,137 @@ async function syncPocstarsPlatformInventory(inventory: any) {
       }
 
       // An IMEI identifies one handset, so it has to be released by the old row
-      // before the new one can take it. Retiring the predecessor here rather
-      // than afterwards also means a failure leaves the old row intact and
-      // still owning the radio, instead of two rows owning it or neither.
+      // before the new one can take it. Both rows are written in the same
+      // transaction below, so a failure leaves the old row intact and still
+      // owning the radio, instead of two rows owning it or neither.
       if (predecessor) {
-        await client.query(
-          `UPDATE devices
-              SET imei = NULL, active = false, pocstars_online = false,
-                  pocstars_superseded_by = $2
-            WHERE device_id = $1`,
-          [String(predecessor.device_id), radioId],
-        );
+        Object.assign(predecessor, {
+          imei: null,
+          active: false,
+          pocstars_online: false,
+          pocstars_superseded_by: radioId,
+        });
+        superseded.add(String(predecessor.device_id));
         radiosSuperseded += 1;
       }
 
+      if (existing) {
+        // What the upsert's ON CONFLICT clause did to a row already there.
+        Object.assign(existing, {
+          organization_id: organizationId,
+          unit_id: unitId,
+          name: String(radio.name || `Radio ${radioId}`),
+          device_type: existing.device_type ?? "handheld",
+          active: true,
+          // Seen again: whatever made it disappear before, it is back, and a
+          // stale marker here would keep flagging a working radio as an orphan.
+          pocstars_missing_since: null,
+          pocstars_managed: true,
+          pocstars_online: presenceKnown ? Boolean(radio.online) : existing.pocstars_online,
+          pocstars_source_dispatcher_uid: dispatcherUid,
+          // Only the database plane carries the IMEI (the voice plane's contact
+          // list has no account), so keep the known value when a sync omits it.
+          imei: radioImei ?? existing.imei,
+          // A radio's company changes when a platform admin reassigns it, and
+          // the vendor is the authority on where it ended up.
+          pocstars_company_id: radioCompanyId ?? existing.pocstars_company_id,
+        });
+        radiosUpdated += 1;
+      } else {
+        rowsById.set(radioId, {
+          device_id: radioId,
+          organization_id: organizationId,
+          unit_id: unitId,
+          name: String(radio.name || `Radio ${radioId}`),
+          // Inherited only when this row is replacing a re-registered handset;
+          // null on an ordinary radio.
+          operator: predecessor?.operator || null,
+          device_type: predecessor?.device_type || "handheld",
+          notes: predecessor?.notes || null,
+          active: true,
+          pocstars_missing_since: null,
+          pocstars_managed: true,
+          pocstars_online: presenceKnown ? Boolean(radio.online) : null,
+          pocstars_source_dispatcher_uid: dispatcherUid,
+          imei: radioImei,
+          pocstars_company_id: radioCompanyId,
+          pocstars_superseded_by: null,
+        });
+        radiosCreated += 1;
+      }
+      upserted.add(radioId);
+      seenRadioIds.push(radioId);
+    }
+
+    // Write the outcome. Rows that were here already are updated in place
+    // (they are locked, so the working copy is exactly what they hold); rows
+    // first seen this run are inserted. Columns this sync never sets are left
+    // alone, and the seen-at stamps are taken from the database clock.
+    const changed = [...rowsById.values()].filter(
+      (row) => presentAtStart.has(String(row.device_id))
+        && (upserted.has(String(row.device_id)) || superseded.has(String(row.device_id))),
+    );
+    if (changed.length) {
+      await client.query(
+        `UPDATE devices d SET
+           organization_id = v.organization_id,
+           unit_id = v.unit_id,
+           name = v.name,
+           device_type = v.device_type,
+           active = v.active,
+           pocstars_missing_since = CASE WHEN v.seen THEN NULL ELSE d.pocstars_missing_since END,
+           pocstars_managed = v.pocstars_managed,
+           pocstars_online = v.pocstars_online,
+           pocstars_last_seen_at = CASE WHEN v.seen AND $14::boolean THEN NOW() ELSE d.pocstars_last_seen_at END,
+           pocstars_source_dispatcher_uid = v.source_uid,
+           imei = v.imei,
+           pocstars_company_id = v.company_id,
+           pocstars_superseded_by = v.superseded_by
+         FROM unnest($1::text[], $2::int[], $3::int[], $4::text[], $5::text[], $6::boolean[],
+                     $7::boolean[], $8::boolean[], $9::text[], $10::text[], $11::text[], $12::text[],
+                     $13::boolean[])
+           AS v(device_id, organization_id, unit_id, name, device_type, active,
+                pocstars_managed, pocstars_online, source_uid, imei, company_id, superseded_by, seen)
+        WHERE d.device_id = v.device_id`,
+        [
+          changed.map((row) => String(row.device_id)),
+          changed.map((row) => row.organization_id ?? null),
+          changed.map((row) => row.unit_id ?? null),
+          changed.map((row) => row.name ?? null),
+          changed.map((row) => row.device_type ?? null),
+          changed.map((row) => row.active ?? null),
+          changed.map((row) => row.pocstars_managed ?? null),
+          changed.map((row) => row.pocstars_online ?? null),
+          changed.map((row) => row.pocstars_source_dispatcher_uid ?? null),
+          changed.map((row) => row.imei ?? null),
+          changed.map((row) => row.pocstars_company_id ?? null),
+          changed.map((row) => row.pocstars_superseded_by ?? null),
+          changed.map((row) => upserted.has(String(row.device_id))),
+          presenceKnown,
+        ],
+      );
+    }
+    const created = [...rowsById.values()].filter((row) => !presentAtStart.has(String(row.device_id)));
+    if (created.length) {
+      // ON CONFLICT covers a radio that someone added by hand between the read
+      // above and this write; it updates exactly as the sync always has.
       await client.query(
         `INSERT INTO devices (
            device_id, organization_id, unit_id, name, company, operator,
            device_type, notes, active, pocstars_managed, pocstars_online,
            pocstars_last_seen_at, pocstars_source_dispatcher_uid, imei,
-           pocstars_company_id
+           pocstars_company_id, pocstars_superseded_by
          )
-         VALUES (
-           $1,$2,$3,$4,NULL,$10,COALESCE($11,'handheld'),$12,true,true,
-           CASE WHEN $7::boolean THEN $5::boolean ELSE NULL END,
-           CASE WHEN $7::boolean THEN NOW() ELSE NULL END,
-           $6, $8, $9
-         )
+         SELECT v.device_id, v.organization_id, v.unit_id, v.name, NULL, v.operator,
+                v.device_type, v.notes, v.active, true, v.pocstars_online,
+                CASE WHEN $15::boolean THEN NOW() ELSE NULL END,
+                v.source_uid, v.imei, v.company_id, v.superseded_by
+           FROM unnest($1::text[], $2::int[], $3::int[], $4::text[], $5::text[], $6::text[],
+                       $7::text[], $8::boolean[], $9::boolean[], $10::text[], $11::text[],
+                       $12::text[], $13::text[], $14::int[])
+             AS v(device_id, organization_id, unit_id, name, operator, device_type,
+                  notes, active, pocstars_online, source_uid, imei, company_id, superseded_by, ord)
+          ORDER BY v.ord
          ON CONFLICT (device_id) DO UPDATE SET
            organization_id = EXCLUDED.organization_id,
            unit_id = EXCLUDED.unit_id,
@@ -3286,74 +3446,89 @@ async function syncPocstarsPlatformInventory(inventory: any) {
            operator = devices.operator,
            device_type = COALESCE(devices.device_type, EXCLUDED.device_type),
            active = true,
-           -- Seen again: whatever made it disappear before, it is back, and a
-           -- stale marker here would keep flagging a working radio as an orphan.
            pocstars_missing_since = NULL,
            pocstars_managed = true,
-           pocstars_online = CASE WHEN $7::boolean THEN EXCLUDED.pocstars_online ELSE devices.pocstars_online END,
-           pocstars_last_seen_at = CASE WHEN $7::boolean THEN NOW() ELSE devices.pocstars_last_seen_at END,
+           pocstars_online = CASE WHEN $15::boolean THEN EXCLUDED.pocstars_online ELSE devices.pocstars_online END,
+           pocstars_last_seen_at = CASE WHEN $15::boolean THEN NOW() ELSE devices.pocstars_last_seen_at END,
            pocstars_source_dispatcher_uid = EXCLUDED.pocstars_source_dispatcher_uid,
-           -- Only the database plane carries the IMEI (the voice plane's contact
-           -- list has no account), so keep the known value when a sync omits it.
            imei = COALESCE(EXCLUDED.imei, devices.imei),
-           -- A radio's company changes when a platform admin reassigns it, and
-           -- the vendor is the authority on where it ended up.
            pocstars_company_id = COALESCE(EXCLUDED.pocstars_company_id, devices.pocstars_company_id)`,
         [
-          radioId,
-          organizationId,
-          unitId,
-          String(radio.name || `Radio ${radioId}`),
-          Boolean(radio.online),
-          dispatcherUid,
+          created.map((row) => String(row.device_id)),
+          created.map((row) => row.organization_id ?? null),
+          created.map((row) => row.unit_id ?? null),
+          created.map((row) => row.name ?? null),
+          created.map((row) => row.operator ?? null),
+          created.map((row) => row.device_type ?? null),
+          created.map((row) => row.notes ?? null),
+          created.map((row) => row.active ?? null),
+          created.map((row) => row.pocstars_online ?? null),
+          created.map((row) => row.pocstars_source_dispatcher_uid ?? null),
+          created.map((row) => row.imei ?? null),
+          created.map((row) => row.pocstars_company_id ?? null),
+          created.map((row) => row.pocstars_superseded_by ?? null),
+          created.map((_, index) => index),
           presenceKnown,
-          radioImei,
-          radioCompanyId,
-          // Inherited only when this row is replacing a re-registered handset;
-          // null on an ordinary radio, where the ON CONFLICT clause preserves
-          // whatever an operator has already typed here.
-          predecessor?.operator || null,
-          predecessor?.device_type || null,
-          predecessor?.notes || null,
         ],
       );
-      seenRadioIds.push(radioId);
-      if (existing) radiosUpdated += 1;
-      else radiosCreated += 1;
+    }
 
-      // Mirror vendor group membership onto the claimed channels of the radio's
-      // own organization, so a tenant's channel list reflects the radio network
-      // without anyone re-entering it.
+    // Mirror vendor group membership onto the claimed channels of the radio's
+    // own organization, so a tenant's channel list reflects the radio network
+    // without anyone re-entering it.
+    const touchedRadioIds = [...upserted];
+    if (touchedRadioIds.length) {
       await client.query(
         `DELETE FROM channel_devices cd USING channels c
-          WHERE cd.channel_id = c.id AND cd.device_id = $1
+          WHERE cd.channel_id = c.id AND cd.device_id = ANY($1::text[])
             AND c.pocstars_group_id IS NOT NULL`,
-        [radioId],
+        [touchedRadioIds],
       );
-      if (organizationId) {
+      const channelPairs: Array<[number, string]> = [];
+      const membershipRows: Array<[string, string, string | null, number | null]> = [];
+      for (const radioId of touchedRadioIds) {
+        const organizationId = rowsById.get(radioId)?.organization_id
+          ? Number(rowsById.get(radioId).organization_id)
+          : null;
+        const membershipIds = membershipsByRadio.get(radioId) || [];
+        if (organizationId) {
+          for (const groupId of membershipIds) {
+            const target = unitByGroup.get(groupId);
+            if (!target || target.organizationId !== organizationId) continue;
+            channelPairs.push([target.channelId, radioId]);
+          }
+        }
         for (const groupId of membershipIds) {
-          const target = unitByGroup.get(groupId);
-          if (!target || target.organizationId !== organizationId) continue;
-          await client.query(
-            `INSERT INTO channel_devices (channel_id, device_id) VALUES ($1,$2)
-             ON CONFLICT DO NOTHING`,
-            [target.channelId, radioId],
-          );
+          const group = groupById.get(groupId);
+          membershipRows.push([radioId, groupId, group?.name || null, group?.type ?? null]);
         }
       }
-
+      if (channelPairs.length) {
+        await client.query(
+          `INSERT INTO channel_devices (channel_id, device_id)
+           SELECT * FROM unnest($1::int[], $2::text[])
+           ON CONFLICT DO NOTHING`,
+          [channelPairs.map((pair) => pair[0]), channelPairs.map((pair) => pair[1])],
+        );
+      }
       await client.query(
-        "DELETE FROM pocstars_radio_group_memberships WHERE device_id = $1",
-        [radioId],
+        "DELETE FROM pocstars_radio_group_memberships WHERE device_id = ANY($1::text[])",
+        [touchedRadioIds],
       );
-      for (const groupId of membershipIds) {
-        const group = groupById.get(groupId);
+      if (membershipRows.length) {
         await client.query(
           `INSERT INTO pocstars_radio_group_memberships (
              device_id, group_id, group_name, group_type, last_seen_at
            )
-           VALUES ($1,$2,$3,$4,NOW())`,
-          [radioId, groupId, group?.name || null, group?.type ?? null],
+           SELECT m.device_id, m.group_id, m.group_name, m.group_type, NOW()
+             FROM unnest($1::text[], $2::text[], $3::text[], $4::int[])
+               AS m(device_id, group_id, group_name, group_type)`,
+          [
+            membershipRows.map((row) => row[0]),
+            membershipRows.map((row) => row[1]),
+            membershipRows.map((row) => row[2]),
+            membershipRows.map((row) => row[3]),
+          ],
         );
       }
     }

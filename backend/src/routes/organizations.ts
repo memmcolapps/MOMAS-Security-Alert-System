@@ -371,6 +371,7 @@ let automaticInventorySyncRunning = false;
 setInterval(() => {
   if (!liveRadioConfigured() || automaticInventorySyncRunning) return;
   automaticInventorySyncRunning = true;
+  const startedAt = Date.now();
   void (async () => {
     try {
       // The first sync is an explicit platform-admin action; only refresh
@@ -378,6 +379,11 @@ setInterval(() => {
       if (!(await db.hasPocstarsDispatchers())) return;
       const inventory = await queryPocstarsInventory();
       const summary = await db.syncPocstarsPlatformInventory(inventory);
+      console.log(
+        `[Radio] inventory sync done in ${((Date.now() - startedAt) / 1000).toFixed(1)}s: `
+        + `${summary.radiosFound} radios (${summary.radiosCreated} new, ${summary.radiosMarkedInactive} gone), `
+        + `${summary.groupsFound} groups, ${summary.channelsClaimed} channels claimed`,
+      );
       await db.createAuditLog({
         organization_id: null,
         actor_user_id: null,
@@ -396,8 +402,14 @@ setInterval(() => {
       for (const companyId of await db.listOperatedCompanyIds()) {
         startPresenceWatcher(companyId);
       }
-    } catch {
-      // Live calls take priority. The next five-minute cycle retries safely.
+    } catch (error) {
+      // Live calls take priority. The next five-minute cycle retries safely,
+      // but a sync that keeps failing has to show in the log, not only as a
+      // radio list that quietly stops changing.
+      console.warn(
+        `[Radio] inventory sync failed after ${((Date.now() - startedAt) / 1000).toFixed(1)}s:`,
+        error instanceof Error ? error.message : error,
+      );
     } finally {
       automaticInventorySyncRunning = false;
     }
