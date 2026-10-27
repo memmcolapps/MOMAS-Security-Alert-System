@@ -35,12 +35,41 @@ export function SosAlarmProvider({ enabled = true, children }) {
   const knownRef = useRef(null);
   const [ringingKeys, setRingingKeys] = useState(() => new Set());
 
+  // The push carries the whole alarm, in the same shape as the list. It used
+  // to be treated only as a cue to download the list again, so the siren
+  // waited on a second round trip - on a weak desktop link, about a minute
+  // after the channel prompt (which reads the push directly) had already
+  // shown. The alarm now goes straight into the shared list, which rings the
+  // siren and puts it on the map at once; the refetch only reconciles.
   useEffect(() => {
     if (!enabled) return undefined;
     const source = new window.EventSource(alertsEventsUrl());
-    const refresh = () => queryClient.invalidateQueries({ queryKey: ["alarms"] });
-    source.addEventListener("alert_new", refresh);
-    source.addEventListener("alert_updated", refresh);
+    const apply = (event) => {
+      let alert = null;
+      try {
+        alert = JSON.parse(event.data);
+      } catch {
+        // Malformed payload: the refetch below still picks the alarm up.
+      }
+      // Only once this session has its baseline: before that, writing to the
+      // list would fold the new alarm into "already open" and it would never ring.
+      if (alert?.alert_key && knownRef.current) {
+        queryClient.setQueryData(["alarms", "operations"], (current) => {
+          if (!current?.alerts) return current;
+          const key = alarmKey(alert);
+          const rest = current.alerts.filter((existing) => alarmKey(existing) !== key);
+          // This list holds open alarms only, so a resolved one leaves it.
+          const alerts = Number(alert.status) >= 2 ? rest : [alert, ...rest];
+          return { ...current, alerts };
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: ["alarms"] });
+    };
+    source.addEventListener("alert_new", apply);
+    source.addEventListener("alert_updated", apply);
+    // Anything pushed while the stream was down is fetched on reconnect
+    // rather than waiting for the next poll.
+    source.addEventListener("open", () => queryClient.invalidateQueries({ queryKey: ["alarms"] }));
     return () => source.close();
   }, [enabled, queryClient]);
 
