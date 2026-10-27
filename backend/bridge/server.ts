@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { PocstarsLiveClient } from "../src/pocstars/live-client";
 import { PocstarsProvisioning } from "./provisioning";
+import { SosWatch } from "./sos-watch";
 
 type BridgeSession = {
   client: PocstarsLiveClient | null;
@@ -16,6 +17,8 @@ type BridgeSession = {
   // A presence watcher signs in on a reserved seat that is never leased for
   // audio, so it is deliberately not counted as console capacity.
   presenceWatch: boolean;
+  // SOS watching holds no seat at all: it reads the vendor's SOS service.
+  sosUnsubscribe: (() => void) | null;
 };
 
 const host = process.env.BRIDGE_HOST || "127.0.0.1";
@@ -27,6 +30,10 @@ const audioHost = process.env.BRIDGE_POCSTARS_AUDIO_HOST || controlHost;
 const account = process.env.BRIDGE_POCSTARS_ACCOUNT || "";
 const password = process.env.BRIDGE_POCSTARS_PASSWORD || "";
 const timeoutMs = Number(process.env.POCSTARS_PTT_TIMEOUT_MS || 10_000);
+// The vendor SOS service runs on this host. Loopback is the default because it
+// survives the site being re-addressed, which hardcoded LAN addresses did not.
+const sosBase = process.env.BRIDGE_SOS_BASE || "http://127.0.0.1:6891";
+const sosPollMs = Number(process.env.BRIDGE_SOS_POLL_MS || 1000);
 const maxPttSeconds = Number(process.env.POCSTARS_PTT_MAX_SECONDS || 60);
 
 // Provisioning is optional: leave BRIDGE_DB_PASSWORD unset and the bridge keeps
@@ -164,12 +171,31 @@ function send(
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value));
 }
 
+// One watcher per alarm recipient, shared by every MOMAS connection asking for
+// it, so a reconnecting backend never doubles the load on the SOS service.
+const sosWatches = new Map<string, SosWatch>();
+
+function watchSos(ws: ServerWebSocket<BridgeSession>, targetUid: string) {
+  if (ws.data.sosUnsubscribe) return;
+  let watch = sosWatches.get(targetUid);
+  if (!watch) {
+    watch = new SosWatch({ baseUrl: sosBase, targetUid, intervalMs: sosPollMs });
+    sosWatches.set(targetUid, watch);
+  }
+  ws.data.sosUnsubscribe = watch.subscribe({
+    onSnapshot: (rows) => send(ws, { type: "sos.snapshot", targetUid, rows }),
+    onNew: (rows) => send(ws, { type: "sos.new", targetUid, rows }),
+  });
+}
+
 async function closeSession(ws: ServerWebSocket<BridgeSession>) {
   // Release the seat first and unconditionally. A re-entrant call used to hit
   // the `closing` guard and return before this line, which leaked the lease and
   // left the bridge refusing later sessions.
   releaseSeat(ws);
   sessions.delete(ws);
+  ws.data.sosUnsubscribe?.();
+  ws.data.sosUnsubscribe = null;
   if (ws.data.closing) return;
   ws.data.closing = true;
   if (ws.data.pttTimer) clearTimeout(ws.data.pttTimer);
@@ -499,8 +525,21 @@ const server = Bun.serve<BridgeSession>({
         presenceWatchers: [...sessions].filter((ws) => ws.data.presenceWatch)
           .length,
         idleConnections: [...sessions].filter(
-          (ws) => ws.data.seatUid === null && !ws.data.presenceWatch,
+          (ws) =>
+            ws.data.seatUid === null &&
+            !ws.data.presenceWatch &&
+            !ws.data.sosUnsubscribe,
         ).length,
+        sos: [...sosWatches.entries()].map(([targetUid, watch]) => ({
+          targetUid,
+          subscribers: watch.subscriberCount,
+          openAlarms: watch.snapshot().length,
+          lastOkSecondsAgo:
+            watch.lastOkAt === null
+              ? null
+              : Math.round((Date.now() - watch.lastOkAt) / 1000),
+          lastError: watch.lastError,
+        })),
         sessions: [...sessions]
           .filter((ws) => ws.data.seatUid !== null)
           .map((ws) => ({
@@ -535,6 +574,7 @@ const server = Bun.serve<BridgeSession>({
         openedAt: Date.now(),
         lastSeenAt: Date.now(),
         presenceWatch: false,
+        sosUnsubscribe: null,
       },
     });
     return upgraded
@@ -582,6 +622,21 @@ const server = Bun.serve<BridgeSession>({
 
       if (message.type === "ping") {
         send(ws, { type: "pong" });
+        return;
+      }
+
+      if (message.type === "sos.watch") {
+        const targetUid = String(message.targetUid ?? "").trim();
+        if (!/^\d+$/.test(targetUid)) {
+          send(ws, {
+            type: "error",
+            code: "invalid_sos_target",
+            message: "SOS watching needs the numeric uid that receives alarms.",
+          });
+          return;
+        }
+        watchSos(ws, targetUid);
+        send(ws, { type: "sos.watching", targetUid });
         return;
       }
 

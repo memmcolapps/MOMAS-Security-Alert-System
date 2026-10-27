@@ -14,6 +14,7 @@ import { env } from "../config";
 import * as db from "../db";
 import { bus } from "../events";
 import { fetchLastLocations } from "../pocstars/locations";
+import { startSosPush } from "../pocstars/sos-push";
 import { provisionOnNetwork } from "../pocstars/live-gateway";
 import { actionMessage, describeSyncFailure } from "../pocstars/messages";
 
@@ -551,6 +552,11 @@ setInterval(() => {
 setInterval(() => {
   void reconcileSosStatuses();
 }, 30_000);
+
+// The fast path: the bridge on the POCSTARS host pushes alarms as it sees them.
+// The poll above keeps running regardless and is what covers the bridge or its
+// tunnel being down.
+startSosPush(persistAndBroadcast);
 
 router.get("/devices", async (c) => {
   try {

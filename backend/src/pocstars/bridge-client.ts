@@ -99,6 +99,21 @@ export class PocstarsBridgeClient extends EventEmitter {
     };
   }
 
+  // A round trip, for long-lived sessions that must notice a tunnel that has
+  // gone half-open: the socket can look open long after nothing gets through.
+  async ping() {
+    await this.request({ type: "ping" }, (message) => message.type === "pong");
+  }
+
+  // Asks the bridge to watch the vendor SOS service on its own host. Alarms then
+  // arrive as "sos" events: the currently open ones first, then each new one.
+  async watchSos(targetUid: string) {
+    await this.request(
+      { type: "sos.watch", targetUid },
+      (message) => message.type === "sos.watching",
+    );
+  }
+
   async queryInventory() {
     return this.request(
       { type: "inventory.query" },
@@ -229,6 +244,8 @@ export class PocstarsBridgeClient extends EventEmitter {
       });
     } else if (message.type === "presence.delta") {
       this.emit("presence", Array.isArray(message.users) ? message.users : []);
+    } else if (message.type === "sos.snapshot" || message.type === "sos.new") {
+      this.emit("sos", Array.isArray(message.rows) ? message.rows : []);
     }
   }
 

@@ -15,6 +15,7 @@ import { createRoot } from "react-dom/client";
 import { AppHeader } from "./components/AppHeader";
 import { FollowBar } from "./components/FollowBar";
 import { LiveRadioBar } from "./components/LiveRadioBar";
+import { SosAlarmBanner, SosAlarmProvider } from "./components/SosAlarm";
 import { FollowProvider } from "./lib/follow-session";
 import { LiveRadioProvider } from "./lib/live-radio-session";
 import { getAuthToken, getMe } from "./lib/api";
@@ -62,16 +63,19 @@ function RootLayout() {
   return (
     <LiveRadioProvider>
       <FollowProvider>
-        {showHeader ? (
-          <div ref={chromeRef} className="fixed left-0 right-0 top-0 z-[1100]">
-            <AppHeader />
-            <LiveRadioBar />
-          </div>
-        ) : null}
-        <Outlet />
-        {/* Outlives any one page: a response runs while the operator moves
-            between the map, the alarm and the radio console. */}
-        {showHeader ? <FollowBar /> : null}
+        <SosAlarmProvider enabled={showHeader}>
+          {showHeader ? (
+            <div ref={chromeRef} className="fixed left-0 right-0 top-0 z-[1100]">
+              <AppHeader />
+              <LiveRadioBar />
+            </div>
+          ) : null}
+          <Outlet />
+          {/* Outlives any one page: a response runs while the operator moves
+              between the map, the alarm and the radio console. */}
+          {showHeader ? <FollowBar /> : null}
+          {showHeader ? <SosAlarmBanner /> : null}
+        </SosAlarmProvider>
       </FollowProvider>
     </LiveRadioProvider>
   );

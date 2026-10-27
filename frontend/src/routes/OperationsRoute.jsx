@@ -20,6 +20,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OperationsMap, devicePopup, dronePopup, incidentPopup, sosPopup } from "../components/OperationsMap";
 import { FloatingRadioCard } from "../components/RadioConsole";
+import { useSosAlarm } from "../components/SosAlarm";
 import { useFollow } from "../lib/follow-session";
 import {
   dronePollInterval,
@@ -29,7 +30,6 @@ import {
   getIncidents,
   getLocations,
   getMe,
-  alertsEventsUrl,
   listAlarms,
   listGeofences,
   listDevices,
@@ -145,18 +145,15 @@ export function OperationsRoute() {
   const [activeLayers, setActiveLayers] = useState({ live: true, heat: false, devices: true, drones: true, fences: true });
   const [openRadios, setOpenRadios] = useState([]);
   const { target: followTarget, position: followPosition } = useFollow();
-  const [sosSoundMuted, setSosSoundMuted] = useState(false);
+  const sosAlarm = useSosAlarm();
   const [focusTarget, setFocusTarget] = useState(null);
   const [selectedIncidentId, setSelectedIncidentId] = useState(null);
   const knownSosIdsRef = useRef(null);
-  const ringingSosIdsRef = useRef(new Set());
   const pendingSosFocusIdsRef = useRef(new Set());
   const consumedFocusKeyRef = useRef(null);
   const navigate = useNavigate();
   const routeSearch = useSearch({ strict: false });
   const requestedFocusKey = routeSearch?.focus || null;
-  const audioCtxRef = useRef(null);
-  const alarmTimerRef = useRef(null);
 
   const incidentQuery = useQuery({
     queryKey: ["incidents", from, to],
@@ -253,43 +250,6 @@ export function OperationsRoute() {
   );
 
   useEffect(() => {
-    const source = new window.EventSource(alertsEventsUrl());
-    const refresh = () => queryClient.invalidateQueries({ queryKey: ["alarms"] });
-    source.addEventListener("alert_new", refresh);
-    source.addEventListener("alert_updated", refresh);
-    return () => source.close();
-  }, [queryClient]);
-
-  const ensureAudioContext = useCallback(() => {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext) return null;
-    if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
-    return audioCtxRef.current;
-  }, []);
-
-  const playSosTone = useCallback(() => {
-    if (sosSoundMuted) return;
-    const ctx = ensureAudioContext();
-    if (!ctx) return;
-    if (ctx.state === "suspended") void ctx.resume();
-
-    for (let i = 0; i < 3; i += 1) {
-      const start = ctx.currentTime + i * 0.34;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "square";
-      osc.frequency.setValueAtTime(880, start);
-      gain.gain.setValueAtTime(0, start);
-      gain.gain.linearRampToValueAtTime(0.18, start + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.22);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(start);
-      osc.stop(start + 0.24);
-    }
-  }, [ensureAudioContext, sosSoundMuted]);
-
-  useEffect(() => {
     // Wait for the first fetch to land before deciding what counts as "already
     // known". This effect also runs on the very first render, when the query is
     // still pending and `activeAlerts` is empty — seeding from that empty list
@@ -304,7 +264,6 @@ export function OperationsRoute() {
 
     const newIds = activeIds.filter((id) => !knownSosIdsRef.current.has(id));
     activeIds.forEach((id) => knownSosIdsRef.current.add(id));
-    newIds.forEach((id) => ringingSosIdsRef.current.add(id));
     newIds.forEach((id) => pendingSosFocusIdsRef.current.add(id));
     const focusAlert = activeAlerts.find(
       (alert) =>
@@ -328,9 +287,6 @@ export function OperationsRoute() {
     }
 
     const activeSet = new Set(activeIds);
-    ringingSosIdsRef.current.forEach((id) => {
-      if (!activeSet.has(id)) ringingSosIdsRef.current.delete(id);
-    });
     pendingSosFocusIdsRef.current.forEach((id) => {
       if (!activeSet.has(id)) pendingSosFocusIdsRef.current.delete(id);
     });
@@ -355,40 +311,6 @@ export function OperationsRoute() {
     // Drop the parameter once used so a later refresh does not re-focus.
     navigate({ to: "/", search: {}, replace: true });
   }, [requestedFocusKey, activeAlerts, navigate]);
-
-  useEffect(() => {
-    if (alarmTimerRef.current) {
-      window.clearInterval(alarmTimerRef.current);
-      alarmTimerRef.current = null;
-    }
-    if (sosSoundMuted || !ringingSosIdsRef.current.size) return undefined;
-
-    playSosTone();
-    alarmTimerRef.current = window.setInterval(playSosTone, 1800);
-    return () => {
-      if (alarmTimerRef.current) {
-        window.clearInterval(alarmTimerRef.current);
-        alarmTimerRef.current = null;
-      }
-    };
-  }, [activeAlerts, playSosTone, sosSoundMuted]);
-
-  useEffect(() => {
-    const unlockAudio = () => {
-      const ctx = ensureAudioContext();
-      void ctx?.resume?.();
-    };
-    window.addEventListener("pointerdown", unlockAudio, { once: true });
-    window.addEventListener("keydown", unlockAudio, { once: true });
-    return () => {
-      window.removeEventListener("pointerdown", unlockAudio);
-      window.removeEventListener("keydown", unlockAudio);
-    };
-  }, [ensureAudioContext]);
-
-  function toggleSosSound() {
-    setSosSoundMuted((value) => !value);
-  }
 
   const visibleIncidents = useMemo(
     () =>
@@ -653,9 +575,9 @@ export function OperationsRoute() {
             </div>
             <div className="flex items-center gap-1">
               <button
-                className={`rounded p-1 ${sosSoundMuted ? "text-neutral-500 hover:text-neutral-100" : "text-ops-red"}`}
-                onClick={toggleSosSound}
-                title={sosSoundMuted ? "Unmute SOS sound" : "Mute SOS sound"}
+                className={`rounded p-1 ${sosAlarm.ringing.length ? "animate-pulse text-ops-red" : "text-neutral-500 hover:text-neutral-100"}`}
+                onClick={sosAlarm.silence}
+                title={sosAlarm.ringing.length ? "Silence the SOS siren" : "SOS siren is armed"}
               >
                 <Bell size={15} />
               </button>
