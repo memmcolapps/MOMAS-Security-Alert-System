@@ -16,7 +16,7 @@ ExecStart=/usr/bin/ssh -NT \
   -o ServerAliveCountMax=3 \
   -o StrictHostKeyChecking=yes \
   -R 127.0.0.1:6892:127.0.0.1:16892 \
-  momasbridge@41.216.166.166
+  momasbridge@84.247.188.156
 Restart=always
 RestartSec=5
 
