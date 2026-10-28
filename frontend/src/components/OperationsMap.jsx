@@ -168,7 +168,10 @@ function radioIcon({ label, glyph, sos, offline, stale, moving, bearing, tracked
 // Keeps a tracked radio in the middle part of the screen. Panning only when it
 // nears the edge, rather than on every frame, is what keeps the map readable.
 const TRACK_INNER_PAD = -0.25;
-const TRACK_ZOOM = 17;
+// Close enough to see which building, and no closer than the imagery goes:
+// past zoom 19 the satellite tiles are only upscaled and turn to mush.
+const TRACK_ZOOM_MIN = 17;
+const TRACK_ZOOM_MAX = 19;
 // The staleness label and the arrow must age even when no new data arrives.
 const RADIO_RECHECK_MS = 15_000;
 
@@ -596,7 +599,7 @@ export function OperationsMap({
     if (!entry) return;
     // Hold off the edge-panning until the flight lands, or it cuts it short.
     trackRef.current.lastCheck = Date.now() + 1300;
-    map.flyTo(entry.marker.getLatLng(), Math.max(map.getZoom(), TRACK_ZOOM), { duration: 1.2 });
+    map.flyTo(entry.marker.getLatLng(), Math.min(Math.max(map.getZoom(), TRACK_ZOOM_MIN), TRACK_ZOOM_MAX), { duration: 1.2 });
   }, [trackedRadioId, trackPaused]);
 
   // The trail fades with age: the last few minutes are what the operator acts

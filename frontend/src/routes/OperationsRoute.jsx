@@ -192,8 +192,11 @@ export function OperationsRoute() {
     enabled: Boolean(trackedRadioId),
     refetchInterval: 10_000,
   });
+  // The Live tour moves the camera every few seconds and tracking pans it
+  // back, so starting one ends the other.
   const trackRadio = useCallback((deviceId) => {
     if (!deviceId) return;
+    setLiveMode(false);
     setTracking({ deviceId: String(deviceId), paused: false });
   }, []);
   const stopTracking = useCallback(() => {
@@ -497,6 +500,7 @@ export function OperationsRoute() {
   }, []);
 
   function startLiveMode() {
+    stopTracking();
     setTourIndex(0);
     setTourPaused(false);
     setLiveMode(true);
@@ -541,8 +545,6 @@ export function OperationsRoute() {
           motion={trackedMotion}
           paused={tracking.paused}
           trailMinutes={TRAIL_MINUTES}
-          // The responder's strip owns the bottom edge while a vehicle is en route.
-          raised={Boolean(followTarget)}
           onRecentre={resumeTracking}
           onStop={stopTracking}
         />

@@ -9,7 +9,7 @@ import { MOTION, compassFor, formatAge } from "../lib/radio-motion";
  * still or a handset indoors that has stopped getting a fix, and only the age
  * tells those apart.
  */
-export function TrackingStrip({ device, location, motion, paused, trailMinutes, raised, onRecentre, onStop }) {
+export function TrackingStrip({ device, location, motion, paused, trailMinutes, onRecentre, onStop }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -33,9 +33,9 @@ export function TrackingStrip({ device, location, motion, paused, trailMinutes, 
 
   return (
     <section
-      className={`glass-panel absolute left-1/2 z-[1100] flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-ops-green/40 px-3 py-2 text-[11px] text-neutral-200 ${
-        raised ? "bottom-20" : "bottom-4"
-      }`}
+      // Top centre: the bottom edge already belongs to the stats bar and, while
+      // a vehicle is responding, the FollowBar.
+      className="glass-panel absolute left-1/2 top-[calc(var(--ops-chrome)+0.75rem)] z-[1100] flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-ops-green/40 px-3 py-2 text-[11px] text-neutral-200"
     >
       <span className="inline-flex min-w-0 items-center gap-1.5 font-bold text-ops-green">
         <Crosshair size={13} className="shrink-0" />
