@@ -415,6 +415,8 @@ export function AlarmsRoute() {
       lon: position.lon,
       label: displayName(selected),
       alertKey: selected.alert_key,
+      // Set for an alarm raised by a radio, so the destination moves with it.
+      radioId: selected.source !== "geofence" || selected.asset_type === "radio" ? selected.device_id : null,
     });
     // Only open the response if it is still unacknowledged; following an alarm
     // someone else already took should not reopen or re-log it.

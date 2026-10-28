@@ -421,3 +421,62 @@ textarea {
 .field-input option {
   background: #111;
 }
+
+/* Radio movement. The arrow sits outside the pin and turns with the direction
+   of travel; it only appears once a radio has moved for real, not on GPS drift. */
+.device-heading {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 26px;
+  height: 26px;
+  pointer-events: none;
+  transition: transform 0.6s ease;
+}
+
+.device-heading::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -9px;
+  transform: translateX(-50%);
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 9px solid var(--green);
+  filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.8));
+}
+
+/* Online, but its position has not changed for minutes - often a handset
+   indoors. Kept in place and labelled with its age rather than guessed at. */
+.device-pin.stale {
+  background: #0d3b24;
+  color: var(--green);
+  border: 2px dashed var(--green);
+  box-shadow: none;
+}
+
+.device-label.stale {
+  color: #8fd3ad;
+}
+
+.device-pin.tracked {
+  outline: 3px solid rgba(255, 255, 255, 0.9);
+  outline-offset: 2px;
+}
+
+.popup-track-btn {
+  margin-top: 8px;
+  width: 100%;
+  border: 1px solid rgba(0, 204, 102, 0.5);
+  border-radius: 4px;
+  background: rgba(0, 204, 102, 0.12);
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+
+.popup-track-btn:hover {
+  background: rgba(0, 204, 102, 0.22);
+}

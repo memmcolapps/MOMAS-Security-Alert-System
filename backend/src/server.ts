@@ -15,6 +15,7 @@ import pocstarsAdminRouter from "./routes/pocstars-admin";
 import platformStaffRouter from "./routes/platform-staff";
 import { startMavlinkListener } from "./drones/mavlink-listener";
 import { startGeofenceMonitor } from "./geofencing/engine";
+import { startRadioPositionRecorder } from "./pocstars/position-recorder";
 import { isGDELTEnabled, scrapeGDELT } from "./scrapers/gdelt";
 import { isGuardianEnabled, scrapeGuardian } from "./scrapers/guardian";
 import { fetchHAPI, isHAPIEnabled } from "./scrapers/hapi";
@@ -217,6 +218,7 @@ try {
 
   startGeofenceMonitor();
   startMavlinkListener();
+  void startRadioPositionRecorder();
 
   const classifierStatus = await checkClassifierModels();
   if (classifierStatus.model_available === false) {

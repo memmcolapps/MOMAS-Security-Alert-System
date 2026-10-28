@@ -496,6 +496,16 @@ export function getLocations(uids = []) {
   return request(`/api/pocstars/locations${query}`);
 }
 
+// The trail behind a tracked radio: the fixes the server recorded in the last
+// `minutes`, oldest first.
+export function getRadioTrack(uid, minutes = 30) {
+  return request(`/api/pocstars/locations/${encodeURIComponent(uid)}/track?minutes=${minutes}`);
+}
+
+// Radio positions are shared by one server-side poll, so asking often is cheap.
+// 5s keeps a moving radio's glide close to where it really is.
+export const RADIO_POLL_MS = 5_000;
+
 export function getSosLog() {
   return request("/api/pocstars/sos/log");
 }

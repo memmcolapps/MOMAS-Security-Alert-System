@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { GripHorizontal, MapPin, Mic, Phone, PhoneOff, Radio, Send, Volume2, X } from "lucide-react";
+import { Crosshair, GripHorizontal, MapPin, Mic, Phone, PhoneOff, Radio, Send, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { reverseGeocode, sendRadioMessage } from "../lib/api";
 import { useLiveRadioSession } from "../lib/live-radio-session";
@@ -46,7 +46,7 @@ export function radioChannelLabel(device) {
  * assumptions about its container - including its own message state, which is
  * what lets several of these be open at once without sharing a composer.
  */
-export function RadioConsole({ device, location, onShowOnMap }) {
+export function RadioConsole({ device, location, onShowOnMap, tracking = false, onTrack }) {
   const liveRadio = useLiveRadioSession();
   const [draft, setDraft] = useState("");
   const [sent, setSent] = useState([]);
@@ -133,14 +133,29 @@ export function RadioConsole({ device, location, onShowOnMap }) {
                   {coords.lat.toFixed(5)}, {coords.lon.toFixed(5)}
                   {location?.GpsTime ? ` · fix ${relativeAge(location.GpsTime)}` : ""}
                 </p>
-                {onShowOnMap ? (
-                  <button
-                    className="mt-2 ml-5 text-[10px] font-bold text-ops-green hover:underline"
-                    onClick={() => onShowOnMap(coords)}
-                  >
-                    Centre the map here
-                  </button>
-                ) : null}
+                <div className="mt-2 ml-5 flex items-center gap-3">
+                  {onTrack ? (
+                    // Track keeps following; centring is a one-off look.
+                    <button
+                      className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] font-bold ${
+                        tracking
+                          ? "border-ops-green bg-ops-green/15 text-ops-green"
+                          : "border-white/15 text-neutral-200 hover:border-ops-green hover:text-ops-green"
+                      }`}
+                      onClick={onTrack}
+                    >
+                      <Crosshair size={11} /> {tracking ? "Stop tracking" : "Track"}
+                    </button>
+                  ) : null}
+                  {onShowOnMap ? (
+                    <button
+                      className="text-[10px] font-bold text-ops-green hover:underline"
+                      onClick={() => onShowOnMap(coords)}
+                    >
+                      Centre the map here
+                    </button>
+                  ) : null}
+                </div>
               </>
             ) : (
               <p className="flex items-center gap-2 text-[11px] text-neutral-500">
@@ -325,7 +340,18 @@ const CARD_WIDTH = 320;
  * on purpose: no backdrop, no focus trap, the map stays live underneath, and
  * several can be open at once so two radios can be worked side by side.
  */
-export function FloatingRadioCard({ device, location, position, zIndex, onFocus, onMove, onClose, onShowOnMap }) {
+export function FloatingRadioCard({
+  device,
+  location,
+  position,
+  zIndex,
+  onFocus,
+  onMove,
+  onClose,
+  onShowOnMap,
+  tracking,
+  onTrack,
+}) {
   const cardRef = useRef(null);
   const dragRef = useRef(null);
 
@@ -416,7 +442,13 @@ export function FloatingRadioCard({ device, location, position, zIndex, onFocus,
           <X size={15} />
         </button>
       </header>
-      <RadioConsole device={device} location={location} onShowOnMap={onShowOnMap} />
+      <RadioConsole
+        device={device}
+        location={location}
+        onShowOnMap={onShowOnMap}
+        tracking={tracking}
+        onTrack={onTrack}
+      />
     </aside>
   );
 }

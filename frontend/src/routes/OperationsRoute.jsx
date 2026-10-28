@@ -20,6 +20,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OperationsMap, devicePopup, dronePopup, incidentPopup, sosPopup } from "../components/OperationsMap";
 import { FloatingRadioCard } from "../components/RadioConsole";
+import { TrackingStrip } from "../components/TrackingStrip";
 import { useSosAlarm } from "../components/SosAlarm";
 import { useFollow } from "../lib/follow-session";
 import {
@@ -30,6 +31,8 @@ import {
   getIncidents,
   getLocations,
   getMe,
+  getRadioTrack,
+  RADIO_POLL_MS,
   listAlarms,
   listGeofences,
   listDevices,
@@ -57,6 +60,8 @@ const modes = [
   ["all", "All Time"],
 ];
 
+const TRAIL_MINUTES = 30;
+
 const LAYER_LABELS = {
   live: "Live Alerts",
   heat: "Heatmap",
@@ -64,6 +69,9 @@ const LAYER_LABELS = {
   drones: "Drones",
   fences: "Geofences",
 };
+
+// Stable, so an idle map is not handed a "new" empty trail on every render.
+const EMPTY_TRAIL = [];
 
 function iconForType(type) {
   return typeIcons[type] || "fa-circle-exclamation";
@@ -170,8 +178,49 @@ export function OperationsRoute() {
   const locationsQuery = useQuery({
     queryKey: ["locations"],
     queryFn: () => getLocations(),
-    refetchInterval: 30000,
+    refetchInterval: RADIO_POLL_MS,
   });
+
+  // One radio at a time can be tracked: the camera keeps it in view and its
+  // trail is drawn. Dragging the map pauses the camera, not the tracking.
+  const [tracking, setTracking] = useState(null);
+  const [trackedMotion, setTrackedMotion] = useState(null);
+  const trackedRadioId = tracking?.deviceId || null;
+  const trackQuery = useQuery({
+    queryKey: ["radio-track", trackedRadioId],
+    queryFn: () => getRadioTrack(trackedRadioId, TRAIL_MINUTES),
+    enabled: Boolean(trackedRadioId),
+    refetchInterval: 10_000,
+  });
+  const trackRadio = useCallback((deviceId) => {
+    if (!deviceId) return;
+    setTracking({ deviceId: String(deviceId), paused: false });
+  }, []);
+  const stopTracking = useCallback(() => {
+    setTracking(null);
+    setTrackedMotion(null);
+  }, []);
+  const pauseTracking = useCallback(
+    () => setTracking((current) => (current && !current.paused ? { ...current, paused: true } : current)),
+    [],
+  );
+  const resumeTracking = useCallback(
+    () => setTracking((current) => (current ? { ...current, paused: false } : current)),
+    [],
+  );
+  // The map reports on every refresh; only a real change re-renders the page.
+  const reportTrackedMotion = useCallback((next) => {
+    setTrackedMotion((current) =>
+      current &&
+      current.present === next.present &&
+      current.moving === next.moving &&
+      current.bearing === next.bearing &&
+      current.speedMs === next.speedMs &&
+      current.seenMs === next.seenMs
+        ? current
+        : next,
+    );
+  }, []);
 
   const alertsQuery = useQuery({
     queryKey: ["alarms", "operations"],
@@ -477,7 +526,27 @@ export function OperationsRoute() {
         onIncidentFocus={(incident) => setSelectedIncidentId(incident.id)}
         onRadioSelect={openRadioCard}
         followLine={followTarget && followPosition ? { from: followPosition, to: followTarget } : null}
+        trackedRadioId={trackedRadioId}
+        trackPaused={Boolean(tracking?.paused)}
+        trail={trackQuery.data?.points || EMPTY_TRAIL}
+        onTrackRadio={trackRadio}
+        onTrackPause={pauseTracking}
+        onTrackedMotion={reportTrackedMotion}
       />
+
+      {tracking ? (
+        <TrackingStrip
+          device={deviceRegistry.get(trackedRadioId) || { device_id: trackedRadioId }}
+          location={latestDeviceLocations.get(trackedRadioId)}
+          motion={trackedMotion}
+          paused={tracking.paused}
+          trailMinutes={TRAIL_MINUTES}
+          // The responder's strip owns the bottom edge while a vehicle is en route.
+          raised={Boolean(followTarget)}
+          onRecentre={resumeTracking}
+          onStop={stopTracking}
+        />
+      ) : null}
 
       {openRadios.map((card, index) => {
         const device = deviceRegistry.get(card.deviceId) || card.fallback;
@@ -497,6 +566,8 @@ export function OperationsRoute() {
             onShowOnMap={(coords) =>
               setFocusTarget({ ...coords, zoom: 15, key: `card-${card.deviceId}-${Date.now()}` })
             }
+            tracking={trackedRadioId === card.deviceId}
+            onTrack={() => (trackedRadioId === card.deviceId ? stopTracking() : trackRadio(card.deviceId))}
           />
         );
       })}

@@ -60,6 +60,12 @@ const envSchema = z.object({
   GEOFENCE_RADIO_POLL_SEC: intFromEnv(15),
   GEOFENCE_DEFAULT_BUFFER_M: intFromEnv(30),
   GEOFENCE_CONFIRMATIONS: intFromEnv(3),
+  // One shared poll of every active radio's position. It feeds the map (so
+  // open tabs no longer each ask the vendor) and stores each new fix for the
+  // trail behind a tracked radio.
+  RADIO_TRACK_ENABLE: boolFromEnv(true),
+  RADIO_TRACK_POLL_SEC: intFromEnv(5),
+  RADIO_TRACK_RETENTION_DAYS: intFromEnv(7),
   // No default, deliberately. This used to fall back to a fixed string that is
   // in the repository's history, while `environment` below defaults to
   // "production" - so a missing or mistyped value on the server would boot

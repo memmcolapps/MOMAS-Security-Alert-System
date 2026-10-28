@@ -1,4 +1,6 @@
+import { useQuery } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { getLocations } from "./api";
 
 const FollowContext = createContext(null);
 
@@ -68,6 +70,9 @@ export function isMobileStation() {
 
 export function FollowProvider({ children }) {
   const [target, setTarget] = useState(null);
+  // Bumped by each follow(), so starting a response restarts the GPS watch
+  // while a moving destination does not.
+  const [followSession, setFollowSession] = useState(0);
   const [position, setPosition] = useState(null);
   const [error, setError] = useState("");
   const [permission, setPermission] = useState("unknown");
@@ -154,10 +159,36 @@ export function FollowProvider({ children }) {
     setError("");
     setPosition(null);
     setTarget(next);
+    setFollowSession((value) => value + 1);
   }, []);
 
+  // An alarm raised by a radio is a person, and people move. While responding
+  // to one, the destination follows the radio's latest position instead of
+  // staying where the alarm went off.
+  const radioId = target?.radioId ? String(target.radioId) : null;
+  const radioQuery = useQuery({
+    queryKey: ["follow-radio", radioId],
+    queryFn: () => getLocations([radioId]),
+    enabled: Boolean(radioId),
+    refetchInterval: 10_000,
+  });
   useEffect(() => {
-    if (!target) {
+    const row = (radioQuery.data?.data || []).find((entry) => String(entry.Uid) === radioId);
+    const lat = Number(row?.Lat);
+    const lon = Number(row?.Lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || (lat === 0 && lon === 0)) return;
+    setTarget((current) =>
+      current && String(current.radioId) === radioId && (current.lat !== lat || current.lon !== lon)
+        ? { ...current, lat, lon, liveRadio: true }
+        : current,
+    );
+  }, [radioQuery.data, radioId]);
+
+  // Keyed on the follow session, not the target's coordinates: a radio target
+  // that moves must not restart the GPS watch on every update.
+  const following = Boolean(target);
+  useEffect(() => {
+    if (!following) {
       if (watchRef.current != null) {
         window.navigator.geolocation?.clearWatch(watchRef.current);
         watchRef.current = null;
@@ -197,12 +228,12 @@ export function FollowProvider({ children }) {
         watchRef.current = null;
       }
     };
-  }, [target]);
+  }, [following, followSession]);
 
   // Screens sleep. A response that takes twenty minutes should not need
   // somebody to keep tapping the glass.
   useEffect(() => {
-    if (!target || !window.navigator.wakeLock) return undefined;
+    if (!following || !window.navigator.wakeLock) return undefined;
     let sentinel = null;
     let released = false;
     const request = () =>
@@ -223,7 +254,7 @@ export function FollowProvider({ children }) {
       window.document.removeEventListener("visibilitychange", onVisible);
       sentinel?.release().catch(() => {});
     };
-  }, [target]);
+  }, [following]);
 
   const value = useMemo(() => {
     const distance_m =

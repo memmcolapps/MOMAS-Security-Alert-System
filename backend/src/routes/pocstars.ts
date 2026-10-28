@@ -14,6 +14,7 @@ import { env } from "../config";
 import * as db from "../db";
 import { bus } from "../events";
 import { fetchLastLocations } from "../pocstars/locations";
+import { recordedLocations } from "../pocstars/position-recorder";
 import { startSosPush } from "../pocstars/sos-push";
 import { provisionOnNetwork } from "../pocstars/live-gateway";
 import { actionMessage, describeSyncFailure } from "../pocstars/messages";
@@ -958,11 +959,13 @@ router.get("/config", async (c) => {
   });
 });
 
-// Every open map polls this, and each poll was a round trip to the vendor GPS
-// service. Tabs asking for the same radios within a few seconds share one
-// upstream call. Only this route is cached: the geofence engine calls
-// fetchLastLocations directly and needs every fix as soon as it lands.
-const LOCATIONS_CACHE_MS = 10_000;
+// Every open map polls this. Normally the shared position recorder answers it
+// without touching the vendor; when it cannot, tabs asking for the same radios
+// within a few seconds share one upstream call. Only this route is cached: the
+// geofence engine calls fetchLastLocations directly and needs every fix as
+// soon as it lands. Kept under the map's 5s poll so a moving radio still
+// moves on every refresh.
+const LOCATIONS_CACHE_MS = 4_000;
 const locationsCache = new Map<string, { at: number; value: Promise<any> }>();
 
 function cachedLastLocations(uids: string[]) {
@@ -997,9 +1000,36 @@ router.get("/locations", async (c) => {
     return c.json({ error: "One or more devices are outside your operational scope." }, 403);
   }
   try {
-    return c.json(await cachedLastLocations(requestedIds));
+    return c.json(recordedLocations(requestedIds) ?? (await cachedLastLocations(requestedIds)));
   } catch (error: any) {
     return c.json({ error: "pocstars_locations_failed", message: error.message }, statusFromAxios(error));
+  }
+});
+
+const TRACK_MAX_MINUTES = 240;
+
+// The trail behind a tracked radio, from the fixes the position recorder kept.
+router.get("/locations/:uid/track", async (c) => {
+  const uid = c.req.param("uid");
+  if (!(await ensureDeviceAccess(c, [uid]))) {
+    return c.json({ error: "That device is outside your operational scope." }, 403);
+  }
+  const minutes = Math.min(Math.max(Number(c.req.query("minutes")) || 30, 1), TRACK_MAX_MINUTES);
+  try {
+    const since = new Date(Date.now() - minutes * 60_000);
+    const rows = await db.listRadioTrack(uid, since);
+    return c.json({
+      uid,
+      minutes,
+      points: rows.map((row: any) => ({
+        lat: Number(row.lat),
+        lon: Number(row.lon),
+        observed_at: new Date(row.observed_at).toISOString(),
+        received_at: new Date(row.received_at).toISOString(),
+      })),
+    });
+  } catch (error: any) {
+    return c.json({ error: "radio_track_failed", message: error.message }, 500);
   }
 });
 

@@ -42,6 +42,7 @@ export function FollowBar() {
           ) : (
             <>
               Straight line{position?.accuracy_m ? ` · fix ±${Math.round(position.accuracy_m)} m` : ""}
+              {target.radioId ? " · to the radio's live position" : ""}
               <br />
               {target.lat.toFixed(5)}, {target.lon.toFixed(5)}
             </>

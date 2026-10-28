@@ -189,6 +189,19 @@ async function init() {
       updated_at      TIMESTAMPTZ DEFAULT NOW()
     );
 
+    -- Every distinct fix a radio reports, for the trail behind a tracked
+    -- radio. observed_at is the handset's own GPS time; received_at is when
+    -- this server first saw the fix, which is what "how stale" is judged by.
+    CREATE TABLE IF NOT EXISTS radio_positions (
+      device_id   TEXT NOT NULL,
+      lat         DOUBLE PRECISION NOT NULL,
+      lon         DOUBLE PRECISION NOT NULL,
+      observed_at TIMESTAMPTZ NOT NULL,
+      received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (device_id, observed_at)
+    );
+    CREATE INDEX IF NOT EXISTS idx_radio_positions_received ON radio_positions(received_at);
+
     CREATE TABLE IF NOT EXISTS organizations (
       id          SERIAL PRIMARY KEY,
       name        TEXT NOT NULL,
@@ -4027,6 +4040,53 @@ async function listDroneTelemetry() {
   return rows;
 }
 
+// ── Radio position history ─────────────────────────────────────────────────────
+
+/** Store new radio fixes. A fix already stored for that GPS time is skipped. */
+async function insertRadioPositions(rows) {
+  if (!rows.length) return;
+  const vals = [];
+  const tuples = rows.map((row) => {
+    vals.push(row.device_id, row.lat, row.lon, row.observed_at, row.received_at);
+    const n = vals.length;
+    return `($${n - 4}, $${n - 3}, $${n - 2}, $${n - 1}, $${n})`;
+  });
+  await pool.query(
+    `INSERT INTO radio_positions (device_id, lat, lon, observed_at, received_at)
+     VALUES ${tuples.join(", ")}
+     ON CONFLICT (device_id, observed_at) DO NOTHING`,
+    vals,
+  );
+}
+
+/** The newest stored fix per radio, so a restart does not make every fix look new. */
+async function latestRadioPositions() {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT ON (device_id) device_id, lat, lon, observed_at, received_at
+       FROM radio_positions
+      ORDER BY device_id, observed_at DESC`,
+  );
+  return rows;
+}
+
+/** One radio's fixes since a moment, oldest first. */
+async function listRadioTrack(deviceId, since) {
+  const { rows } = await pool.query(
+    `SELECT lat, lon, observed_at, received_at
+       FROM radio_positions
+      WHERE device_id = $1 AND received_at >= $2
+      ORDER BY observed_at ASC
+      LIMIT 5000`,
+    [deviceId, since],
+  );
+  return rows;
+}
+
+async function pruneRadioPositions(before) {
+  const { rowCount } = await pool.query("DELETE FROM radio_positions WHERE received_at < $1", [before]);
+  return rowCount;
+}
+
 // ── Organizations / users ────────────────────────────────────────────────────
 
 function slugify(value) {
@@ -4839,6 +4899,10 @@ export {
   deleteDrone,
   upsertDroneTelemetry,
   listDroneTelemetry,
+  insertRadioPositions,
+  latestRadioPositions,
+  listRadioTrack,
+  pruneRadioPositions,
   getUserByEmail,
   getUserById,
   updateUserPassword,
