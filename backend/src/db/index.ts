@@ -4274,6 +4274,20 @@ async function radioCoverage(deviceIds, since, cellDeg) {
   return rows;
 }
 
+/** Reports waiting for review, newest first, for grouping into events. */
+async function listReviewQueue(organizationId = null) {
+  const { rows } = await queryWithRetry(
+    `SELECT * FROM source_items
+      WHERE status = 'needs_review'
+        AND created_at > NOW() - INTERVAL '60 days'
+        AND ($1::int IS NULL OR organization_id IS NULL OR organization_id = $1)
+      ORDER BY created_at DESC
+      LIMIT 1000`,
+    [organizationId],
+  );
+  return rows;
+}
+
 /** Recent fixes for many radios at once, so a map that opens can start playing. */
 async function listRecentRadioPoints(deviceIds, since) {
   const { rows } = await pool.query(
@@ -5111,6 +5125,7 @@ export {
   latestRadioPositions,
   listRadioTrack,
   listRecentRadioPoints,
+  listReviewQueue,
   listRadioTrackBetween,
   radioCoverage,
   pruneRadioPositions,

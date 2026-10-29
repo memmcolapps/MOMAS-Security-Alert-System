@@ -351,6 +351,27 @@ export function extractOsintItem(id) {
   });
 }
 
+// The review queue grouped into events: one card per event, every outlet's
+// report of it underneath.
+export function getReviewQueue() {
+  return request("/api/osint/review-queue");
+}
+
+// Publish an event's lead report and attach the rest as supporting evidence.
+export function approveReviewEvent({ lead_id, ids, analyst_note }) {
+  return request("/api/osint/review-queue/approve", {
+    method: "POST",
+    body: JSON.stringify({ lead_id, ids, analyst_note }),
+  });
+}
+
+export function dismissReviewEvent({ lead_id, ids, analyst_note }) {
+  return request("/api/osint/review-queue/dismiss", {
+    method: "POST",
+    body: JSON.stringify({ lead_id, ids, analyst_note }),
+  });
+}
+
 export function reviewOsintItem(id, payload) {
   return request(`/api/osint/items/${encodeURIComponent(id)}/review`, {
     method: "POST",

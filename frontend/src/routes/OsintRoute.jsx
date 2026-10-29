@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, AlertTriangle, Bell, CheckCircle2, Database, Download, ExternalLink, FileSearch, GitBranch, Link2, Network, Plus, RefreshCw, Search, ShieldCheck, Tags, Trash2, XCircle } from "lucide-react";
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Toast, useToast } from "../components/Toast";
+import { ReviewByEvent } from "../components/ReviewByEvent";
 import {
   deleteOsintSource,
   deleteOsintWatchlist,
@@ -110,7 +111,9 @@ function SkeletonRows() {
 
 export function OsintRoute() {
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState("inbox");
+  // Reviewing opens on events: one card per attack, however many outlets
+  // reported it. The per-report list is still a click away.
+  const [tab, setTab] = useState("events");
   const [status, setStatus] = useState("attention");
   const [sourceType, setSourceType] = useState("all");
   const [search, setSearch] = useState("");
@@ -486,14 +489,15 @@ export function OsintRoute() {
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2 text-[11px] font-bold">
-          <TabButton active={section === "queue"} icon={FileSearch} label="Queue" badge={pendingCount} onClick={() => setTab("inbox")} />
+          <TabButton active={section === "queue"} icon={FileSearch} label="Queue" badge={pendingCount} onClick={() => setTab("events")} />
           <TabButton active={section === "monitors"} icon={Bell} label="Monitors" badge={newAlertsCount} pulse={liveAlerts > 0} onClick={() => setTab("alerts")} />
           <TabButton active={section === "sources"} icon={Database} label="Sources" onClick={() => setTab("sources")} />
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-1 text-[10px] font-bold text-neutral-500">
           {section === "queue" ? <>
-            <SubnavButton active={tab === "inbox"} label="Review" onClick={() => setTab("inbox")} />
+            <SubnavButton active={tab === "events"} label="By event" onClick={() => setTab("events")} />
+            <SubnavButton active={tab === "inbox"} label="By report" onClick={() => setTab("inbox")} />
             <SubnavButton active={tab === "entities"} label="Entities" onClick={() => setTab("entities")} />
             <SubnavButton active={tab === "graph"} label="Graph" onClick={() => setTab("graph")} />
             <SubnavButton active={tab === "reports"} label="Brief" onClick={() => setTab("reports")} />
@@ -551,6 +555,8 @@ export function OsintRoute() {
           </label>
         </div> : null}
       </section>
+
+      {tab === "events" ? <ReviewByEvent notify={notify} /> : null}
 
       {tab === "inbox" ? <section className="grid min-h-0 flex-1 lg:grid-cols-[420px_minmax(0,1fr)]">
         <aside className="flex min-h-0 flex-col border-r border-white/10 bg-black/25">

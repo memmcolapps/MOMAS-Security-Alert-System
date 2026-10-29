@@ -5,6 +5,7 @@ import { classify } from "../classifier";
 import * as db from "../db";
 import { bus } from "../events";
 import { runWatchlistMatch, sourceText } from "../osint/matcher";
+import { groupIntoEvents } from "../osint/review-queue";
 import { persistIncident } from "../scrapers/ingest";
 
 const router = new Hono();
@@ -521,6 +522,190 @@ router.post("/items/:id/link", async (c) => {
   }
 });
 
+/**
+ * Publish a reviewed report as an incident: the human-approved half of
+ * promotion, shared by the single-report promote and approving a whole event
+ * from the review queue.
+ */
+async function publishReviewedItem(item: any, result: any, user: any, note: string | null, text: { title: string; description: string }) {
+  const date = result.date || publishedDate(item);
+  const persisted = await persistIncident({
+    result,
+    title: text.title,
+    description: result.summary || text.description,
+    date,
+    external_id: `osint:${item.external_id}`,
+    source: item.source,
+    source_url: item.source_url,
+    source_type: item.source_type,
+    published_at: item.published_at || item.created_at,
+    approval_status: "human_approved",
+    approved_by: user?.id || null,
+  });
+
+  const status = persisted.status === "inserted" ? "incident" : persisted.status;
+  if (persisted.incidentId) {
+    await db.linkSourceItemToIncident(item.id, persisted.incidentId, {
+      analyst_note: note,
+      reviewed_by: user?.id || null,
+      organization_id: primaryOrgId(user),
+    });
+  }
+  const reviewed = await db.updateSourceItemReview(item.id, {
+    status,
+    analyst_note: note,
+    reviewed_by: user?.id || null,
+    confidence_score: null,
+    confidence_reason: null,
+    organization_id: primaryOrgId(user),
+  });
+  await runWatchlistMatch(reviewed, { organizationId: primaryOrgId(user) }).catch(() => null);
+
+  await db.createAuditLog({
+    organization_id: primaryOrgId(user),
+    actor_user_id: user?.id,
+    action: "osint.promote",
+    target_type: "source_item",
+    target_id: item.id,
+    metadata: {
+      incident_id: persisted.incidentId,
+      status: persisted.status,
+      approval: "human_approved",
+      evidence_score: reviewed?.confidence_score,
+    },
+  }).catch(() => null);
+
+  const incident = persisted.incidentId ? await db.refreshIncidentConfidence(persisted.incidentId) : null;
+  return { persisted, reviewed, incident };
+}
+
+/**
+ * The classifier's answer for a report: the one stored when it was first
+ * classified, so approving is instant, or a fresh classification for reports
+ * older than that.
+ */
+async function classificationFor(item: any, title: string, description: string) {
+  const stored = item.raw?.classification;
+  if (stored?.type) {
+    return {
+      is_security_incident: true,
+      type: stored.type,
+      severity: stored.severity,
+      fatalities: stored.fatalities,
+      victims: stored.victims,
+      location_text: stored.claimed_location || stored.location || null,
+      date: stored.date,
+      summary: stored.description,
+      verification_status: stored.verification_status,
+    };
+  }
+  return classify(title, description);
+}
+
+// ── Review by event ─────────────────────────────────────────────────────────
+// The queue grouped into events (osint/review-queue.ts): one card per event,
+// one decision for every report of it.
+
+router.get("/review-queue", async (c) => {
+  try {
+    const items = await db.listReviewQueue(primaryOrgId(currentUser(c)));
+    const events = groupIntoEvents(items);
+    return c.json({ events, reports: items.length });
+  } catch (error) {
+    return c.json(jsonError(error), 500);
+  }
+});
+
+const eventDecision = z.object({
+  lead_id: idSchema,
+  ids: z.array(idSchema).min(1).max(50),
+  analyst_note: z.string().trim().max(4000).nullable().default(null),
+});
+
+// Approve an event: the lead report is published, every other report of the
+// event is attached to that incident as supporting evidence.
+router.post("/review-queue/approve", async (c) => {
+  const denied = requireAnalyst(c);
+  if (denied) return denied;
+  const user = currentUser(c);
+  const input = parse(c, eventDecision, await c.req.json().catch(() => ({})));
+  if (isResponse(input)) return input;
+  if (!input.ids.includes(input.lead_id)) return c.json({ error: "The lead report must be one of the event's reports." }, 400);
+
+  try {
+    const lead = await db.getSourceItem(input.lead_id, primaryOrgId(user));
+    if (!lead) return c.json({ error: "OSINT item not found" }, 404);
+    if (Number(lead.confidence_score || 0) < 70 && !input.analyst_note) {
+      return c.json({ error: "Say why this event is approved." }, 400);
+    }
+    const title = lead.title || "OSINT report";
+    const description = sourceText(lead) || title;
+    const result = await classificationFor(lead, title, description);
+    if (!result?.is_security_incident) {
+      return c.json({ error: "The classifier no longer reads this as a security incident; dismiss it or promote it from the report view." }, 422);
+    }
+    const { persisted, incident } = await publishReviewedItem(lead, result, user, input.analyst_note, { title, description });
+    if (!persisted.incidentId) return c.json({ error: "The incident could not be created." }, 500);
+
+    let attached = 0;
+    for (const id of input.ids) {
+      if (id === input.lead_id) continue;
+      const item = await db.linkSourceItemToIncident(id, persisted.incidentId, {
+        analyst_note: input.analyst_note,
+        reviewed_by: user?.id || null,
+        organization_id: primaryOrgId(user),
+      });
+      if (!item) continue;
+      attached++;
+      await db.mergeIntoIncident(persisted.incidentId, {
+        source: item.source,
+        source_url: item.source_url,
+        fatalities: 0,
+        victims: 0,
+        verification_status: "human_approved",
+      });
+    }
+    const refreshed = attached ? await db.refreshIncidentConfidence(persisted.incidentId) : incident;
+    return c.json({ incident: refreshed || incident, status: persisted.status, attached });
+  } catch (error) {
+    return c.json(jsonError(error), 500);
+  }
+});
+
+// Dismiss an event: every report of it leaves the queue together.
+router.post("/review-queue/dismiss", async (c) => {
+  const denied = requireAnalyst(c);
+  if (denied) return denied;
+  const user = currentUser(c);
+  const input = parse(c, eventDecision, await c.req.json().catch(() => ({})));
+  if (isResponse(input)) return input;
+  try {
+    let dismissed = 0;
+    for (const id of input.ids) {
+      const item = await db.updateSourceItemReview(id, {
+        status: "dismissed",
+        analyst_note: input.analyst_note,
+        reviewed_by: user?.id || null,
+        confidence_score: null,
+        confidence_reason: null,
+        organization_id: primaryOrgId(user),
+      });
+      if (item) dismissed++;
+    }
+    await db.createAuditLog({
+      organization_id: primaryOrgId(user),
+      actor_user_id: user?.id,
+      action: "osint.dismissed",
+      target_type: "source_item",
+      target_id: input.lead_id,
+      metadata: { event_reports: input.ids },
+    }).catch(() => null);
+    return c.json({ dismissed });
+  } catch (error) {
+    return c.json(jsonError(error), 500);
+  }
+});
+
 router.post("/items/:id/promote", async (c) => {
   const denied = requireAnalyst(c);
   if (denied) return denied;
@@ -563,57 +748,10 @@ router.post("/items/:id/promote", async (c) => {
       );
     }
 
-    const date = result.date || publishedDate(item);
-    const persisted = await persistIncident({
-      result,
+    const { persisted, reviewed, incident } = await publishReviewedItem(item, result, user, input.analyst_note, {
       title,
-      description: result.summary || description,
-      date,
-      external_id: `osint:${item.external_id}`,
-      source: item.source,
-      source_url: item.source_url,
-      source_type: item.source_type,
-      published_at: item.published_at || item.created_at,
-      approval_status: "human_approved",
-      approved_by: user?.id || null,
+      description,
     });
-
-    const status = persisted.status === "inserted" ? "incident" : persisted.status;
-    if (persisted.incidentId) {
-      await db.linkSourceItemToIncident(item.id, persisted.incidentId, {
-        analyst_note: input.analyst_note,
-        reviewed_by: user?.id || null,
-        organization_id: primaryOrgId(user),
-      });
-    }
-    const reviewed = await db.updateSourceItemReview(item.id, {
-      status,
-      analyst_note: input.analyst_note,
-      reviewed_by: user?.id || null,
-      confidence_score: null,
-      confidence_reason: null,
-      organization_id: primaryOrgId(user),
-    });
-    await runWatchlistMatch(reviewed, { organizationId: primaryOrgId(user) }).catch(() => null);
-
-    await db.createAuditLog({
-      organization_id: primaryOrgId(user),
-      actor_user_id: user?.id,
-      action: "osint.promote",
-      target_type: "source_item",
-      target_id: item.id,
-      metadata: {
-        incident_id: persisted.incidentId,
-        status: persisted.status,
-        approval: "human_approved",
-        evidence_score: reviewed?.confidence_score,
-      },
-    }).catch(() => null);
-
-    const incident = persisted.incidentId
-      ? await db.refreshIncidentConfidence(persisted.incidentId)
-      : null;
-
     return c.json({ item: reviewed, classification: result, promoted: persisted, incident });
   } catch (error) {
     return c.json(jsonError(error), 500);
