@@ -75,40 +75,59 @@ export function ReviewByEvent({ notify }) {
     [events],
   );
 
+  // A decision takes the card off the screen the moment it is made; the
+  // server catches up behind it. Waiting for the round trip and a reload of
+  // the whole queue cost 1-3 seconds a card. If the server refuses, the queue
+  // is reloaded and the card comes back with the reason.
+  const decisionCallbacks = {
+    mutationKey: ["review-decision"],
+    onMutate: async (event) => {
+      await queryClient.cancelQueries({ queryKey: ["osint-review-queue"] });
+      advance(event);
+      queryClient.setQueryData(["osint-review-queue"], (current) =>
+        current
+          ? {
+              ...current,
+              events: current.events.filter((candidate) => candidate.id !== event.id),
+              reports: Math.max(0, (current.reports || 0) - event.reports.length),
+            }
+          : current,
+      );
+    },
+    onError: (error) => notify(error.message, "error"),
+    // Reloaded once the last decision in flight is done, so an earlier reply
+    // cannot bring back a card whose own decision is still on its way.
+    onSettled: () => {
+      if (queryClient.isMutating({ mutationKey: ["review-decision"] }) <= 1) void refresh();
+    },
+  };
+
   const approve = useMutation({
+    ...decisionCallbacks,
     mutationFn: (event) => approveReviewEvent({ lead_id: event.id, ids: event.reports.map((report) => report.id), analyst_note: noteFor(event) }),
-    onSuccess: async (result, event) => {
+    onSuccess: (result) => {
       notify(
         result.status === "merged"
           ? "Added to an existing incident"
           : `Published${result.attached ? `, with ${result.attached} more report${result.attached === 1 ? "" : "s"} attached` : ""}`,
         "success",
       );
-      advance(event);
-      await queryClient.invalidateQueries({ queryKey: ["incidents"] });
-      await refresh();
+      void queryClient.invalidateQueries({ queryKey: ["incidents"] });
     },
-    onError: (error) => notify(error.message, "error"),
   });
 
   const dismiss = useMutation({
+    ...decisionCallbacks,
     mutationFn: (event) => dismissReviewEvent({ lead_id: event.id, ids: event.reports.map((report) => report.id), analyst_note: (notes[event.id] || "").trim() || null }),
-    onSuccess: async (result, event) => {
-      notify(`Dismissed ${result.dismissed} report${result.dismissed === 1 ? "" : "s"}`, "success");
-      advance(event);
-      await refresh();
-    },
-    onError: (error) => notify(error.message, "error"),
+    onSuccess: (result) => notify(`Dismissed ${result.dismissed} report${result.dismissed === 1 ? "" : "s"}`, "success"),
   });
-
-  const busy = approve.isPending || dismiss.isPending;
 
   // j/k to move, a to approve, d to dismiss - ignored while typing a note.
   useEffect(() => {
     function onKey(event) {
       const el = event.target;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
-      if (event.metaKey || event.ctrlKey || event.altKey || !selected || busy) return;
+      if (event.metaKey || event.ctrlKey || event.altKey || !selected) return;
       const index = events.findIndex((candidate) => candidate.id === selected.id);
       if (event.key === "j" || event.key === "ArrowDown") {
         event.preventDefault();
@@ -126,7 +145,7 @@ export function ReviewByEvent({ notify }) {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [events, selected, busy, approve, dismiss]);
+  }, [events, selected, approve, dismiss]);
 
   const hidden = allEvents.length - events.length;
 
@@ -222,7 +241,7 @@ export function ReviewByEvent({ notify }) {
                   />
                   <div className="flex flex-wrap items-center gap-2">
                     <button
-                      disabled={busy || (event.score < 70 && !noteFor(event))}
+                      disabled={event.score < 70 && !noteFor(event)}
                       onClick={() => approve.mutate(event)}
                       title={event.score < 70 && !noteFor(event) ? "Pick a reason or write a note first" : "Publish this event"}
                       className="inline-flex items-center gap-1.5 rounded bg-ops-green/20 px-3 py-1.5 text-[11px] font-bold text-ops-green hover:bg-ops-green/30 disabled:opacity-40"
@@ -230,7 +249,6 @@ export function ReviewByEvent({ notify }) {
                       <CheckCircle2 size={13} /> Approve{event.reports.length > 1 ? ` all ${event.reports.length}` : ""}
                     </button>
                     <button
-                      disabled={busy}
                       onClick={() => dismiss.mutate(event)}
                       className="inline-flex items-center gap-1.5 rounded border border-white/10 px-3 py-1.5 text-[11px] font-bold text-neutral-300 hover:border-red-400/50 hover:text-red-300 disabled:opacity-40"
                     >
