@@ -579,12 +579,33 @@ async function publishReviewedItem(item: any, result: any, user: any, note: stri
   return { persisted, reviewed, incident };
 }
 
+// Severity for a report whose classifier answer was not kept (reports from
+// before 29 Oct 2026), from the kind of event the classifier recorded.
+const SEVERITY_BY_TYPE: Record<string, string> = {
+  massacre: "RED",
+  bombing: "RED",
+  terrorism: "ORANGE",
+  banditry: "ORANGE",
+  kidnapping: "ORANGE",
+  armed_attack: "ORANGE",
+  displacement: "YELLOW",
+};
+
+/** A casualty count stated in a headline: "48 killed", "kill 48 villagers". */
+function countNear(text: string, words: string) {
+  const after = new RegExp(`\\b(\\d{1,4})\\s+(?:[a-z]+\\s+){0,3}(?:${words})`, "i").exec(text);
+  const before = new RegExp(`(?:${words})\\w*\\s+(\\d{1,4})\\b`, "i").exec(text);
+  return Number(after?.[1] ?? before?.[1] ?? 0);
+}
+
 /**
- * The classifier's answer for a report: the one stored when it was first
- * classified, so approving is instant, or a fresh classification for reports
- * older than that.
+ * What to publish for an approved report, without classifying it again: the
+ * reviewer has just judged it, and the classifier is the slow, rate-limited
+ * part. The answer stored when the report was first classified is used when
+ * there is one; otherwise the event fields stored with the report then, with
+ * severity from its type and casualties from its headline.
  */
-async function classificationFor(item: any, title: string, description: string) {
+function approvedClassification(item: any) {
   const stored = item.raw?.classification;
   if (stored?.type) {
     return {
@@ -599,7 +620,19 @@ async function classificationFor(item: any, title: string, description: string) 
       verification_status: stored.verification_status,
     };
   }
-  return classify(title, description);
+  const headline = `${item.title || ""} ${item.description || ""}`;
+  const type = item.event_type || "armed_attack";
+  return {
+    is_security_incident: true,
+    type,
+    severity: SEVERITY_BY_TYPE[type] || "ORANGE",
+    fatalities: countNear(headline, "killed|dead|died|kill|murdered|slain"),
+    victims: countNear(headline, "abducted|kidnapped|abduct|kidnap|hostages"),
+    location_text: item.event_location || item.event_state || null,
+    date: item.event_date ? new Date(item.event_date).toISOString().slice(0, 10) : null,
+    summary: null,
+    verification_status: item.verification_status || "human_approved",
+  };
 }
 
 // ── Review by event ─────────────────────────────────────────────────────────
@@ -640,10 +673,7 @@ router.post("/review-queue/approve", async (c) => {
     }
     const title = lead.title || "OSINT report";
     const description = sourceText(lead) || title;
-    const result = await classificationFor(lead, title, description);
-    if (!result?.is_security_incident) {
-      return c.json({ error: "The classifier no longer reads this as a security incident; dismiss it or promote it from the report view." }, 422);
-    }
+    const result = approvedClassification(lead);
     const { persisted, incident } = await publishReviewedItem(lead, result, user, input.analyst_note, { title, description });
     if (!persisted.incidentId) return c.json({ error: "The incident could not be created." }, 500);
 
