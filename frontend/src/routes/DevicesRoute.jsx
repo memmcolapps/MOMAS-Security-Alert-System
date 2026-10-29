@@ -35,7 +35,7 @@ const emptyForm = {
   notes: "",
   service_ends_at: defaultServiceEnd(),
   gps_enabled: "true",
-  gps_frequency: "30",
+  gps_frequency: "5",
 };
 
 // Radios are sold with a service window and are refused at sign-in once it
@@ -367,7 +367,7 @@ export function DevicesRoute() {
         unit_id: form.unit_id ? Number(form.unit_id) : null,
         service_ends_at: `${form.service_ends_at} 00:00:00`,
         gps_enabled: form.gps_enabled === "true",
-        gps_frequency: Number(form.gps_frequency) || 30,
+        gps_frequency: Number(form.gps_frequency) || 5,
         operator: form.operator.trim() || null,
         device_type: form.device_type || "handheld",
         notes: form.notes.trim() || null,

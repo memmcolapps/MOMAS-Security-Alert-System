@@ -23,6 +23,7 @@ import { FloatingRadioCard } from "../components/RadioConsole";
 import { TrackingStrip } from "../components/TrackingStrip";
 import { useSosAlarm } from "../components/SosAlarm";
 import { useFollow } from "../lib/follow-session";
+import { useRadioTracks } from "../lib/radio-tracks";
 import {
   dronePollInterval,
   getDronePositions,
@@ -185,6 +186,8 @@ export function OperationsRoute() {
   // trail is drawn. Dragging the map pauses the camera, not the tracking.
   const [tracking, setTracking] = useState(null);
   const [trackedMotion, setTrackedMotion] = useState(null);
+  // Every GPS point each radio sends, streamed; the map plays them back.
+  const radioTracks = useRadioTracks();
   const trackedRadioId = tracking?.deviceId || null;
   const trackQuery = useQuery({
     queryKey: ["radio-track", trackedRadioId],
@@ -211,19 +214,8 @@ export function OperationsRoute() {
     () => setTracking((current) => (current ? { ...current, paused: false } : current)),
     [],
   );
-  // The map reports on every refresh; only a real change re-renders the page.
-  const reportTrackedMotion = useCallback((next) => {
-    setTrackedMotion((current) =>
-      current &&
-      current.present === next.present &&
-      current.moving === next.moving &&
-      current.bearing === next.bearing &&
-      current.speedMs === next.speedMs &&
-      current.seenMs === next.seenMs
-        ? current
-        : next,
-    );
-  }, []);
+  // The map only reports when something it shows has changed.
+  const reportTrackedMotion = useCallback((next) => setTrackedMotion(next), []);
 
   const alertsQuery = useQuery({
     queryKey: ["alarms", "operations"],
@@ -533,6 +525,7 @@ export function OperationsRoute() {
         trackedRadioId={trackedRadioId}
         trackPaused={Boolean(tracking?.paused)}
         trail={trackQuery.data?.points || EMPTY_TRAIL}
+        radioTracks={radioTracks}
         onTrackRadio={trackRadio}
         onTrackPause={pauseTracking}
         onTrackedMotion={reportTrackedMotion}

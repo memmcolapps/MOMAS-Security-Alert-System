@@ -4,7 +4,8 @@ import "leaflet.markercluster";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DARK_TILES, IMAGERY_LABEL_TILES, LABELLED_BASEMAPS, SATELLITE_TILES } from "../lib/basemaps";
 import { deviceTypeGlyph, escapeHtml, severityColors, severityLabels, typeIcons } from "../lib/domain";
-import { advanceMotion, fixAgeSec, fixFromLocation, formatAge, isStale, trailSegments } from "../lib/radio-motion";
+import { MOTION, distanceMetres, fixAgeSec, fixFromLocation, formatAge, trailSegments } from "../lib/radio-motion";
+import { newestPoint, sampleTrack } from "../lib/radio-playback";
 
 // The radio fleet is mostly switched-off handsets at any hour, so the map
 // reads as a field of grey pins unless an operator can narrow it to the ones
@@ -172,8 +173,10 @@ const TRACK_INNER_PAD = -0.25;
 // past zoom 19 the satellite tiles are only upscaled and turn to mush.
 const TRACK_ZOOM_MIN = 17;
 const TRACK_ZOOM_MAX = 19;
-// The staleness label and the arrow must age even when no new data arrives.
-const RADIO_RECHECK_MS = 15_000;
+// Pins move on every frame; icons, labels, layers and the trail are rechecked
+// this often, which is plenty for things that change on a scale of seconds.
+const RADIO_VISUAL_MS = 250;
+const TRAIL_REDRAW_MS = 2000;
 
 export function OperationsMap({
   incidents,
@@ -191,6 +194,7 @@ export function OperationsMap({
   trackedRadioId = null,
   trackPaused = false,
   trail = [],
+  radioTracks = null,
   onTrackRadio,
   onTrackPause,
   onTrackedMotion,
@@ -200,17 +204,17 @@ export function OperationsMap({
   const layersRef = useRef({});
   const radioFilterRef = useRef(null);
   const [radioFilter, setRadioFilter] = useState("all");
-  const [radioClock, setRadioClock] = useState(0);
   // One entry per radio on the map, kept across refreshes so a pin can move
-  // rather than be torn down and redrawn: { marker, motion, layer, iconKey, row }.
+  // rather than be torn down and redrawn: { marker, fix, motion, layer, ... }.
   const radiosRef = useRef(new Map());
-  const glidesRef = useRef(new Map());
-  const glideFrameRef = useRef(null);
+  const frameRef = useRef(null);
   const trackRef = useRef({ id: null, paused: false, lastCheck: 0 });
   const callbacksRef = useRef({});
+  const trailRef = useRef(trail);
   callbacksRef.current = { onRadioSelect, onTrackRadio, onTrackPause, onTrackedMotion };
   trackRef.current.id = trackedRadioId;
   trackRef.current.paused = trackPaused;
+  trailRef.current = trail;
 
   useEffect(() => {
     if (!mapNode.current || mapRef.current) return;
@@ -338,12 +342,10 @@ export function OperationsMap({
       });
     });
 
-    const glides = glidesRef.current;
     const radios = radiosRef.current;
     return () => {
-      if (glideFrameRef.current) window.cancelAnimationFrame(glideFrameRef.current);
-      glideFrameRef.current = null;
-      glides.clear();
+      if (frameRef.current) window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
       radios.clear();
       const node = mapNode.current;
       try {
@@ -433,38 +435,196 @@ export function OperationsMap({
     }
   }, [geofences]);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => setRadioClock((value) => value + 1), RADIO_RECHECK_MS);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  const keepTrackedInView = useCallback((latlng, force = false) => {
+  const keepTrackedInView = useCallback((latlng) => {
     const map = mapRef.current;
     const track = trackRef.current;
     if (!map || !track.id || track.paused) return;
     const now = Date.now();
-    if (!force && now - track.lastCheck < 500) return;
+    if (now - track.lastCheck < 500) return;
     track.lastCheck = now;
-    if (force || !map.getBounds().pad(TRACK_INNER_PAD).contains(latlng)) {
+    if (!map.getBounds().pad(TRACK_INNER_PAD).contains(latlng)) {
       map.panTo(latlng, { animate: true, duration: 0.8 });
     }
   }, []);
 
-  // One animation loop for every gliding radio. Linear on purpose: a constant
-  // pace between fixes is what the radio most plausibly did.
-  const runGlides = useCallback(() => {
-    const now = window.performance.now();
-    for (const [uid, glide] of glidesRef.current) {
-      const t = Math.min(1, (now - glide.start) / glide.duration);
-      const lat = glide.from.lat + (glide.to.lat - glide.from.lat) * t;
-      const lng = glide.from.lng + (glide.to.lng - glide.from.lng) * t;
-      glide.marker.setLatLng([lat, lng]);
-      if (uid === trackRef.current.id) keepTrackedInView(L.latLng(lat, lng));
-      if (t >= 1) glidesRef.current.delete(uid);
+  // Everything about a radio's pin except where it is: icon, label, tooltip,
+  // and which layer it lives in. Cheap to call; it only touches Leaflet when
+  // something actually changed.
+  const refreshRadio = useCallback((uid, entry, now) => {
+    const { deviceClusterLayer, deviceAlertLayer, deviceMovingLayer } = layersRef.current;
+    if (!deviceClusterLayer) return;
+    const layerFor = { cluster: deviceClusterLayer, alert: deviceAlertLayer, moving: deviceMovingLayer };
+    const track = radioTracks?.current?.get(uid);
+    const tracked = uid === trackRef.current.id;
+    // Age comes from the stream when there is one: it is when the radio's
+    // newest batch actually arrived.
+    const ageSec = track?.lastArrivalMs ? Math.round((now - track.lastArrivalMs) / 1000) : fixAgeSec(entry.fix, now);
+    const stale = !entry.sos && !entry.offline && ageSec != null && ageSec > MOTION.staleSec;
+    const moving = Boolean(entry.motion?.moving) && !stale;
+    const bearing = entry.motion?.bearing;
+    const iconKey = [entry.label, entry.glyph, entry.sos, entry.offline, stale, moving, moving ? Math.round(bearing / 5) : "", tracked, stale ? formatAge(ageSec) : ""].join("|");
+    if (iconKey !== entry.iconKey) {
+      entry.marker.setIcon(
+        radioIcon({ label: entry.label, glyph: entry.glyph, sos: entry.sos, offline: entry.offline, stale, moving, bearing, tracked, ageSec }),
+      );
+      entry.marker.setZIndexOffset(entry.sos ? 1000 : tracked ? 900 : 0);
+      entry.iconKey = iconKey;
     }
-    glideFrameRef.current = glidesRef.current.size ? window.requestAnimationFrame(runGlides) : null;
-  }, [keepTrackedInView]);
+    const tooltip = `${escapeHtml(entry.label)}${entry.offline ? " · offline" : ""}${stale ? ` · no new fix for ${escapeHtml(formatAge(ageSec))}` : ""}`;
+    if (tooltip !== entry.tooltip) {
+      if (entry.marker.getTooltip()) entry.marker.setTooltipContent(tooltip);
+      else entry.marker.bindTooltip(tooltip, { direction: "top", offset: [0, -14], opacity: 0.95 });
+      entry.tooltip = tooltip;
+    }
+    // A radio in alarm never clusters - it would disappear into a count at the
+    // exact moment someone needs to see where it is. Moving and tracked radios
+    // stay out too: a marker sliding inside a cluster group is re-clustered on
+    // every frame.
+    const want = entry.sos ? "alert" : tracked || moving ? "moving" : "cluster";
+    if (entry.layer !== want) {
+      if (entry.layer) layerFor[entry.layer].removeLayer(entry.marker);
+      layerFor[want].addLayer(entry.marker);
+      entry.layer = want;
+    }
+    entry.ageSec = ageSec;
+    entry.stale = stale;
+  }, [radioTracks]);
 
+  // The trail behind the tracked radio, cut off where the pin is so it never
+  // runs ahead of it, and fading with age: the last few minutes are what the
+  // operator acts on, the start of the window is context.
+  const drawTrail = useCallback((renderT, pin) => {
+    const { trailLayer } = layersRef.current;
+    if (!trailLayer) return;
+    trailLayer.clearLayers();
+    if (!trackRef.current.id) return;
+    const points = (trailRef.current || []).filter((point) => new Date(point.observed_at).getTime() <= renderT);
+    if (pin) points.push({ lat: pin.lat, lon: pin.lng, observed_at: new Date(renderT).toISOString() });
+    const segments = trailSegments(points);
+    const times = segments.flat().map((point) => point.ms);
+    if (!times.length) return;
+    const oldest = Math.min(...times);
+    const span = Math.max(1, renderT - oldest);
+    for (const segment of segments) {
+      for (let index = 1; index < segment.length; index += 1) {
+        const from = segment[index - 1];
+        const to = segment[index];
+        const recency = 1 - Math.min(1, (renderT - to.ms) / span);
+        L.polyline(
+          [
+            [from.lat, from.lon],
+            [to.lat, to.lon],
+          ],
+          { color: "#00cc66", weight: 4, opacity: 0.15 + 0.75 * recency, lineCap: "round", interactive: false },
+        ).addTo(trailLayer);
+      }
+    }
+  }, []);
+
+  // The animation loop. Every frame, each radio with streamed points is placed
+  // where playback says it was; a few times a second, everything else about it
+  // is brought up to date.
+  useEffect(() => {
+    let lastVisual = 0;
+    let lastTrail = 0;
+    let latestDot = null;
+    let lastReport = "";
+    const frame = () => {
+      frameRef.current = window.requestAnimationFrame(frame);
+      const map = mapRef.current;
+      const { trailLayer } = layersRef.current;
+      if (!map || !trailLayer) return;
+      const now = Date.now();
+      const visual = now - lastVisual >= RADIO_VISUAL_MS;
+      if (visual) lastVisual = now;
+      const trackedId = trackRef.current.id;
+      let trackedState = null;
+
+      for (const [uid, entry] of radiosRef.current) {
+        const track = radioTracks?.current?.get(uid);
+        let sample = null;
+        let renderT = now;
+        if (track?.path.length) {
+          // An alarm is never shown late: an SOS radio sits on its newest point.
+          if (entry.sos) {
+            const newest = newestPoint(track);
+            sample = { lat: newest.lat, lon: newest.lon, moving: false, bearing: null, speedMs: 0 };
+          } else {
+            renderT = now - track.delayMs;
+            sample = sampleTrack(track, renderT);
+          }
+        }
+        entry.motion = sample;
+        const target = sample ? { lat: sample.lat, lon: sample.lon } : entry.fix;
+        if (target) {
+          const current = entry.marker.getLatLng();
+          // Clustered pins are only nudged on the slower tick, and only for a
+          // real move: each move inside a cluster group re-clusters it.
+          const moved = distanceMetres({ lat: current.lat, lon: current.lng }, target);
+          if (entry.layer === "cluster" ? visual && moved > 2 : moved > 0.05) entry.marker.setLatLng([target.lat, target.lon]);
+        }
+        if (visual) refreshRadio(uid, entry, now);
+        if (uid === trackedId) {
+          keepTrackedInView(entry.marker.getLatLng());
+          trackedState = { entry, track, renderT };
+        }
+      }
+
+      if (!visual) return;
+      // A faint dot on the newest point received, ahead of the pin: playback
+      // shows the path, the dot shows the latest truth.
+      const newest = trackedState?.track && !trackedState.entry.sos ? newestPoint(trackedState.track) : null;
+      if (newest) {
+        if (!latestDot) {
+          latestDot = L.circleMarker([newest.lat, newest.lon], {
+            radius: 5,
+            color: "#ffffff",
+            weight: 1.5,
+            fillColor: "#00cc66",
+            fillOpacity: 0.35,
+            opacity: 0.6,
+            interactive: false,
+          }).addTo(map);
+        } else latestDot.setLatLng([newest.lat, newest.lon]);
+      } else if (latestDot) {
+        latestDot.remove();
+        latestDot = null;
+      }
+      if (trackedState ? now - lastTrail >= TRAIL_REDRAW_MS : lastTrail) {
+        lastTrail = trackedState ? now : 0;
+        drawTrail(trackedState?.renderT ?? now, trackedState?.entry.marker.getLatLng());
+      }
+
+      const report = callbacksRef.current.onTrackedMotion;
+      if (report) {
+        const { entry, track } = trackedState || {};
+        const next = entry
+          ? {
+              present: true,
+              moving: Boolean(entry.motion?.moving) && !entry.stale,
+              bearing: entry.motion?.bearing == null ? null : Math.round(entry.motion.bearing / 5) * 5,
+              speedMs: entry.motion?.speedMs == null ? null : Math.round(entry.motion.speedMs * 10) / 10,
+              seenMs: track?.lastArrivalMs ?? entry.fix?.seenMs ?? null,
+              behindSec: track?.path.length && !entry.sos ? Math.round(track.delayMs / 1000) : 0,
+            }
+          : { present: false };
+        const key = JSON.stringify(next);
+        if (key !== lastReport) {
+          lastReport = key;
+          report(next);
+        }
+      }
+    };
+    frameRef.current = window.requestAnimationFrame(frame);
+    return () => {
+      if (frameRef.current) window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+      latestDot?.remove();
+    };
+  }, [radioTracks, refreshRadio, keepTrackedInView, drawTrail]);
+
+  // Which radios are on the map, and what is known about each from the
+  // registry and the polled positions. Movement is the animation loop's job.
   useEffect(() => {
     const map = mapRef.current;
     const { deviceClusterLayer, deviceAlertLayer, deviceMovingLayer } = layersRef.current;
@@ -474,13 +634,6 @@ export function OperationsMap({
     const registry = new Map(devices.map((device) => [String(device.device_id), device]));
     const now = Date.now();
     const seen = new Set();
-    const toCluster = [];
-
-    const detach = (entry) => {
-      if (entry.layer === "cluster") deviceClusterLayer.removeLayer(entry.marker);
-      else layerFor[entry.layer]?.removeLayer(entry.marker);
-      entry.layer = null;
-    };
 
     for (const location of locations) {
       const uid = String(location.Uid);
@@ -490,7 +643,7 @@ export function OperationsMap({
       const row = registry.get(uid);
       const tracked = uid === trackedRadioId;
       // A radio the network is not hearing from goes grey, matching the
-      // tooltip below. An SOS stays red whatever the handset's last check-in.
+      // tooltip. An SOS stays red whatever the handset's last check-in.
       const offline = !sos && !row?.pocstars_online;
       // An SOS is never filtered away, nor is the radio being tracked. Whichever
       // slice the operator is looking at, those are the pins they came for.
@@ -500,96 +653,33 @@ export function OperationsMap({
       seen.add(uid);
 
       let entry = radios.get(uid);
-      const { state: motion, action, durationMs } = advanceMotion(entry?.motion, fix, now);
       if (!entry) {
         // Hover identifies the pin; clicking opens the radio console, which can
         // do what a popup built from an HTML string never could - call the
         // handset, talk to it, message it - and leaves the map visible while it
         // is open.
-        const marker = L.marker([motion.lat, motion.lon]);
-        entry = { marker, motion, layer: null, iconKey: null, tooltip: null, row };
-        marker.on("click", () =>
-          callbacksRef.current.onRadioSelect?.(entry.row || { device_id: uid }),
-        );
+        const marker = L.marker([fix.lat, fix.lon]);
+        entry = { marker, layer: null, iconKey: null, tooltip: null, motion: null };
+        marker.on("click", () => callbacksRef.current.onRadioSelect?.(entry.row || { device_id: uid }));
         radios.set(uid, entry);
       }
-      entry.motion = motion;
-      entry.row = row;
-
-      // Stale only says something about a radio that should be reporting.
-      const ageSec = fixAgeSec(fix, now);
-      const stale = !sos && !offline && isStale(fix, now);
-      const label = row?.name || uid;
-      const glyph = deviceTypeGlyph(row?.device_type);
-      const moving = motion.moving && !stale;
-      const iconKey = [label, glyph, sos, offline, stale, moving, moving ? Math.round(motion.bearing / 5) : "", tracked, stale ? formatAge(ageSec) : ""].join("|");
-      if (iconKey !== entry.iconKey) {
-        entry.marker.setIcon(radioIcon({ label, glyph, sos, offline, stale, moving, bearing: motion.bearing, tracked, ageSec }));
-        entry.marker.setZIndexOffset(sos ? 1000 : tracked ? 900 : 0);
-        entry.iconKey = iconKey;
-      }
-      const tooltip = `${escapeHtml(label)}${row?.pocstars_online ? "" : " · offline"}${stale ? ` · no new fix for ${escapeHtml(formatAge(ageSec))}` : ""}`;
-      if (tooltip !== entry.tooltip) {
-        if (entry.marker.getTooltip()) entry.marker.setTooltipContent(tooltip);
-        else entry.marker.bindTooltip(tooltip, { direction: "top", offset: [0, -14], opacity: 0.95 });
-        entry.tooltip = tooltip;
-      }
-
-      // A radio in alarm never clusters - it would disappear into a count at
-      // the exact moment someone needs to see where it is.
-      const gliding = glidesRef.current.has(uid) || action === "glide";
-      const want = sos ? "alert" : tracked || moving || gliding ? "moving" : "cluster";
-      if (entry.layer !== want) {
-        if (entry.layer) detach(entry);
-        if (want === "cluster") toCluster.push(entry.marker);
-        else layerFor[want].addLayer(entry.marker);
-        entry.layer = want;
-      }
-
-      if (action === "glide") {
-        glidesRef.current.set(uid, {
-          marker: entry.marker,
-          from: entry.marker.getLatLng(),
-          to: L.latLng(motion.lat, motion.lon),
-          start: window.performance.now(),
-          duration: durationMs,
-        });
-      } else if (action === "jump") {
-        glidesRef.current.delete(uid);
-        entry.marker.setLatLng([motion.lat, motion.lon]);
-        if (tracked) keepTrackedInView(entry.marker.getLatLng());
-      }
+      Object.assign(entry, {
+        fix,
+        row,
+        sos,
+        offline,
+        label: row?.name || uid,
+        glyph: deviceTypeGlyph(row?.device_type),
+      });
+      refreshRadio(uid, entry, now);
     }
 
     for (const [uid, entry] of radios) {
       if (seen.has(uid)) continue;
-      glidesRef.current.delete(uid);
-      detach(entry);
+      if (entry.layer) layerFor[entry.layer].removeLayer(entry.marker);
       radios.delete(uid);
     }
-    // One bulk insert rather than one reflow per radio.
-    if (toCluster.length) deviceClusterLayer.addLayers(toCluster);
-    if (glidesRef.current.size && !glideFrameRef.current) {
-      glideFrameRef.current = window.requestAnimationFrame(runGlides);
-    }
-
-    const trackedEntry = trackedRadioId ? radios.get(String(trackedRadioId)) : null;
-    const { onTrackedMotion: report } = callbacksRef.current;
-    if (report) {
-      const motion = trackedEntry?.motion;
-      report(
-        motion
-          ? {
-              present: true,
-              moving: motion.moving,
-              bearing: motion.bearing,
-              speedMs: motion.speedMs,
-              seenMs: motion.lastSeenMs,
-            }
-          : { present: false },
-      );
-    }
-  }, [devices, locations, radioFilter, trackedRadioId, radioClock, runGlides, keepTrackedInView]);
+  }, [devices, locations, radioFilter, trackedRadioId, refreshRadio]);
 
   // Starting to track, or "Re-centre", brings the radio into view at once.
   useEffect(() => {
@@ -601,34 +691,6 @@ export function OperationsMap({
     trackRef.current.lastCheck = Date.now() + 1300;
     map.flyTo(entry.marker.getLatLng(), Math.min(Math.max(map.getZoom(), TRACK_ZOOM_MIN), TRACK_ZOOM_MAX), { duration: 1.2 });
   }, [trackedRadioId, trackPaused]);
-
-  // The trail fades with age: the last few minutes are what the operator acts
-  // on, the start of the window is context.
-  useEffect(() => {
-    const { trailLayer } = layersRef.current;
-    if (!trailLayer) return;
-    trailLayer.clearLayers();
-    if (!trackedRadioId) return;
-    const segments = trailSegments(trail);
-    const times = segments.flat().map((point) => point.ms);
-    if (!times.length) return;
-    const oldest = Math.min(...times);
-    const span = Math.max(1, Date.now() - oldest);
-    for (const segment of segments) {
-      for (let index = 1; index < segment.length; index += 1) {
-        const from = segment[index - 1];
-        const to = segment[index];
-        const recency = 1 - Math.min(1, (Date.now() - to.ms) / span);
-        L.polyline(
-          [
-            [from.lat, from.lon],
-            [to.lat, to.lon],
-          ],
-          { color: "#00cc66", weight: 4, opacity: 0.15 + 0.75 * recency, lineCap: "round", interactive: false },
-        ).addTo(trailLayer);
-      }
-    }
-  }, [trail, trackedRadioId]);
 
   // The bar is only meaningful while radios are on the map, and its buttons
   // have to show which slice is live - neither is something Leaflet's control

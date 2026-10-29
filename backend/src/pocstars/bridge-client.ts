@@ -114,6 +114,18 @@ export class PocstarsBridgeClient extends EventEmitter {
     );
   }
 
+  // Every GPS point the location service stores, from sinceMs on, then each new
+  // batch as it lands. Points arrive as "positions" events.
+  async watchPositions(sinceMs?: number) {
+    const reply = await this.request(
+      { type: "positions.watch", sinceMs },
+      (message) => message.type === "positions.watching" || message.type === "positions.unavailable",
+    );
+    if (reply.type === "positions.unavailable") {
+      throw new Error(reply.message || "The bridge cannot read radio positions.");
+    }
+  }
+
   async queryInventory() {
     return this.request(
       { type: "inventory.query" },
@@ -246,6 +258,8 @@ export class PocstarsBridgeClient extends EventEmitter {
       this.emit("presence", Array.isArray(message.users) ? message.users : []);
     } else if (message.type === "sos.snapshot" || message.type === "sos.new") {
       this.emit("sos", Array.isArray(message.rows) ? message.rows : []);
+    } else if (message.type === "positions") {
+      this.emit("positions", Array.isArray(message.points) ? message.points : []);
     }
   }
 

@@ -32,6 +32,7 @@ import { cors } from "hono/cors";
 import { invalidateAuthCache, requireAuth } from "./auth";
 import { liveRadioWebSocket } from "./pocstars/live-gateway";
 import { sosPushStatus } from "./pocstars/sos-push";
+import { positionPushStatus } from "./pocstars/position-push";
 import { checkClassifierModels, getClassifierHealth } from "./classifier";
 
 const app = new Hono();
@@ -140,6 +141,7 @@ app.get("/api/health", async (c) => {
     classifier,
     osint,
     sos_push: sosPushStatus(),
+    position_push: positionPushStatus(),
   });
 });
 

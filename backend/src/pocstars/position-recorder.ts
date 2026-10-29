@@ -11,7 +11,9 @@
  */
 import { env } from "../config";
 import * as db from "../db";
+import { bus } from "../events";
 import { fetchLastLocations } from "./locations";
+import { type PushedPoint, positionPushLive, startPositionPush } from "./position-push";
 
 type Snapshot = { at: number; rows: Map<string, any> };
 
@@ -83,7 +85,10 @@ async function poll() {
     }
 
     snapshot = { at: now, rows: next };
-    if (fresh.length) await db.insertRadioPositions(fresh);
+    // While the bridge is pushing every point, those are the trail. This poll's
+    // fixes carry the vendor's save time rather than the handset's, so storing
+    // both would put every position on the trail twice.
+    if (fresh.length && !positionPushLive()) await db.insertRadioPositions(fresh);
     if (now - lastPruneAt > PRUNE_EVERY_MS) {
       lastPruneAt = now;
       const cutoff = new Date(now - env.RADIO_TRACK_RETENTION_DAYS * 86_400_000);
@@ -94,6 +99,38 @@ async function poll() {
   } finally {
     polling = false;
   }
+}
+
+/**
+ * Every point of a batch pushed from the bridge: stored for the trail and sent
+ * to open maps. Radios that are not in the registry (other companies on the
+ * shared install) are dropped here.
+ */
+export async function ingestPushedPoints(points: PushedPoint[]) {
+  const known = await activeDeviceIds();
+  const receivedAt = new Date();
+  const rows = [];
+  const seen = new Set<string>();
+  for (const point of points) {
+    const uid = String(point.uid);
+    if (!known.has(uid)) continue;
+    const key = `${uid}|${point.t}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push({
+      device_id: uid,
+      lat: Number(point.lat),
+      lon: Number(point.lon),
+      observed_at: new Date(point.t),
+      received_at: receivedAt,
+    });
+  }
+  if (!rows.length) return;
+  await db.insertRadioPositions(rows);
+  bus.emit(
+    "radio-points",
+    rows.map((row) => ({ uid: row.device_id, lat: row.lat, lon: row.lon, t: row.observed_at.getTime() })),
+  );
 }
 
 /**
@@ -130,5 +167,6 @@ export async function startRadioPositionRecorder() {
   }
   void poll();
   setInterval(() => void poll(), env.RADIO_TRACK_POLL_SEC * 1000);
+  startPositionPush(ingestPushedPoints);
   console.log(`[RadioTrack] recording radio positions every ${env.RADIO_TRACK_POLL_SEC}s`);
 }

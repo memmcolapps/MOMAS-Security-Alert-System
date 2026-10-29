@@ -1006,6 +1006,72 @@ router.get("/locations", async (c) => {
   }
 });
 
+// The radios a request may see, or null for the whole estate. Same rule as
+// ensureDeviceAccess, computed once so a stream can filter every batch.
+async function visibleDeviceIds(c: any): Promise<Set<string> | null> {
+  if (isPlatformAdmin(c)) return null;
+  return new Set((await db.listDevices(orgScope(c))).map((device: any) => String(device.device_id)));
+}
+
+// Recent points for every radio the caller can see, so an opening map has a
+// few batches to play before the live stream delivers its first.
+router.get("/positions/recent", async (c) => {
+  const seconds = Math.min(Math.max(Number(c.req.query("seconds")) || 90, 10), 600);
+  try {
+    const visible = await visibleDeviceIds(c);
+    const rows = await db.listRecentRadioPoints(visible ? [...visible] : null, new Date(Date.now() - seconds * 1000));
+    return c.json({
+      points: rows.map((row: any) => ({
+        uid: String(row.device_id),
+        lat: Number(row.lat),
+        lon: Number(row.lon),
+        t: new Date(row.observed_at).getTime(),
+      })),
+    });
+  } catch (error: any) {
+    return c.json({ error: "radio_points_failed", message: error.message }, 500);
+  }
+});
+
+// Each batch of points as it arrives from the bridge, filtered to the radios
+// this viewer can see. The registry is re-read every minute so a radio moved
+// between organizations stops (or starts) streaming without a reconnect.
+router.get("/positions/stream", async (c) => {
+  const encoder = new TextEncoder();
+  const stream = new TransformStream<Uint8Array>();
+  const writer = stream.writable.getWriter();
+  let visible = await visibleDeviceIds(c).catch(() => new Set<string>());
+  const write = (chunk: string) => writer.write(encoder.encode(chunk)).catch(() => cleanup());
+  const onPoints = (points: any[]) => {
+    const mine = visible ? points.filter((point) => visible!.has(String(point.uid))) : points;
+    if (mine.length) void write(`event: points\ndata: ${JSON.stringify(mine)}\n\n`);
+  };
+  const refresh = setInterval(() => {
+    void visibleDeviceIds(c).then((next) => (visible = next)).catch(() => {});
+  }, 60_000);
+  const heartbeat = setInterval(() => void write(":heartbeat\n\n"), 25_000);
+  let closed = false;
+  function cleanup() {
+    if (closed) return;
+    closed = true;
+    clearInterval(refresh);
+    clearInterval(heartbeat);
+    bus.off("radio-points", onPoints);
+    void writer.close().catch(() => {});
+  }
+  bus.on("radio-points", onPoints);
+  void write(":ok\n\n");
+  c.req.raw.signal.addEventListener("abort", cleanup, { once: true });
+  return new Response(stream.readable, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
+});
+
 const TRACK_MAX_MINUTES = 240;
 
 // The trail behind a tracked radio, from the fixes the position recorder kept.

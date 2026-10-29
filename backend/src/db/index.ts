@@ -4082,6 +4082,19 @@ async function listRadioTrack(deviceId, since) {
   return rows;
 }
 
+/** Recent fixes for many radios at once, so a map that opens can start playing. */
+async function listRecentRadioPoints(deviceIds, since) {
+  const { rows } = await pool.query(
+    `SELECT device_id, lat, lon, observed_at
+       FROM radio_positions
+      WHERE received_at >= $1 AND ($2::text[] IS NULL OR device_id = ANY($2::text[]))
+      ORDER BY observed_at ASC
+      LIMIT 20000`,
+    [since, deviceIds],
+  );
+  return rows;
+}
+
 async function pruneRadioPositions(before) {
   const { rowCount } = await pool.query("DELETE FROM radio_positions WHERE received_at < $1", [before]);
   return rowCount;
@@ -4902,6 +4915,7 @@ export {
   insertRadioPositions,
   latestRadioPositions,
   listRadioTrack,
+  listRecentRadioPoints,
   pruneRadioPositions,
   getUserByEmail,
   getUserById,

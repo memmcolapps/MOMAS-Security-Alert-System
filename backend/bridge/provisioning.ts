@@ -806,7 +806,7 @@ export class PocstarsProvisioning {
           String(name).trim(),
           companyId,
           gpsEnabled ? 1 : 0,
-          Math.max(5, Number(gpsFrequency) || 30),
+          Math.max(5, Number(gpsFrequency) || 5),
           bootChannel,
           serviceEndsAt,
         ],

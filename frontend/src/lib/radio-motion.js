@@ -1,12 +1,12 @@
-// How a radio's pin moves between fixes. Kept out of the map component so the
-// rules - which fixes count as movement, which are GPS noise, when to glide and
-// when to jump - can be tested without Leaflet.
+// The shared rules for radio movement - which fixes count as movement, which
+// are GPS noise, and when a gap is a jump - plus the geometry and formatting
+// helpers both the map and the playback (radio-playback.js) use.
 //
 // The vendor gives us a position and a time, nothing about how good the fix
 // is. Indoors that matters: a handset on a desk drifts tens of metres, and one
 // that walks out of a building reappears somewhere else after minutes of
-// silence. So movement has to be earned (MOTION.confirmFixes fixes that agree),
-// small drift is ignored, and a gap or an impossible speed is a jump, never an
+// silence. So movement has to be earned (the next point has to agree), small
+// drift is ignored, and a gap or an impossible speed is a jump, never an
 // animated path drawn through walls.
 
 export const MOTION = {
@@ -14,19 +14,12 @@ export const MOTION = {
   jitterM: 25,
   // Once a radio is moving, a smaller step still counts as moving on.
   minStepM: 8,
-  // Consecutive fixes, in roughly the same direction, before a still radio is
-  // allowed to start moving.
-  confirmFixes: 2,
   // A handheld or a vehicle on Nigerian roads; anything faster is a bad fix
   // or a long gap, and the pin jumps rather than slides.
   maxSpeedMs: 70,
   // A gap between fixes longer than this is a jump: whatever path the radio
   // took in between is unknown.
   maxGlideGapSec: 120,
-  // Longest a single glide is drawn over. Fixes further apart than this are
-  // shown late rather than slowly.
-  glideMaxMs: 8000,
-  glideMinMs: 800,
   // How long since the last movement before the direction arrow is dropped.
   stopAfterSec: 90,
   // A position the server has not seen change for this long is marked stale.
@@ -49,11 +42,6 @@ export function bearingBetween(a, b) {
   const y = Math.sin(dLon) * Math.cos(toRad(b.lat));
   const x = Math.cos(toRad(a.lat)) * Math.sin(toRad(b.lat)) - Math.sin(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.cos(dLon);
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
-}
-
-function angleBetween(a, b) {
-  const diff = Math.abs(a - b) % 360;
-  return diff > 180 ? 360 - diff : diff;
 }
 
 function stamp(value) {
@@ -85,107 +73,6 @@ export function fixAgeSec(fix, now = Date.now()) {
 export function isStale(fix, now = Date.now()) {
   const age = fixAgeSec(fix, now);
   return age != null && age > MOTION.staleSec;
-}
-
-function intervalSec(fromMs, toMs, fallbackFrom, fallbackTo) {
-  if (fromMs != null && toMs != null && toMs > fromMs) return (toMs - fromMs) / 1000;
-  if (fallbackFrom != null && fallbackTo != null && fallbackTo > fallbackFrom) return (fallbackTo - fallbackFrom) / 1000;
-  return null;
-}
-
-function placed(fix) {
-  return {
-    lat: fix.lat,
-    lon: fix.lon,
-    key: fix.key,
-    lastObservedMs: fix.observedMs,
-    lastSeenMs: fix.seenMs,
-    candidate: null,
-    moving: false,
-    bearing: null,
-    speedMs: null,
-    lastMoveMs: null,
-  };
-}
-
-/**
- * Advance one radio's motion with its latest fix.
- *
- * Returns the next state and what the pin should do:
- *   place - first sighting, put it there
- *   none  - stay put (same fix, or noise)
- *   glide - slide from where it is to state.lat/lon over durationMs
- *   jump  - move there at once; the path in between is unknown
- */
-export function advanceMotion(state, fix, now = Date.now()) {
-  if (!fix) return { state, action: "none" };
-  if (!state) return { state: placed(fix), action: "place" };
-
-  if (fix.key === state.key) {
-    // No new fix. The arrow only means something while fixes keep moving.
-    if (state.moving && state.lastMoveMs != null && now - state.lastMoveMs > MOTION.stopAfterSec * 1000) {
-      return { state: { ...state, moving: false }, action: "none" };
-    }
-    return { state, action: "none" };
-  }
-
-  const here = { lat: state.lat, lon: state.lon };
-  const distance = distanceMetres(here, fix);
-  const gapSec = intervalSec(state.lastObservedMs, fix.observedMs, state.lastSeenMs, fix.seenMs);
-  const seen = { key: fix.key, lastObservedMs: fix.observedMs, lastSeenMs: fix.seenMs };
-
-  if (distance < (state.moving ? MOTION.minStepM : MOTION.jitterM)) {
-    return { state: { ...state, ...seen, candidate: null, moving: false }, action: "none" };
-  }
-
-  // The pin's spot was last confirmed by the fix before this move began: the
-  // previous fix, or the one before the first unconfirmed step.
-  const since = state.candidate || { sinceObservedMs: state.lastObservedMs, sinceSeenMs: state.lastSeenMs };
-  const travelSec = intervalSec(since.sinceObservedMs, fix.observedMs, since.sinceSeenMs, fix.seenMs);
-  const speedMs = travelSec ? distance / travelSec : Infinity;
-  if ((gapSec != null && gapSec > MOTION.maxGlideGapSec) || speedMs > MOTION.maxSpeedMs) {
-    return { state: placed(fix), action: "jump" };
-  }
-
-  const bearing = bearingBetween(here, fix);
-  if (!state.moving) {
-    // A still radio has to earn its first move: one far fix is as likely to
-    // be a reflection off a wall as a step, and a desk-bound handset whose
-    // drift lands either side of it must not pace the room.
-    const agrees = state.candidate != null && angleBetween(state.candidate.bearing, bearing) <= 60;
-    const count = agrees ? state.candidate.count + 1 : 1;
-    if (count < MOTION.confirmFixes) {
-      const start = agrees ? state.candidate : { sinceObservedMs: state.lastObservedMs, sinceSeenMs: state.lastSeenMs };
-      return {
-        state: {
-          ...state,
-          ...seen,
-          candidate: { bearing, count, sinceObservedMs: start.sinceObservedMs, sinceSeenMs: start.sinceSeenMs },
-        },
-        action: "none",
-      };
-    }
-  }
-
-  const durationMs = Math.min(
-    MOTION.glideMaxMs,
-    Math.max(MOTION.glideMinMs, (gapSec ?? MOTION.glideMaxMs / 1000) * 1000),
-  );
-  return {
-    state: {
-      ...state,
-      ...seen,
-      lat: fix.lat,
-      lon: fix.lon,
-      candidate: null,
-      moving: true,
-      bearing,
-      speedMs,
-      lastMoveMs: now,
-    },
-    action: "glide",
-    durationMs,
-  };
 }
 
 /**

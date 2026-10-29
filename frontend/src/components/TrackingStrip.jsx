@@ -49,7 +49,10 @@ export function TrackingStrip({ device, location, motion, paused, trailMinutes, 
         </span>
       ) : null}
       <span className="tabular-nums text-neutral-500">
-        fix {ageSec == null ? "—" : `${formatAge(ageSec)} ago`} · trail {trailMinutes} min
+        fix {ageSec == null ? "—" : `${formatAge(ageSec)} ago`}
+        {/* Playback runs a batch behind real time; saying so is what makes a
+            smooth pin trustworthy. The faint dot ahead of it is the newest point. */}
+        {motion?.behindSec ? ` · ~${motion.behindSec}s behind` : ""} · trail {trailMinutes} min
       </span>
       <div className="ml-auto flex items-center gap-1">
         {paused ? (

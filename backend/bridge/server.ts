@@ -3,6 +3,8 @@ import type { ServerWebSocket } from "bun";
 import { PocstarsLiveClient } from "../src/pocstars/live-client";
 import { PocstarsProvisioning } from "./provisioning";
 import { SosWatch } from "./sos-watch";
+import { readFileSync } from "node:fs";
+import { PositionWatch, mongoPositionStore } from "./position-watch";
 
 type BridgeSession = {
   client: PocstarsLiveClient | null;
@@ -19,6 +21,8 @@ type BridgeSession = {
   presenceWatch: boolean;
   // SOS watching holds no seat at all: it reads the vendor's SOS service.
   sosUnsubscribe: (() => void) | null;
+  // Nor does position watching: it reads the vendor's GPS history store.
+  positionsUnsubscribe: (() => void) | null;
 };
 
 const host = process.env.BRIDGE_HOST || "127.0.0.1";
@@ -35,6 +39,22 @@ const timeoutMs = Number(process.env.POCSTARS_PTT_TIMEOUT_MS || 10_000);
 const sosBase = process.env.BRIDGE_SOS_BASE || "http://127.0.0.1:6891";
 const sosPollMs = Number(process.env.BRIDGE_SOS_POLL_MS || 1000);
 const maxPttSeconds = Number(process.env.POCSTARS_PTT_MAX_SECONDS || 60);
+const positionsPollMs = Number(process.env.BRIDGE_POSITIONS_POLL_MS || 2000);
+
+// The location service's own MongoDB login, read from its config unless set
+// explicitly, so a credential change on the vendor side needs no bridge edit.
+function lbsMongoUri() {
+  if (process.env.BRIDGE_LBS_MONGO_URI) return process.env.BRIDGE_LBS_MONGO_URI;
+  try {
+    const config = readFileSync(
+      process.env.BRIDGE_LBS_CONFIG || "/opt/pocStar/lbs/config/application.properties",
+      "utf8",
+    );
+    return config.match(/^spring\.data\.mongodb\.uri=(.+)$/m)?.[1]?.trim() || null;
+  } catch {
+    return null;
+  }
+}
 
 // Provisioning is optional: leave BRIDGE_DB_PASSWORD unset and the bridge keeps
 // working as a pure voice adapter, refusing provisioning commands.
@@ -175,6 +195,24 @@ function send(
 // it, so a reconnecting backend never doubles the load on the SOS service.
 const sosWatches = new Map<string, SosWatch>();
 
+// One position reader for every subscriber. Connected on first use, so a
+// bridge on a host without the location service still starts.
+let positionWatch: PositionWatch | null = null;
+let positionWatchError: string | null = null;
+
+async function watchPositions(ws: ServerWebSocket<BridgeSession>, sinceMs?: number) {
+  if (ws.data.positionsUnsubscribe) return;
+  if (!positionWatch) {
+    const uri = lbsMongoUri();
+    if (!uri) throw new Error("The location service's MongoDB address is not configured.");
+    positionWatch = new PositionWatch({ store: await mongoPositionStore(uri), intervalMs: positionsPollMs });
+  }
+  ws.data.positionsUnsubscribe = await positionWatch.subscribe(
+    (points) => send(ws, { type: "positions", points }),
+    sinceMs,
+  );
+}
+
 function watchSos(ws: ServerWebSocket<BridgeSession>, targetUid: string) {
   if (ws.data.sosUnsubscribe) return;
   let watch = sosWatches.get(targetUid);
@@ -196,6 +234,8 @@ async function closeSession(ws: ServerWebSocket<BridgeSession>) {
   sessions.delete(ws);
   ws.data.sosUnsubscribe?.();
   ws.data.sosUnsubscribe = null;
+  ws.data.positionsUnsubscribe?.();
+  ws.data.positionsUnsubscribe = null;
   if (ws.data.closing) return;
   ws.data.closing = true;
   if (ws.data.pttTimer) clearTimeout(ws.data.pttTimer);
@@ -411,7 +451,7 @@ async function handleProvisioning(
               message.serviceEndsAt || "2030-01-01 00:00:00",
             ),
             gpsEnabled: message.gpsEnabled !== false,
-            gpsFrequency: Number(message.gpsFrequency || 30),
+            gpsFrequency: Number(message.gpsFrequency || 5),
           }),
         });
       }
@@ -545,8 +585,20 @@ const server = Bun.serve<BridgeSession>({
           (ws) =>
             ws.data.seatUid === null &&
             !ws.data.presenceWatch &&
-            !ws.data.sosUnsubscribe,
+            !ws.data.sosUnsubscribe &&
+            !ws.data.positionsUnsubscribe,
         ).length,
+        positions: positionWatch
+          ? {
+              subscribers: positionWatch.subscriberCount,
+              delivered: positionWatch.delivered,
+              lastOkSecondsAgo:
+                positionWatch.lastOkAt === null
+                  ? null
+                  : Math.round((Date.now() - positionWatch.lastOkAt) / 1000),
+              lastError: positionWatch.lastError,
+            }
+          : { subscribers: 0, lastError: positionWatchError },
         sos: [...sosWatches.entries()].map(([targetUid, watch]) => ({
           targetUid,
           subscribers: watch.subscriberCount,
@@ -592,6 +644,7 @@ const server = Bun.serve<BridgeSession>({
         lastSeenAt: Date.now(),
         presenceWatch: false,
         sosUnsubscribe: null,
+        positionsUnsubscribe: null,
       },
     });
     return upgraded
@@ -654,6 +707,21 @@ const server = Bun.serve<BridgeSession>({
         }
         watchSos(ws, targetUid);
         send(ws, { type: "sos.watching", targetUid });
+        return;
+      }
+
+      if (message.type === "positions.watch") {
+        const sinceMs = Number(message.sinceMs) || undefined;
+        try {
+          await watchPositions(ws, sinceMs);
+          positionWatchError = null;
+          send(ws, { type: "positions.watching" });
+        } catch (error) {
+          positionWatchError = error instanceof Error ? error.message : String(error);
+          // Not "error": that tears down the whole connection on the MOMAS side,
+          // and a missing location store is no reason to drop anything else.
+          send(ws, { type: "positions.unavailable", message: positionWatchError });
+        }
         return;
       }
 

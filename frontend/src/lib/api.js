@@ -502,6 +502,23 @@ export function getRadioTrack(uid, minutes = 30) {
   return request(`/api/pocstars/locations/${encodeURIComponent(uid)}/track?minutes=${minutes}`);
 }
 
+// Every GPS point radios sent in the last `seconds`, for a map that has just
+// opened (or reconnected) to start playing from.
+export function getRecentRadioPoints(seconds = 120) {
+  return request(`/api/pocstars/positions/recent?seconds=${seconds}`);
+}
+
+// The live stream of radio points. EventSource cannot set headers, so the token
+// and active org ride along as query params, as for the alerts stream.
+export function radioPointsStreamUrl() {
+  const query = new URLSearchParams();
+  const token = getAuthToken();
+  const org = getActiveOrganizationId();
+  if (token) query.set("access_token", token);
+  if (org) query.set("organization_id", org);
+  return `${config.apiBase}/api/pocstars/positions/stream?${query}`;
+}
+
 // Radio positions are shared by one server-side poll, so asking often is cheap.
 // 5s keeps a moving radio's glide close to where it really is.
 export const RADIO_POLL_MS = 5_000;
