@@ -236,7 +236,11 @@ export function ReviewByEvent({ notify }) {
                     >
                       <XCircle size={13} /> Dismiss
                     </button>
-                    <span className="text-[10px] text-neutral-600">Leave it here to wait for another outlet.</span>
+                    <span className={`text-[10px] ${event.score < 70 && !noteFor(event) ? "text-orange-300/80" : "text-neutral-600"}`}>
+                      {event.score < 70 && !noteFor(event)
+                        ? "Pick a reason above to approve, or leave it to wait for another outlet."
+                        : "Or leave it here to wait for another outlet."}
+                    </span>
                   </div>
                 </div>
               ) : null}

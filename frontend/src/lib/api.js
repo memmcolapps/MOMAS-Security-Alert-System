@@ -340,17 +340,6 @@ export function listOsintItems(params = {}) {
   return request(`/api/osint/items?${query}`);
 }
 
-export function getOsintItem(id) {
-  return request(`/api/osint/items/${encodeURIComponent(id)}`);
-}
-
-export function extractOsintItem(id) {
-  return request(`/api/osint/items/${encodeURIComponent(id)}/extract`, {
-    method: "POST",
-    body: "{}",
-  });
-}
-
 // The review queue grouped into events: one card per event, every outlet's
 // report of it underneath.
 export function getReviewQueue() {
@@ -372,27 +361,6 @@ export function dismissReviewEvent({ lead_id, ids, analyst_note }) {
   });
 }
 
-export function reviewOsintItem(id, payload) {
-  return request(`/api/osint/items/${encodeURIComponent(id)}/review`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function linkOsintItem(id, payload) {
-  return request(`/api/osint/items/${encodeURIComponent(id)}/link`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function promoteOsintItem(id, payload = {}) {
-  return request(`/api/osint/items/${encodeURIComponent(id)}/promote`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
 export function listOsintSources() {
   return request("/api/osint/sources");
 }
@@ -410,74 +378,8 @@ export function deleteOsintSource(id) {
   });
 }
 
-export function listOsintWatchlists() {
-  return request("/api/osint/watchlists");
-}
-
-export function saveOsintWatchlist(payload) {
-  return request("/api/osint/watchlists", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function deleteOsintWatchlist(id) {
-  return request(`/api/osint/watchlists/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-  });
-}
-
-export function listOsintEntities(params = {}) {
-  const query = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== "") query.set(key, value);
-  });
-  return request(`/api/osint/entities?${query}`);
-}
-
-export function listOsintAlerts(params = {}) {
-  const query = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== "") query.set(key, value);
-  });
-  return request(`/api/osint/alerts?${query}`);
-}
-
-export function updateOsintAlertStatus(id, status) {
-  return request(`/api/osint/alerts/${encodeURIComponent(id)}/status`, {
-    method: "POST",
-    body: JSON.stringify({ status }),
-  });
-}
-
-export function evaluateOsintAlerts(payload = {}) {
-  return request("/api/osint/alerts/evaluate", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
 export function getOsintSourceAnalytics() {
   return request("/api/osint/analytics/sources");
-}
-
-// Builds the authenticated URL for the OSINT live alert SSE stream. EventSource
-// cannot set headers, so the token and active org ride along as query params.
-export function osintEventsUrl() {
-  const query = new URLSearchParams();
-  const token = getAuthToken();
-  const org = getActiveOrganizationId();
-  if (token) query.set("access_token", token);
-  if (org) query.set("organization_id", org);
-  return `${config.apiBase}/api/osint/events?${query}`;
-}
-
-export function getOsintGraph(params = {}) {
-  const query = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== "") query.set(key, value);
-  });
-  return request(`/api/osint/graph?${query}`);
 }
 
 export function getOsintBrief(params = {}) {

@@ -66,11 +66,35 @@ if (!apply) {
   process.exit(0);
 }
 
-const results = await classifyMany(rerun.map((item: any) => ({
-  title: item.title,
-  description: item.content_text || item.description,
-  publishedAt: item.published_at,
-})));
+// Reports classified since 29 Oct 2026 carry the classifier's answer; only
+// older ones go back to the classifier, which keeps a re-run light when the
+// classifier is rate-limited.
+const stored = (item: any) => {
+  const c = item.raw?.classification;
+  return c?.type
+    ? {
+        is_security_incident: true,
+        type: c.type,
+        severity: c.severity,
+        fatalities: c.fatalities,
+        victims: c.victims,
+        location_text: c.claimed_location || c.location || null,
+        date: c.date,
+        summary: c.description,
+        verification_status: c.verification_status,
+      }
+    : null;
+};
+const toClassify = rerun.filter((item: any) => !stored(item));
+const fresh = toClassify.length
+  ? await classifyMany(toClassify.map((item: any) => ({
+      title: item.title,
+      description: item.content_text || item.description,
+      publishedAt: item.published_at,
+    })))
+  : [];
+const results = rerun.map((item: any) => stored(item) || fresh[toClassify.indexOf(item)] || null);
+console.log(JSON.stringify({ storedAnswers: rerun.length - toClassify.length, classified: toClassify.length }));
 
 const summary = { published: 0, attached: 0, still_waiting: 0, not_an_incident: 0, failed: 0 };
 for (let index = 0; index < rerun.length; index++) {
