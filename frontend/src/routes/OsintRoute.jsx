@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Database, Download, FileSearch, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Database, FileSearch, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Toast, useToast } from "../components/Toast";
 import { ReviewByEvent } from "../components/ReviewByEvent";
@@ -8,7 +8,6 @@ import {
   listOsintItems,
   listOsintSources,
   getOsintSourceAnalytics,
-  getOsintBrief,
   getSystemHealth,
   saveOsintSource,
 } from "../lib/api";
@@ -42,8 +41,9 @@ function relativeTime(value) {
 export function OsintRoute() {
   const queryClient = useQueryClient();
   // Reviewing is by event: one card per attack, however many outlets carried
-  // it. Monitors, the entity list, the graph and the per-report list were
-  // removed in Oct 2026 to keep this page to the work actually done on it.
+  // it. Monitors, the entity list, the graph, the per-report list and the
+  // generated brief were removed in Oct 2026 to keep this page to the work
+  // actually done on it.
   const [tab, setTab] = useState("events");
   const { toast, notify, dismiss: dismissToast } = useToast();
 
@@ -62,11 +62,6 @@ export function OsintRoute() {
     queryKey: ["osint-source-analytics"],
     queryFn: getOsintSourceAnalytics,
     enabled: tab === "analytics",
-  });
-  const briefQuery = useQuery({
-    queryKey: ["osint-brief"],
-    queryFn: () => getOsintBrief({ hours: 72 }),
-    enabled: tab === "reports",
   });
 
   // How many reports wait for a decision, for the Queue badge.
@@ -139,16 +134,13 @@ export function OsintRoute() {
         <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-bold">
           <TabButton active={section === "queue"} icon={FileSearch} label="Queue" badge={pendingCount} onClick={() => setTab("events")} />
           <TabButton active={section === "sources"} icon={Database} label="Sources" onClick={() => setTab("sources")} />
-          <span className="mx-1 h-4 w-px bg-white/10" />
-          <div className="flex flex-wrap items-center gap-1 text-[10px] text-neutral-500">
-            {section === "queue" ? <>
-              <SubnavButton active={tab === "events"} label="Review" onClick={() => setTab("events")} />
-              <SubnavButton active={tab === "reports"} label="Brief" onClick={() => setTab("reports")} />
-            </> : <>
+          {section === "sources" ? <>
+            <span className="mx-1 h-4 w-px bg-white/10" />
+            <div className="flex flex-wrap items-center gap-1 text-[10px] text-neutral-500">
               <SubnavButton active={tab === "sources"} label="Registry" onClick={() => setTab("sources")} />
               <SubnavButton active={tab === "analytics"} label="Performance" onClick={() => setTab("analytics")} />
-            </>}
-          </div>
+            </div>
+          </> : null}
         </div>
       </section>
 
@@ -171,10 +163,6 @@ export function OsintRoute() {
               sources={sourceAnalyticsQuery.data?.sources || []}
               trends={sourceAnalyticsQuery.data?.trends || []}
             />
-          ) : null}
-
-          {tab === "reports" ? (
-            <ReportsPanel brief={briefQuery.data} loading={briefQuery.isLoading} onRefresh={() => queryClient.invalidateQueries({ queryKey: ["osint-brief"] })} />
           ) : null}
         </div>
       )}
@@ -351,16 +339,6 @@ function ManagedSourceRow({ source, editing, onEdit, onDelete, pending }) {
   );
 }
 
-function downloadMarkdown(filename, markdown) {
-  const blob = new Blob([markdown || ""], { type: "text/markdown;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
-
 function AnalyticsPanel({ sources, trends, loading }) {
   const top = sources[0];
   return (
@@ -411,30 +389,6 @@ function AnalyticsPanel({ sources, trends, loading }) {
             </table>
           </div>
         ) : <Empty text="No source analytics yet." />}
-      </Panel>
-    </section>
-  );
-}
-
-function ReportsPanel({ brief, loading, onRefresh }) {
-  return (
-    <section className="p-5">
-      <Panel title="Report generation" loading={loading}>
-        <div className="mb-4 flex flex-wrap gap-2">
-          <button className="inline-flex items-center gap-2 rounded border border-ops-red bg-red-500/10 px-3 py-2 text-xs font-bold text-ops-red" onClick={onRefresh}>
-            <RefreshCw size={13} /> Regenerate brief
-          </button>
-          <button
-            className="inline-flex items-center gap-2 rounded border border-ops-line bg-white/[0.03] px-3 py-2 text-xs font-bold text-neutral-300"
-            disabled={!brief?.markdown}
-            onClick={() => downloadMarkdown(`osint-brief-${new Date().toISOString().slice(0, 10)}.md`, brief?.markdown || "")}
-          >
-            <Download size={13} /> Download markdown
-          </button>
-        </div>
-        {brief?.markdown ? (
-          <pre className="max-h-[620px] overflow-auto whitespace-pre-wrap rounded border border-white/10 bg-black/40 p-4 text-xs leading-relaxed text-neutral-300">{brief.markdown}</pre>
-        ) : <Empty text="No brief generated yet." />}
       </Panel>
     </section>
   );

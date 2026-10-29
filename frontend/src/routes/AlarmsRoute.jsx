@@ -107,6 +107,42 @@ const SYNC_CONSEQUENCES = {
  * Geofence alarms are raised and closed inside this platform, so only radio
  * alarms can fall out of step with the handset.
  */
+// Outcomes operators record again and again, one click each. They fill the
+// note rather than replace it: it stays editable, and several can be combined.
+const RESPONSE_NOTES = ["Patrol dispatched", "Control room calling the user", "Police informed"];
+const RESOLUTION_NOTES = [
+  "False alarm — pressed by mistake",
+  "Called the user — confirmed safe",
+  "Unit attended — situation resolved",
+  "Handed over to police",
+  "Test alarm",
+];
+const REOPEN_NOTES = ["Closed in error", "Situation continued", "New information received"];
+
+function QuickNotes({ options, value, onChange }) {
+  const parts = value.split(/\s*;\s*/).map((part) => part.trim()).filter(Boolean);
+  const toggle = (option) =>
+    onChange((parts.includes(option) ? parts.filter((part) => part !== option) : [...parts, option]).join("; "));
+  return (
+    <div className="mt-2 flex flex-wrap gap-1">
+      {options.map((option) => (
+        <button
+          key={option}
+          type="button"
+          onClick={() => toggle(option)}
+          className={`rounded border px-2 py-0.5 text-[10px] ${
+            parts.includes(option)
+              ? "border-ops-green/60 bg-ops-green/15 text-ops-green"
+              : "border-white/10 text-neutral-400 hover:text-neutral-200"
+          }`}
+        >
+          {option}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function radioSync(alert) {
   if (!alert || alert.source === "geofence") return null;
   if (alert.sync_status === "syncing") {
@@ -375,29 +411,75 @@ export function AlarmsRoute() {
   /**
    * `error.message` is already the operator-facing sentence the API sent; raw
    * upstream text never reaches this screen.
+   *
+   * The alarm takes its new status the moment the operator acts - list, counts
+   * and detail together - instead of after the round trip and a reload. A
+   * radio alarm shows "Updating radio" until the handset confirms; if the
+   * server or the handset refuses, the reload puts the alarm back as it was.
    */
-  function alarmMutation(mutationFn, successMessage, afterSuccess) {
+  function alarmMutation(mutationFn, successMessage, change, afterSuccess) {
     return {
       mutationFn,
-      onSuccess: async (_, variables) => {
+      onMutate: async (variables) => {
+        await Promise.all([
+          queryClient.cancelQueries({ queryKey: ["alarms"] }),
+          queryClient.cancelQueries({ queryKey: ["alarm", variables.alertKey] }),
+        ]);
+        const patch = (alert) => {
+          if (String(alert.alert_key) !== String(variables.alertKey)) return alert;
+          return {
+            ...alert,
+            ...change(variables),
+            sync_status: alert.source === "geofence" ? alert.sync_status : "syncing",
+          };
+        };
+        const COUNT_KEYS = { 0: "new", 1: "in_progress", 2: "resolved" };
+        queryClient.setQueriesData({ queryKey: ["alarms"] }, (current) => {
+          if (!current?.alerts) return current;
+          const before = current.alerts.find((alert) => String(alert.alert_key) === String(variables.alertKey));
+          const after = before ? patch(before) : null;
+          const counts = { ...(current.counts || {}) };
+          const from = COUNT_KEYS[Number(before?.status)];
+          const to = COUNT_KEYS[Number(after?.status)];
+          if (from && to && from !== to) {
+            counts[from] = Math.max(0, Number(counts[from] || 0) - 1);
+            counts[to] = Number(counts[to] || 0) + 1;
+          }
+          return { ...current, counts, alerts: current.alerts.map(patch) };
+        });
+        queryClient.setQueryData(["alarm", variables.alertKey], (current) =>
+          current?.alert ? { ...current, alert: patch(current.alert) } : current,
+        );
+      },
+      onSuccess: () => {
         setFeedback({ type: "success", message: successMessage });
         afterSuccess?.();
-        await refreshAlarm(variables.alertKey);
       },
-      onError: async (error) => {
-        setFeedback({ type: "error", message: error.message });
-        await refreshAlarm(selectedId);
-      },
+      onError: (error) => setFeedback({ type: "error", message: error.message }),
+      onSettled: (_, __, variables) => refreshAlarm(variables.alertKey),
     };
   }
 
-  const startMutation = useMutation(alarmMutation(startAlarmResponse, "Response started."));
-  const resolveMutation = useMutation(alarmMutation(resolveAlarm, "Alarm resolved."));
+  const startMutation = useMutation(
+    alarmMutation(startAlarmResponse, "Response started.", () => ({ status: 1 })),
+  );
+  const resolveMutation = useMutation(
+    alarmMutation(resolveAlarm, "Alarm resolved.", ({ note }) => ({
+      status: 2,
+      resolution_note: note,
+      resolved_at: new Date().toISOString(),
+    })),
+  );
   const reopenMutation = useMutation(
-    alarmMutation(reopenAlarm, "Alarm reopened.", () => {
-      setReopening(false);
-      setReopenReason("");
-    }),
+    alarmMutation(
+      reopenAlarm,
+      "Alarm reopened.",
+      () => ({ status: 1, resolved_at: null }),
+      () => {
+        setReopening(false);
+        setReopenReason("");
+      },
+    ),
   );
 
   const pending = startMutation.isPending || resolveMutation.isPending || reopenMutation.isPending;
@@ -793,6 +875,7 @@ export function AlarmsRoute() {
                 <label className="text-[10px] font-bold uppercase tracking-wide text-neutral-500" htmlFor="response-note">
                   Who is responding? <span className="font-normal normal-case tracking-normal text-neutral-600">(optional)</span>
                 </label>
+                <QuickNotes options={RESPONSE_NOTES} value={responseNote} onChange={setResponseNote} />
                 <textarea
                   id="response-note"
                   className="field-input mt-2 min-h-16 resize-y"
@@ -829,6 +912,7 @@ export function AlarmsRoute() {
             {Number(selected.status) === 1 ? (
               <form className="mt-5 rounded-lg border border-green-400/20 bg-green-400/[0.035] p-4" onSubmit={submitResolution}>
                 <label className="text-[10px] font-bold uppercase tracking-wide text-neutral-500" htmlFor="resolution-note">Resolution outcome</label>
+                <QuickNotes options={RESOLUTION_NOTES} value={resolutionNote} onChange={setResolutionNote} />
                 <textarea
                   id="resolution-note"
                   className="field-input mt-2 min-h-24 resize-y"
@@ -856,6 +940,7 @@ export function AlarmsRoute() {
                 {reopening ? (
                   <form className="mt-3 border-t border-white/10 pt-3" onSubmit={submitReopen}>
                     <label className="text-[10px] font-bold uppercase tracking-wide text-neutral-500" htmlFor="reopen-reason">Why is this being reopened?</label>
+                    <QuickNotes options={REOPEN_NOTES} value={reopenReason} onChange={setReopenReason} />
                     <textarea
                       id="reopen-reason"
                       className="field-input mt-2 min-h-16 resize-y"

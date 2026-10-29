@@ -162,48 +162,6 @@ router.get("/graph", async (c) => {
   }
 });
 
-router.get("/reports/brief", async (c) => {
-  try {
-    const query = parse(c, z.object({ hours: hoursSchema.default(72) }), c.req.query());
-    if (isResponse(query)) return query;
-    const hours = query.hours;
-    const organizationId = primaryOrgId(currentUser(c));
-    const [alerts, entities, analytics] = await Promise.all([
-      db.listOsintAlerts({ status: "all", limit: 50, organizationId }),
-      db.listOsintEntities({ limit: 25 }),
-      db.getAdvancedSourceAnalytics(),
-    ]);
-    const recentAlerts = alerts.filter((alert: any) => {
-      const matched = new Date(alert.matched_at).getTime();
-      return Number.isFinite(matched) && Date.now() - matched <= hours * 3600000;
-    });
-    const markdown = [
-      `# OSINT Intelligence Brief`,
-      "",
-      `Window: last ${hours} hours`,
-      `Generated: ${new Date().toISOString()}`,
-      "",
-      "## Alert Summary",
-      recentAlerts.length
-        ? recentAlerts.map((alert: any) => `- ${alert.watchlist_name || "Watchlist"} (${alert.score || 0}%): ${alert.title || "Untitled"} - ${alert.reason || ""}`).join("\n")
-        : "No watchlist alerts in this window.",
-      "",
-      "## Top Entities",
-      entities.length
-        ? entities.map((entity: any) => `- ${entity.value} (${entity.entity_type}) - ${entity.mentions} mention(s)`).join("\n")
-        : "No extracted entities.",
-      "",
-      "## Source Reliability",
-      analytics.sources.slice(0, 15).map((source: any) =>
-        `- ${source.source} (${source.source_type}): reliability ${source.reliability_index}%, useful ${source.useful_rate}%, rejected ${source.rejection_rate}%`,
-      ).join("\n") || "No source analytics available.",
-    ].join("\n");
-    return c.json({ markdown, alerts: recentAlerts, entities, analytics });
-  } catch (error) {
-    return c.json(jsonError(error), 500);
-  }
-});
-
 router.post("/sources", async (c) => {
   const denied = requireAnalyst(c);
   if (denied) return denied;

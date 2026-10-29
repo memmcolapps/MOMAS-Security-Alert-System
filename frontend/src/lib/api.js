@@ -382,14 +382,6 @@ export function getOsintSourceAnalytics() {
   return request("/api/osint/analytics/sources");
 }
 
-export function getOsintBrief(params = {}) {
-  const query = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== "") query.set(key, value);
-  });
-  return request(`/api/osint/reports/brief?${query}`);
-}
-
 export function reverseGeocode(lat, lon) {
   const query = new URLSearchParams({ lat, lon });
   return request(`/api/incidents/reverse-geocode?${query}`);
