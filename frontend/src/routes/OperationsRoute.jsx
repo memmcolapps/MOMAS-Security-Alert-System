@@ -21,6 +21,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OperationsMap, devicePopup, dronePopup, incidentPopup, sosPopup } from "../components/OperationsMap";
 import { FloatingRadioCard } from "../components/RadioConsole";
 import { TrackingStrip } from "../components/TrackingStrip";
+import { RadioFleetPanel } from "../components/RadioFleetPanel";
+import { MapKey } from "../components/MapKey";
+import { ReplayPanel, replayRange } from "../components/ReplayPanel";
+import { buildReplay } from "../lib/radio-replay";
 import { useSosAlarm } from "../components/SosAlarm";
 import { useFollow } from "../lib/follow-session";
 import { useRadioTracks } from "../lib/radio-tracks";
@@ -33,6 +37,8 @@ import {
   getLocations,
   getMe,
   getRadioTrack,
+  getRadioReplay,
+  getRadioCoverage,
   RADIO_POLL_MS,
   listAlarms,
   listGeofences,
@@ -69,10 +75,28 @@ const LAYER_LABELS = {
   devices: "Devices",
   drones: "Drones",
   fences: "Geofences",
+  coverage: "Coverage",
 };
+
+const COVERAGE_HOURS = ["1", "4", "12", "24"];
 
 // Stable, so an idle map is not handed a "new" empty trail on every render.
 const EMPTY_TRAIL = [];
+
+function LiveMonitoring({ stats, total }) {
+  return (
+    <>
+      <div className="inline-flex items-center gap-1 rounded border border-ops-red bg-red-500/10 px-1.5 py-0.5 text-[8px] font-bold tracking-widest text-ops-red">
+        <span className="live-dot" /> LIVE MONITORING
+      </div>
+      <div className="mt-1 text-[9px] tracking-wide text-neutral-500">
+        <span className="font-bold text-ops-red">{stats.critical}</span> CRITICAL ·{" "}
+        <span className="font-bold text-ops-red">{total}</span> TOTAL ·{" "}
+        <span className="font-bold text-orange-400">{stats.killed}</span> KILLED
+      </div>
+    </>
+  );
+}
 
 function iconForType(type) {
   return typeIcons[type] || "fa-circle-exclamation";
@@ -133,6 +157,30 @@ function usePersistentFlag(key, fallback) {
   return [value, update];
 }
 
+// Same idea for a choice between a few values, such as the basemap.
+function usePersistentChoice(key, fallback, allowed) {
+  const [value, setValue] = useState(() => {
+    try {
+      const stored = window.localStorage.getItem(key);
+      return stored && allowed.includes(stored) ? stored : fallback;
+    } catch {
+      return fallback;
+    }
+  });
+  const update = useCallback(
+    (next) => {
+      setValue(next);
+      try {
+        window.localStorage.setItem(key, next);
+      } catch {
+        // A browser refusing storage still honours the change this session.
+      }
+    },
+    [key],
+  );
+  return [value, update];
+}
+
 export function OperationsRoute() {
   const queryClient = useQueryClient();
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
@@ -150,8 +198,15 @@ export function OperationsRoute() {
   // them again all shift.
   const [panelOpen, setPanelOpen] = usePersistentFlag("momas_ops_feed_open", false);
   const [statsMinimized, setStatsMinimized] = usePersistentFlag("momas_ops_stats_min", true);
-  const [basemap, setBasemap] = useState("satellite");
-  const [activeLayers, setActiveLayers] = useState({ live: true, heat: false, devices: true, drones: true, fences: true });
+  const [basemap, setBasemap] = usePersistentChoice("momas_ops_basemap", "satellite", ["satellite", "streets", "grey"]);
+  const [radioFilter, setRadioFilter] = usePersistentChoice("momas_ops_radio_filter", "all", ["all", "moving", "online", "nofix", "offline", "nopos"]);
+  const [fleetOpen, setFleetOpen] = usePersistentFlag("momas_ops_fleet_open", false);
+  const [keyOpen, setKeyOpen] = usePersistentFlag("momas_ops_key_open", false);
+  // What each radio is doing, as the map works it out - for the counts bar and
+  // the fleet list, which must agree with the pins exactly.
+  const [radioStatuses, setRadioStatuses] = useState({});
+  const [activeLayers, setActiveLayers] = useState({ live: true, heat: false, devices: true, drones: true, fences: true, coverage: false });
+  const [coverageHours, setCoverageHours] = usePersistentChoice("momas_ops_coverage_hours", "4", COVERAGE_HOURS);
   const [openRadios, setOpenRadios] = useState([]);
   const { target: followTarget, position: followPosition } = useFollow();
   const sosAlarm = useSosAlarm();
@@ -200,8 +255,36 @@ export function OperationsRoute() {
   const trackRadio = useCallback((deviceId) => {
     if (!deviceId) return;
     setLiveMode(false);
+    setReplay(null);
     setTracking({ deviceId: String(deviceId), paused: false });
   }, []);
+
+  // Replaying a radio's shift. The window is fixed when it is picked, so a
+  // replay of "the last hour" does not slide while someone is watching it.
+  const [replay, setReplay] = useState(null);
+  const [replayTime, setReplayTime] = useState(null);
+  const replayQuery = useQuery({
+    queryKey: ["radio-replay", replay?.deviceId, replay?.from, replay?.to],
+    queryFn: () => getRadioReplay(replay.deviceId, replay.from, replay.to),
+    enabled: Boolean(replay),
+    staleTime: Infinity,
+  });
+  const replayData = useMemo(
+    () => (replay && replayQuery.data ? buildReplay(replayQuery.data.points) : null),
+    [replay, replayQuery.data],
+  );
+  const startReplay = useCallback((deviceId) => {
+    setLiveMode(false);
+    setTracking(null);
+    setTrackedMotion(null);
+    setReplay({ deviceId: String(deviceId), choice: "1h", ...replayRange("1h") });
+  }, []);
+  const coverageQuery = useQuery({
+    queryKey: ["radio-coverage", coverageHours],
+    queryFn: () => getRadioCoverage(Number(coverageHours)),
+    enabled: Boolean(activeLayers.coverage),
+    refetchInterval: 60_000,
+  });
   const stopTracking = useCallback(() => {
     setTracking(null);
     setTrackedMotion(null);
@@ -526,10 +609,29 @@ export function OperationsRoute() {
         trackPaused={Boolean(tracking?.paused)}
         trail={trackQuery.data?.points || EMPTY_TRAIL}
         radioTracks={radioTracks}
+        radioFilter={radioFilter}
+        onRadioStatuses={setRadioStatuses}
+        replay={replayData}
+        replayTime={replayTime}
+        coverage={activeLayers.coverage ? coverageQuery.data : null}
         onTrackRadio={trackRadio}
         onTrackPause={pauseTracking}
         onTrackedMotion={reportTrackedMotion}
       />
+
+      {replay ? (
+        <ReplayPanel
+          device={deviceRegistry.get(replay.deviceId) || { device_id: replay.deviceId }}
+          choice={replay.choice}
+          onChoice={(choice) => setReplay((current) => ({ ...current, choice, ...replayRange(choice) }))}
+          replay={replayData}
+          loading={replayQuery.isLoading}
+          error={replayQuery.error?.message}
+          time={replayTime}
+          onTime={setReplayTime}
+          onClose={() => setReplay(null)}
+        />
+      ) : null}
 
       {tracking ? (
         <TrackingStrip
@@ -540,6 +642,7 @@ export function OperationsRoute() {
           trailMinutes={TRAIL_MINUTES}
           onRecentre={resumeTracking}
           onStop={stopTracking}
+          onReplay={() => startReplay(trackedRadioId)}
         />
       ) : null}
 
@@ -563,6 +666,7 @@ export function OperationsRoute() {
             }
             tracking={trackedRadioId === card.deviceId}
             onTrack={() => (trackedRadioId === card.deviceId ? stopTracking() : trackRadio(card.deviceId))}
+            onReplay={() => startReplay(card.deviceId)}
           />
         );
       })}
@@ -592,42 +696,32 @@ export function OperationsRoute() {
         </section>
       ) : null}
 
-      <section className="glass-panel absolute left-16 top-16 z-[1000] max-w-[260px] rounded-md px-3 py-2">
-        <div className="inline-flex items-center gap-1 rounded border border-ops-red bg-red-500/10 px-1.5 py-0.5 text-[8px] font-bold tracking-widest text-ops-red">
-          <span className="live-dot" /> LIVE MONITORING
-        </div>
-        <div className="mt-1 text-[9px] tracking-wide text-neutral-500">
-          <span className="font-bold text-ops-red">{stats.critical}</span> CRITICAL ·{" "}
-          <span className="font-bold text-ops-red">{incidents.length}</span> TOTAL ·{" "}
-          <span className="font-bold text-orange-400">{stats.killed}</span> KILLED
-        </div>
-      </section>
+      {activeLayers.devices ? (
+        <RadioFleetPanel
+          devices={devices}
+          statuses={radioStatuses}
+          filter={radioFilter}
+          onFilter={setRadioFilter}
+          trackedId={trackedRadioId}
+          onTrack={trackRadio}
+          onOpen={openRadioCard}
+          open={fleetOpen}
+          onToggle={() => setFleetOpen((value) => !value)}
+          header={<LiveMonitoring stats={stats} total={incidents.length} />}
+        />
+      ) : (
+        <section className="glass-panel absolute left-16 top-[calc(var(--ops-chrome)+0.75rem)] z-[1000] rounded-md px-3 py-2">
+          <LiveMonitoring stats={stats} total={incidents.length} />
+        </section>
+      )}
 
-      <section
-        className={`glass-panel absolute top-16 z-[1000] hidden max-w-[210px] rounded-lg p-3 text-[10px] lg:block ${
-          panelOpen ? "right-[400px]" : "right-5"
-        }`}
-      >
-        <h2 className="mb-2 text-xs font-bold text-ops-red">Alert Key</h2>
-        {Object.entries(severityLabels).map(([key, label]) => (
-          <div className="my-1 flex items-center gap-2 text-neutral-400" key={key}>
-            <span className="h-2.5 w-2.5 rounded-full" style={{ background: severityColors[key] }} />
-            <span className="rounded bg-white/5 px-1 text-[9px] font-bold" style={{ color: severityColors[key] }}>
-              {label}
-            </span>
-            {key === "RED" ? "Critical" : key === "ORANGE" ? "Serious" : key === "YELLOW" ? "Moderate" : "Low"}
-          </div>
-        ))}
-        <div className="mt-3 border-t border-white/10 pt-2">
-          <div className="mb-1 text-[9px] uppercase tracking-wide text-neutral-600">Devices</div>
-          <div className="flex items-center gap-2 text-neutral-400">
-            <Radio size={12} className="text-ops-green" /> Reporting
-          </div>
-          <div className="flex items-center gap-2 text-neutral-400">
-            <Siren size={12} className="text-ops-red" /> SOS alarm
-          </div>
-        </div>
-      </section>
+      <MapKey
+        basemap={basemap}
+        onBasemap={setBasemap}
+        open={keyOpen}
+        onToggle={() => setKeyOpen((value) => !value)}
+        className={`absolute top-[calc(var(--ops-chrome)+0.75rem)] hidden lg:block ${panelOpen ? "right-[400px]" : "right-5"}`}
+      />
 
       <aside
         className={`glass-panel absolute right-0 top-[var(--ops-chrome)] z-[1000] flex h-[calc(100vh-var(--ops-chrome))] w-[380px] max-w-[calc(100vw-32px)] flex-col border-r-0 transition-transform ${
@@ -813,7 +907,7 @@ export function OperationsRoute() {
             <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5">
               <span className="text-[9px] font-bold uppercase tracking-wide text-neutral-600">Basemap</span>
               <select className="rounded border border-ops-line bg-white/5 px-2 py-1 text-[10px]" value={basemap} onChange={(event) => setBasemap(event.target.value)}>
-                <option value="dark">Dark</option>
+                <option value="grey">Grey</option>
                 <option value="streets">Streets</option>
                 <option value="satellite">Satellite</option>
               </select>
@@ -822,6 +916,20 @@ export function OperationsRoute() {
                   {LAYER_LABELS[key]}
                 </button>
               ))}
+              {activeLayers.coverage ? (
+                <select
+                  className="rounded border border-ops-line bg-white/5 px-2 py-1 text-[10px]"
+                  value={coverageHours}
+                  onChange={(event) => setCoverageHours(event.target.value)}
+                  title="How far back coverage looks"
+                >
+                  {COVERAGE_HOURS.map((hours) => (
+                    <option key={hours} value={hours}>
+                      Last {hours} h
+                    </option>
+                  ))}
+                </select>
+              ) : null}
               <button
                 className="rounded border border-ops-line bg-red-500/10 px-2 py-1 text-[10px] font-bold text-ops-red hover:bg-red-500/20 disabled:opacity-50"
                 onClick={liveMode ? stopLiveMode : startLiveMode}

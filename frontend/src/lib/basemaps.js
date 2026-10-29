@@ -58,3 +58,39 @@ export const IMAGERY_LABEL_TILES = {
 
 /** Basemaps that draw no place names of their own and need the overlay. */
 export const LABELLED_BASEMAPS = new Set(["satellite"]);
+
+/**
+ * Vector basemaps, drawn in the browser by MapLibre from OpenFreeMap's
+ * OpenStreetMap tiles: free, keyless, and sharp at every zoom - including the
+ * close-in zooms where the raster canvases above run out and blur. Building
+ * outlines and street names stay crisp at street level, which is where radios
+ * are worked.
+ */
+const OPENFREEMAP = "https://tiles.openfreemap.org/styles";
+const OSM_ATTRIBUTION =
+  '<a href="https://openfreemap.org" target="_blank" rel="noreferrer">OpenFreeMap</a> &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a>';
+
+export const VECTOR_STYLES = {
+  streets: `${OPENFREEMAP}/liberty`,
+  // Light grey with every building outlined: the pins carry the colour. The
+  // dark style was tried first and was too dark to make out buildings.
+  grey: `${OPENFREEMAP}/positron`,
+};
+
+/**
+ * A Leaflet layer that draws one of VECTOR_STYLES. MapLibre is large, so it is
+ * fetched only the first time someone picks a vector basemap, not on every
+ * load of the satellite map most people use.
+ */
+export async function vectorBasemapLayer(L, key) {
+  const [{ maplibreGL }] = await Promise.all([
+    import("@maplibre/maplibre-gl-leaflet"),
+    import("maplibre-gl/dist/maplibre-gl.css"),
+  ]);
+  return maplibreGL({
+    style: VECTOR_STYLES[key],
+    attribution: OSM_ATTRIBUTION,
+    // Leaflet owns zoom and panning; MapLibre only paints underneath.
+    interactive: false,
+  });
+}

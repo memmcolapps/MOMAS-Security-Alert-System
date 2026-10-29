@@ -502,6 +502,17 @@ export function getRadioTrack(uid, minutes = 30) {
   return request(`/api/pocstars/locations/${encodeURIComponent(uid)}/track?minutes=${minutes}`);
 }
 
+// One radio's points between two moments (epoch ms), for replaying its shift.
+export function getRadioReplay(uid, from, to) {
+  const query = new URLSearchParams({ from: new Date(from).toISOString(), to: new Date(to).toISOString() });
+  return request(`/api/pocstars/locations/${encodeURIComponent(uid)}/replay?${query}`);
+}
+
+// Where radios have been in the last `hours`, as grid squares.
+export function getRadioCoverage(hours = 4) {
+  return request(`/api/pocstars/positions/coverage?hours=${hours}`);
+}
+
 // Every GPS point radios sent in the last `seconds`, for a map that has just
 // opened (or reconnected) to start playing from.
 export function getRecentRadioPoints(seconds = 120) {

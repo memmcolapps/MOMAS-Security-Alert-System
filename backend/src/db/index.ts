@@ -201,6 +201,7 @@ async function init() {
       PRIMARY KEY (device_id, observed_at)
     );
     CREATE INDEX IF NOT EXISTS idx_radio_positions_received ON radio_positions(received_at);
+    CREATE INDEX IF NOT EXISTS idx_radio_positions_observed ON radio_positions(observed_at);
 
     CREATE TABLE IF NOT EXISTS organizations (
       id          SERIAL PRIMARY KEY,
@@ -4082,6 +4083,38 @@ async function listRadioTrack(deviceId, since) {
   return rows;
 }
 
+/** One radio's fixes taken between two moments, for replaying a shift. */
+async function listRadioTrackBetween(deviceId, from, to) {
+  const { rows } = await pool.query(
+    `SELECT lat, lon, observed_at
+       FROM radio_positions
+      WHERE device_id = $1 AND observed_at >= $2 AND observed_at <= $3
+      ORDER BY observed_at ASC
+      LIMIT 25000`,
+    [deviceId, from, to],
+  );
+  return rows;
+}
+
+/**
+ * Where radios have been: fixes since a moment, binned into a grid of roughly
+ * cellM-metre squares, with when each square was last visited and by how many
+ * radios. deviceIds null means every radio.
+ */
+async function radioCoverage(deviceIds, since, cellDeg) {
+  const { rows } = await pool.query(
+    `SELECT floor(lat / $3)::bigint AS gy, floor(lon / $3)::bigint AS gx,
+            count(*)::int AS fixes, count(DISTINCT device_id)::int AS radios,
+            max(observed_at) AS last_at
+       FROM radio_positions
+      WHERE observed_at >= $1 AND ($2::text[] IS NULL OR device_id = ANY($2::text[]))
+      GROUP BY 1, 2
+      LIMIT 20000`,
+    [since, deviceIds, cellDeg],
+  );
+  return rows;
+}
+
 /** Recent fixes for many radios at once, so a map that opens can start playing. */
 async function listRecentRadioPoints(deviceIds, since) {
   const { rows } = await pool.query(
@@ -4916,6 +4949,8 @@ export {
   latestRadioPositions,
   listRadioTrack,
   listRecentRadioPoints,
+  listRadioTrackBetween,
+  radioCoverage,
   pruneRadioPositions,
   getUserByEmail,
   getUserById,

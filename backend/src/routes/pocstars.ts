@@ -1072,6 +1072,63 @@ router.get("/positions/stream", async (c) => {
   });
 });
 
+// Replay: one radio's points between two moments, at most a day at a time.
+const REPLAY_MAX_MS = 24 * 3600_000;
+
+router.get("/locations/:uid/replay", async (c) => {
+  const uid = c.req.param("uid");
+  if (!(await ensureDeviceAccess(c, [uid]))) {
+    return c.json({ error: "That device is outside your operational scope." }, 403);
+  }
+  const to = new Date(c.req.query("to") || Date.now());
+  const from = new Date(c.req.query("from") || to.getTime() - 3600_000);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to) {
+    return c.json({ error: "from and to must be times, from before to." }, 400);
+  }
+  if (to.getTime() - from.getTime() > REPLAY_MAX_MS) {
+    return c.json({ error: "Replay covers at most 24 hours at a time." }, 400);
+  }
+  try {
+    const rows = await db.listRadioTrackBetween(uid, from, to);
+    return c.json({
+      uid,
+      from: from.toISOString(),
+      to: to.toISOString(),
+      points: rows.map((row: any) => ({
+        lat: Number(row.lat),
+        lon: Number(row.lon),
+        t: new Date(row.observed_at).getTime(),
+      })),
+    });
+  } catch (error: any) {
+    return c.json({ error: "radio_replay_failed", message: error.message }, 500);
+  }
+});
+
+// Patrol coverage: where the radios this viewer can see have been in the last
+// few hours, as grid squares carrying when each was last visited.
+const COVERAGE_CELL_DEG = 0.0005; // about 55 m
+router.get("/positions/coverage", async (c) => {
+  const hours = Math.min(Math.max(Number(c.req.query("hours")) || 4, 1), 72);
+  try {
+    const visible = await visibleDeviceIds(c);
+    const rows = await db.radioCoverage(visible ? [...visible] : null, new Date(Date.now() - hours * 3600_000), COVERAGE_CELL_DEG);
+    return c.json({
+      hours,
+      cellDeg: COVERAGE_CELL_DEG,
+      cells: rows.map((row: any) => ({
+        lat: Number(row.gy) * COVERAGE_CELL_DEG,
+        lon: Number(row.gx) * COVERAGE_CELL_DEG,
+        fixes: row.fixes,
+        radios: row.radios,
+        lastAt: new Date(row.last_at).getTime(),
+      })),
+    });
+  } catch (error: any) {
+    return c.json({ error: "radio_coverage_failed", message: error.message }, 500);
+  }
+});
+
 const TRACK_MAX_MINUTES = 240;
 
 // The trail behind a tracked radio, from the fixes the position recorder kept.

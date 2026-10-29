@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Crosshair, GripHorizontal, MapPin, Mic, Phone, PhoneOff, Radio, Send, Volume2, X } from "lucide-react";
+import { Crosshair, GripHorizontal, History, MapPin, Mic, Phone, PhoneOff, Radio, Send, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { reverseGeocode, sendRadioMessage } from "../lib/api";
 import { useLiveRadioSession } from "../lib/live-radio-session";
@@ -46,7 +46,7 @@ export function radioChannelLabel(device) {
  * assumptions about its container - including its own message state, which is
  * what lets several of these be open at once without sharing a composer.
  */
-export function RadioConsole({ device, location, onShowOnMap, tracking = false, onTrack }) {
+export function RadioConsole({ device, location, onShowOnMap, tracking = false, onTrack, onReplay }) {
   const liveRadio = useLiveRadioSession();
   const [draft, setDraft] = useState("");
   const [sent, setSent] = useState([]);
@@ -145,6 +145,14 @@ export function RadioConsole({ device, location, onShowOnMap, tracking = false, 
                       onClick={onTrack}
                     >
                       <Crosshair size={11} /> {tracking ? "Stop tracking" : "Track"}
+                    </button>
+                  ) : null}
+                  {onReplay ? (
+                    <button
+                      className="inline-flex items-center gap-1 rounded border border-white/15 px-2 py-0.5 text-[10px] font-bold text-neutral-200 hover:border-violet-400 hover:text-violet-300"
+                      onClick={onReplay}
+                    >
+                      <History size={11} /> Replay
                     </button>
                   ) : null}
                   {onShowOnMap ? (
@@ -351,6 +359,7 @@ export function FloatingRadioCard({
   onShowOnMap,
   tracking,
   onTrack,
+  onReplay,
 }) {
   const cardRef = useRef(null);
   const dragRef = useRef(null);
@@ -448,6 +457,7 @@ export function FloatingRadioCard({
         onShowOnMap={onShowOnMap}
         tracking={tracking}
         onTrack={onTrack}
+        onReplay={onReplay}
       />
     </aside>
   );

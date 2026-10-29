@@ -1,4 +1,4 @@
-import { Crosshair, LocateFixed, X } from "lucide-react";
+import { Crosshair, History, LocateFixed, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { MOTION, compassFor, formatAge } from "../lib/radio-motion";
 
@@ -9,7 +9,7 @@ import { MOTION, compassFor, formatAge } from "../lib/radio-motion";
  * still or a handset indoors that has stopped getting a fix, and only the age
  * tells those apart.
  */
-export function TrackingStrip({ device, location, motion, paused, trailMinutes, onRecentre, onStop }) {
+export function TrackingStrip({ device, location, motion, paused, trailMinutes, onRecentre, onStop, onReplay }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -55,6 +55,15 @@ export function TrackingStrip({ device, location, motion, paused, trailMinutes, 
         {motion?.behindSec ? ` · ~${motion.behindSec}s behind` : ""} · trail {trailMinutes} min
       </span>
       <div className="ml-auto flex items-center gap-1">
+        {onReplay ? (
+          <button
+            onClick={onReplay}
+            title="Replay where this radio has been"
+            className="inline-flex items-center gap-1 rounded border border-white/15 px-2 py-0.5 text-[10px] font-bold text-neutral-300 hover:border-violet-400 hover:text-violet-300"
+          >
+            <History size={12} /> Replay
+          </button>
+        ) : null}
         {paused ? (
           <button
             onClick={onRecentre}

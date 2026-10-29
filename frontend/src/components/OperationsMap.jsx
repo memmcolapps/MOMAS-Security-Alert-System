@@ -2,19 +2,27 @@ import L from "leaflet";
 import "leaflet.heat";
 import "leaflet.markercluster";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { DARK_TILES, IMAGERY_LABEL_TILES, LABELLED_BASEMAPS, SATELLITE_TILES } from "../lib/basemaps";
+import { IMAGERY_LABEL_TILES, LABELLED_BASEMAPS, SATELLITE_TILES, VECTOR_STYLES, vectorBasemapLayer } from "../lib/basemaps";
 import { deviceTypeGlyph, escapeHtml, severityColors, severityLabels, typeIcons } from "../lib/domain";
 import { MOTION, distanceMetres, fixAgeSec, fixFromLocation, formatAge, trailSegments } from "../lib/radio-motion";
 import { newestPoint, sampleTrack } from "../lib/radio-playback";
+import { replayPosition } from "../lib/radio-replay";
 
-// The radio fleet is mostly switched-off handsets at any hour, so the map
-// reads as a field of grey pins unless an operator can narrow it to the ones
-// that can actually answer a call - or to the ones that have gone quiet.
-const RADIO_FILTERS = [
-  { key: "all", label: "ALL", title: "Show every radio" },
-  { key: "online", label: "ONLINE", title: "Only radios the network is hearing from" },
-  { key: "offline", label: "OFFLINE", title: "Only radios that are offline" },
-];
+// What a radio is doing, in the order an operator cares about it. One status
+// per radio drives its pin, the counts bar and the fleet list alike.
+export const RADIO_STATUSES = ["sos", "moving", "online", "nofix", "offline"];
+
+// Which statuses each counts-bar filter shows. "online" means the network can
+// reach the radio, so it takes in the moving and no-fix ones too.
+const FILTER_SHOWS = {
+  all: null,
+  moving: new Set(["moving"]),
+  online: new Set(["moving", "online", "nofix"]),
+  nofix: new Set(["nofix"]),
+  offline: new Set(["offline"]),
+  // Radios with no position are not on the map; this filter shows the list.
+  nopos: new Set(),
+};
 
 const NIGERIA_BOUNDS = L.latLngBounds([4.3, 2.7], [13.9, 14.7]);
 const NIGERIA_CENTER = [9.0, 8.5];
@@ -121,12 +129,16 @@ function assetClusterIcon(kind, glyph) {
   return (cluster) => {
     const count = cluster.getChildCount();
     const size = count < 10 ? 34 : count < 50 ? 40 : 46;
-    const offline = cluster.getAllChildMarkers().every((marker) => marker.options.assetOffline);
+    const children = cluster.getAllChildMarkers();
+    const live = children.filter((marker) => !marker.options.assetOffline).length;
+    // "14 · 3 on": how many are here, and how many of them can answer.
+    const onCount = live && live < count ? `<span class="asset-cluster-live">${live} on</span>` : "";
     return L.divIcon({
       className: "",
-      html: `<div class="asset-cluster ${kind}${offline ? " offline" : ""}" style="width:${size}px;height:${size}px">
+      html: `<div class="asset-cluster ${kind}${live ? "" : " offline"}" style="width:${size}px;height:${size}px">
                <span class="asset-cluster-glyph">${glyph}</span>
                <span class="asset-cluster-count">${count}</span>
+               ${onCount}
              </div>`,
       iconSize: [size, size],
       iconAnchor: [size / 2, size / 2],
@@ -134,33 +146,51 @@ function assetClusterIcon(kind, glyph) {
   };
 }
 
+// From this zoom in, a group is a stack of radios in one building rather than
+// a region: it only forms where pins would sit on top of each other, and
+// clicking it fans the radios out instead of zooming further.
+const STACK_ZOOM = 17;
+
 function assetClusterGroup(kind, glyph) {
-  return L.markerClusterGroup({
-    maxClusterRadius: 44,
+  const group = L.markerClusterGroup({
+    maxClusterRadius: (zoom) => (zoom >= STACK_ZOOM ? 22 : 44),
     showCoverageOnHover: false,
     spiderfyOnMaxZoom: true,
-    // Individual assets from here in. Operators zoom in to work a specific
-    // area, and at that point they need the pins and their labels, not a count.
-    disableClusteringAtZoom: 16,
+    zoomToBoundsOnClick: false,
     chunkedLoading: true,
     iconCreateFunction: assetClusterIcon(kind, glyph),
   });
+  group.on("clusterclick", (event) => {
+    const cluster = event.layer;
+    if (group._map && group._map.getZoom() >= STACK_ZOOM) cluster.spiderfy();
+    else cluster.zoomToBounds({ padding: [40, 40] });
+  });
+  return group;
 }
 
-// Once a fix is this old the pin says so in its label, not only in the tooltip.
-function radioIcon({ label, glyph, sos, offline, stale, moving, bearing, tracked, ageSec }) {
-  const tone = `${sos ? "sos" : ""} ${offline ? "offline" : ""} ${stale ? "stale" : ""}`;
+// A radio's pin, drawn from its status. Offline radios shrink to a dot: they
+// stay findable, but they are most of the fleet at any hour and should not
+// drown out the ones that can answer. Names show only where they earn the
+// space - moving, tracked, in alarm - and on hover everywhere else.
+function radioIcon({ label, glyph, status, bearing, tracked, ageSec }) {
+  if (status === "offline" && !tracked) {
+    return L.divIcon({ className: "", html: '<div class="device-dot"></div>', iconSize: [10, 10], iconAnchor: [5, 5] });
+  }
+  const sos = status === "sos";
   const heading =
-    moving && Number.isFinite(bearing)
+    status === "moving" && Number.isFinite(bearing)
       ? `<div class="device-heading" style="transform:rotate(${Math.round(bearing)}deg)"></div>`
       : "";
-  const age = stale ? ` · ${escapeHtml(formatAge(ageSec))}` : "";
+  const labelled = sos || tracked || status === "moving";
+  const age = status === "nofix" ? ` · ${escapeHtml(formatAge(ageSec))}` : "";
   return L.divIcon({
     className: "",
     // A vehicle tracker and a handheld should not look identical on a map.
     // An SOS keeps the alarm glyph whatever the device is - what it is
     // matters less than that it is shouting.
-    html: `${heading}<div class="device-pin ${tone} ${tracked ? "tracked" : ""}">${sos ? '<i class="fas fa-triangle-exclamation"></i>' : glyph}</div><div class="device-label ${tone}">${escapeHtml(label)}${age}</div>`,
+    html: `${heading}<div class="device-pin status-${status} ${tracked ? "tracked" : ""}">${sos ? '<i class="fas fa-triangle-exclamation"></i>' : glyph}</div>${
+      labelled ? `<div class="device-label status-${status}">${escapeHtml(label)}${age}</div>` : ""
+    }`,
     iconSize: [26, 42],
     iconAnchor: [13, 13],
   });
@@ -195,6 +225,11 @@ export function OperationsMap({
   trackPaused = false,
   trail = [],
   radioTracks = null,
+  radioFilter = "all",
+  onRadioStatuses,
+  replay = null,
+  replayTime = null,
+  coverage = null,
   onTrackRadio,
   onTrackPause,
   onTrackedMotion,
@@ -202,8 +237,6 @@ export function OperationsMap({
   const mapNode = useRef(null);
   const mapRef = useRef(null);
   const layersRef = useRef({});
-  const radioFilterRef = useRef(null);
-  const [radioFilter, setRadioFilter] = useState("all");
   // One entry per radio on the map, kept across refreshes so a pin can move
   // rather than be torn down and redrawn: { marker, fix, motion, layer, ... }.
   const radiosRef = useRef(new Map());
@@ -211,7 +244,9 @@ export function OperationsMap({
   const trackRef = useRef({ id: null, paused: false, lastCheck: 0 });
   const callbacksRef = useRef({});
   const trailRef = useRef(trail);
-  callbacksRef.current = { onRadioSelect, onTrackRadio, onTrackPause, onTrackedMotion };
+  callbacksRef.current = { onRadioSelect, onTrackRadio, onTrackPause, onTrackedMotion, onRadioStatuses };
+  const filterRef = useRef(radioFilter);
+  filterRef.current = radioFilter;
   trackRef.current.id = trackedRadioId;
   trackRef.current.paused = trackPaused;
   trailRef.current = trail;
@@ -226,13 +261,8 @@ export function OperationsMap({
       maxZoom: 21,
     }).setView(NIGERIA_CENTER, 6);
 
+    // Vector basemaps are created on first use (see the basemap effect).
     const baseLayers = {
-      dark: L.tileLayer(DARK_TILES.url, DARK_TILES.options),
-      streets: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "&copy; OpenStreetMap",
-        maxZoom: 21,
-        maxNativeZoom: 19,
-      }),
       satellite: L.tileLayer(SATELLITE_TILES.url, SATELLITE_TILES.options),
     };
     const labelLayer = L.tileLayer(IMAGERY_LABEL_TILES.url, IMAGERY_LABEL_TILES.options);
@@ -253,6 +283,10 @@ export function OperationsMap({
     const deviceMovingLayer = L.layerGroup();
     const deviceLayer = L.layerGroup([deviceClusterLayer, deviceAlertLayer, deviceMovingLayer]);
     const trailLayer = L.layerGroup();
+    const replayLayer = L.layerGroup();
+    // Coverage can be thousands of squares; canvas keeps that cheap.
+    const coverageLayer = L.layerGroup();
+    const coverageRenderer = L.canvas({ padding: 0.3 });
     const sosLayer = L.layerGroup();
     const droneLayer = assetClusterGroup("drone", DRONE_SVG);
     const geofenceLayer = L.layerGroup();
@@ -262,8 +296,10 @@ export function OperationsMap({
     labelLayer.addTo(map);
     incidentLayer.addTo(map);
     geofenceLayer.addTo(map);
+    coverageLayer.addTo(map);
     followLayer.addTo(map);
     trailLayer.addTo(map);
+    replayLayer.addTo(map);
     deviceLayer.addTo(map);
     droneLayer.addTo(map);
     sosLayer.addTo(map);
@@ -287,27 +323,6 @@ export function OperationsMap({
     });
     map.addControl(new recenter());
 
-    const radioFilterControl = L.Control.extend({
-      options: { position: "topleft" },
-      onAdd() {
-        const container = L.DomUtil.create("div", "leaflet-bar map-filter-bar");
-        for (const option of RADIO_FILTERS) {
-          const button = L.DomUtil.create("button", "map-utility-btn map-filter-btn", container);
-          button.type = "button";
-          button.textContent = option.label;
-          button.title = option.title;
-          button.dataset.filter = option.key;
-          L.DomEvent.on(button, "click", (event) => {
-            L.DomEvent.stop(event);
-            setRadioFilter(option.key);
-          });
-        }
-        L.DomEvent.disableClickPropagation(container);
-        radioFilterRef.current = container;
-        return container;
-      },
-    });
-    map.addControl(new radioFilterControl());
 
     layersRef.current = {
       baseLayers,
@@ -320,6 +335,9 @@ export function OperationsMap({
       deviceAlertLayer,
       deviceMovingLayer,
       trailLayer,
+      replayLayer,
+      coverageLayer,
+      coverageRenderer,
       sosLayer,
       droneLayer,
       geofenceLayer,
@@ -367,21 +385,40 @@ export function OperationsMap({
     const map = mapRef.current;
     const layers = layersRef.current;
     if (!map || !layers.baseLayers) return;
+    let cancelled = false;
     // Resolved once, so an unknown key falls back to satellite *and* its labels
     // rather than landing on bare imagery with nothing named on it.
-    const key = layers.baseLayers[basemap] ? basemap : "satellite";
-    const next = layers.baseLayers[key];
-    if (layers.activeBase !== next) {
-      if (layers.activeBase) map.removeLayer(layers.activeBase);
-      next.addTo(map);
-      layers.activeBase = next;
-      next.bringToBack();
+    const key = basemap in VECTOR_STYLES || basemap === "satellite" ? basemap : "satellite";
+    const show = (next) => {
+      if (cancelled || mapRef.current !== map) return;
+      if (layers.activeBase !== next) {
+        if (layers.activeBase) map.removeLayer(layers.activeBase);
+        next.addTo(map);
+        layers.activeBase = next;
+        next.bringToBack?.();
+      }
+      // Labels ride above the imagery but stay inside the tile pane, so every
+      // marker, cluster and fence still draws over them.
+      const wantsLabels = LABELLED_BASEMAPS.has(key);
+      if (wantsLabels && !map.hasLayer(layers.labelLayer)) layers.labelLayer.addTo(map);
+      else if (!wantsLabels && map.hasLayer(layers.labelLayer)) map.removeLayer(layers.labelLayer);
+    };
+    if (layers.baseLayers[key]) show(layers.baseLayers[key]);
+    else {
+      vectorBasemapLayer(L, key)
+        .then((layer) => {
+          layers.baseLayers[key] = layer;
+          show(layer);
+        })
+        // No WebGL, or the tile service is unreachable: stay on imagery.
+        .catch((error) => {
+          console.warn("[Map] vector basemap unavailable:", error);
+          show(layers.baseLayers.satellite);
+        });
     }
-    // Labels ride above the imagery but stay inside the tile pane, so every
-    // marker, cluster and fence still draws over them.
-    const wantsLabels = LABELLED_BASEMAPS.has(key);
-    if (wantsLabels && !map.hasLayer(layers.labelLayer)) layers.labelLayer.addTo(map);
-    else if (!wantsLabels && map.hasLayer(layers.labelLayer)) map.removeLayer(layers.labelLayer);
+    return () => {
+      cancelled = true;
+    };
   }, [basemap]);
 
   useEffect(() => {
@@ -460,34 +497,50 @@ export function OperationsMap({
     // newest batch actually arrived.
     const ageSec = track?.lastArrivalMs ? Math.round((now - track.lastArrivalMs) / 1000) : fixAgeSec(entry.fix, now);
     const stale = !entry.sos && !entry.offline && ageSec != null && ageSec > MOTION.staleSec;
-    const moving = Boolean(entry.motion?.moving) && !stale;
+    const status = entry.sos
+      ? "sos"
+      : entry.offline
+        ? "offline"
+        : stale
+          ? "nofix"
+          : entry.motion?.moving
+            ? "moving"
+            : "online";
     const bearing = entry.motion?.bearing;
-    const iconKey = [entry.label, entry.glyph, entry.sos, entry.offline, stale, moving, moving ? Math.round(bearing / 5) : "", tracked, stale ? formatAge(ageSec) : ""].join("|");
+    const iconKey = [entry.label, entry.glyph, status, status === "moving" ? Math.round(bearing / 5) : "", tracked, status === "nofix" ? formatAge(ageSec) : ""].join("|");
     if (iconKey !== entry.iconKey) {
-      entry.marker.setIcon(
-        radioIcon({ label: entry.label, glyph: entry.glyph, sos: entry.sos, offline: entry.offline, stale, moving, bearing, tracked, ageSec }),
-      );
-      entry.marker.setZIndexOffset(entry.sos ? 1000 : tracked ? 900 : 0);
+      entry.marker.setIcon(radioIcon({ label: entry.label, glyph: entry.glyph, status, bearing, tracked, ageSec }));
+      entry.marker.setZIndexOffset(status === "sos" ? 1000 : tracked ? 900 : status === "moving" ? 500 : status === "offline" ? -500 : 0);
       entry.iconKey = iconKey;
     }
-    const tooltip = `${escapeHtml(entry.label)}${entry.offline ? " · offline" : ""}${stale ? ` · no new fix for ${escapeHtml(formatAge(ageSec))}` : ""}`;
+    const tooltip = `${escapeHtml(entry.label)}${status === "offline" ? " · offline" : ""}${status === "nofix" ? ` · no new fix for ${escapeHtml(formatAge(ageSec))}` : ""}`;
     if (tooltip !== entry.tooltip) {
       if (entry.marker.getTooltip()) entry.marker.setTooltipContent(tooltip);
-      else entry.marker.bindTooltip(tooltip, { direction: "top", offset: [0, -14], opacity: 0.95 });
+      else entry.marker.bindTooltip(tooltip, { direction: "top", offset: [0, -10], opacity: 0.95 });
       entry.tooltip = tooltip;
     }
+    // A stack in one building counts how many of its radios can answer.
+    if (entry.marker.options.assetOffline !== (status === "offline")) {
+      entry.marker.options.assetOffline = status === "offline";
+      if (entry.layer === "cluster") deviceClusterLayer.refreshClusters(entry.marker);
+    }
+    // An SOS is never filtered away, nor is the radio being tracked. Whichever
+    // slice the operator is looking at, those are the pins they came for.
+    const shows = FILTER_SHOWS[filterRef.current];
+    const hidden = !tracked && status !== "sos" && shows && !shows.has(status);
     // A radio in alarm never clusters - it would disappear into a count at the
     // exact moment someone needs to see where it is. Moving and tracked radios
     // stay out too: a marker sliding inside a cluster group is re-clustered on
     // every frame.
-    const want = entry.sos ? "alert" : tracked || moving ? "moving" : "cluster";
+    const want = hidden ? null : status === "sos" ? "alert" : tracked || status === "moving" ? "moving" : "cluster";
     if (entry.layer !== want) {
       if (entry.layer) layerFor[entry.layer].removeLayer(entry.marker);
-      layerFor[want].addLayer(entry.marker);
+      if (want) layerFor[want].addLayer(entry.marker);
       entry.layer = want;
     }
     entry.ageSec = ageSec;
     entry.stale = stale;
+    entry.status = status;
   }, [radioTracks]);
 
   // The trail behind the tracked radio, cut off where the pin is so it never
@@ -529,6 +582,8 @@ export function OperationsMap({
     let lastTrail = 0;
     let latestDot = null;
     let lastReport = "";
+    let lastStatusAt = 0;
+    let lastStatuses = "";
     const frame = () => {
       frameRef.current = window.requestAnimationFrame(frame);
       const map = mapRef.current;
@@ -595,6 +650,29 @@ export function OperationsMap({
         drawTrail(trackedState?.renderT ?? now, trackedState?.entry.marker.getLatLng());
       }
 
+      // The page's counts bar and fleet list, once a second at most and only
+      // when something they show has changed.
+      const reportStatuses = callbacksRef.current.onRadioStatuses;
+      if (reportStatuses && now - lastStatusAt >= 1000) {
+        lastStatusAt = now;
+        const statuses = {};
+        for (const [uid, entry] of radiosRef.current) {
+          if (!entry.status) continue;
+          const moving = entry.status === "moving";
+          statuses[uid] = {
+            status: entry.status,
+            speedMs: moving ? Math.round((entry.motion?.speedMs ?? 0) * 10) / 10 : 0,
+            bearing: moving && entry.motion?.bearing != null ? Math.round(entry.motion.bearing / 5) * 5 : null,
+            ageSec: entry.ageSec == null ? null : entry.ageSec < 60 ? Math.round(entry.ageSec / 5) * 5 : Math.round(entry.ageSec / 60) * 60,
+          };
+        }
+        const key = JSON.stringify(statuses);
+        if (key !== lastStatuses) {
+          lastStatuses = key;
+          reportStatuses(statuses);
+        }
+      }
+
       const report = callbacksRef.current.onTrackedMotion;
       if (report) {
         const { entry, track } = trackedState || {};
@@ -641,15 +719,9 @@ export function OperationsMap({
       if (!fix) continue;
       const sos = location.processStatus === 1;
       const row = registry.get(uid);
-      const tracked = uid === trackedRadioId;
-      // A radio the network is not hearing from goes grey, matching the
-      // tooltip. An SOS stays red whatever the handset's last check-in.
+      // A radio the network is not hearing from goes grey. An SOS stays red
+      // whatever the handset's last check-in.
       const offline = !sos && !row?.pocstars_online;
-      // An SOS is never filtered away, nor is the radio being tracked. Whichever
-      // slice the operator is looking at, those are the pins they came for.
-      if (!sos && !tracked) {
-        if ((radioFilter === "online" && offline) || (radioFilter === "offline" && !offline)) continue;
-      }
       seen.add(uid);
 
       let entry = radios.get(uid);
@@ -681,6 +753,101 @@ export function OperationsMap({
     }
   }, [devices, locations, radioFilter, trackedRadioId, refreshRadio]);
 
+  // Replay: the whole route faint, the part already travelled bright, a pin
+  // where the radio was at the replay time, and a ring at each stop sized by
+  // how long it stayed.
+  const replayRef = useRef({ marker: null, progress: null });
+  useEffect(() => {
+    const map = mapRef.current;
+    const { replayLayer } = layersRef.current;
+    if (!map || !replayLayer) return;
+    replayLayer.clearLayers();
+    replayRef.current = { marker: null, progress: null };
+    if (!replay?.path.length) return;
+    const pieces = [];
+    let piece = [];
+    for (const point of replay.path) {
+      if (point.jump && piece.length) {
+        pieces.push(piece);
+        piece = [];
+      }
+      piece.push([point.lat, point.lon]);
+    }
+    pieces.push(piece);
+    L.polyline(pieces, { color: "#a78bfa", weight: 3, opacity: 0.35, dashArray: "4 6", interactive: false }).addTo(replayLayer);
+    const time = (ms) => new Date(ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+    for (const stop of replay.stops) {
+      L.circleMarker([stop.lat, stop.lon], {
+        radius: Math.min(16, 6 + stop.durationSec / 300),
+        color: "#c4b5fd",
+        weight: 1.5,
+        fillColor: "#7c3aed",
+        fillOpacity: 0.25,
+      })
+        .bindTooltip(`Stopped ${Math.round(stop.durationSec / 60)} min · ${time(stop.from)}–${time(stop.to)}`, { direction: "top" })
+        .addTo(replayLayer);
+    }
+    replayRef.current.progress = L.polyline([], { color: "#c4b5fd", weight: 4, opacity: 0.95, interactive: false }).addTo(replayLayer);
+    replayRef.current.marker = L.marker([replay.path[0].lat, replay.path[0].lon], {
+      icon: L.divIcon({ className: "", html: '<div class="replay-pin"><div class="replay-heading"></div></div>', iconSize: [22, 22], iconAnchor: [11, 11] }),
+      zIndexOffset: 2000,
+      interactive: false,
+    }).addTo(replayLayer);
+    // Framed clear of the fleet panel on the left, the replay bar on top and
+    // the key on the right, so no part of the route starts out hidden.
+    map.fitBounds(L.latLngBounds(replay.path.map((point) => [point.lat, point.lon])), {
+      paddingTopLeft: [360, 180],
+      paddingBottomRight: [250, 60],
+      maxZoom: 18,
+    });
+  }, [replay]);
+
+  useEffect(() => {
+    const { marker, progress } = replayRef.current;
+    if (!replay?.path.length || !marker || replayTime == null) return;
+    const here = replayPosition(replay, replayTime);
+    if (!here) return;
+    marker.setLatLng([here.lat, here.lon]);
+    const heading = marker.getElement()?.querySelector(".replay-heading");
+    if (heading) {
+      heading.style.display = here.moving ? "block" : "none";
+      if (here.moving) heading.style.transform = `rotate(${Math.round(here.bearing)}deg)`;
+    }
+    const travelled = replay.path.filter((point) => point.t <= replayTime).map((point) => [point.lat, point.lon]);
+    travelled.push([here.lat, here.lon]);
+    progress.setLatLngs(travelled);
+  }, [replay, replayTime]);
+
+  // Patrol coverage: every square a radio passed through in the window, bright
+  // where the visit was recent and fading with time. The gaps are the point -
+  // they are the places nobody has been.
+  useEffect(() => {
+    const { coverageLayer, coverageRenderer } = layersRef.current;
+    if (!coverageLayer) return;
+    coverageLayer.clearLayers();
+    if (!coverage?.cells?.length) return;
+    const now = Date.now();
+    const span = coverage.hours * 3600_000;
+    const time = (ms) => new Date(ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+    for (const cell of coverage.cells) {
+      const recency = 1 - Math.min(1, (now - cell.lastAt) / span);
+      L.rectangle(
+        [
+          [cell.lat, cell.lon],
+          [cell.lat + coverage.cellDeg, cell.lon + coverage.cellDeg],
+        ],
+        {
+          renderer: coverageRenderer,
+          stroke: false,
+          fillColor: recency > 0.75 ? "#22c55e" : recency > 0.4 ? "#84cc16" : "#eab308",
+          fillOpacity: 0.12 + 0.4 * recency,
+        },
+      )
+        .bindTooltip(`Last visit ${time(cell.lastAt)} · ${cell.radios} radio${cell.radios === 1 ? "" : "s"}`, { sticky: true })
+        .addTo(coverageLayer);
+    }
+  }, [coverage]);
+
   // Starting to track, or "Re-centre", brings the radio into view at once.
   useEffect(() => {
     const map = mapRef.current;
@@ -691,18 +858,6 @@ export function OperationsMap({
     trackRef.current.lastCheck = Date.now() + 1300;
     map.flyTo(entry.marker.getLatLng(), Math.min(Math.max(map.getZoom(), TRACK_ZOOM_MIN), TRACK_ZOOM_MAX), { duration: 1.2 });
   }, [trackedRadioId, trackPaused]);
-
-  // The bar is only meaningful while radios are on the map, and its buttons
-  // have to show which slice is live - neither is something Leaflet's control
-  // knows, since it is built once outside React.
-  useEffect(() => {
-    const container = radioFilterRef.current;
-    if (!container) return;
-    container.classList.toggle("map-filter-bar-off", !activeLayers.devices);
-    for (const button of container.querySelectorAll("button")) {
-      button.classList.toggle("active", button.dataset.filter === radioFilter);
-    }
-  }, [radioFilter, activeLayers.devices]);
 
   useEffect(() => {
     const map = mapRef.current;
