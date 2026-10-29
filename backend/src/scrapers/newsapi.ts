@@ -1,6 +1,6 @@
 import axios from "axios";
 import { classifyMany } from "../classifier";
-import { geocode, extractState } from "../geocoder";
+import { extractState, geocode, locateReport } from "../geocoder";
 import { looksLikeSecurityIncident } from "../classifier/prefilter";
 import { buildFingerprint, fingerprintsMatch } from "../classifier/fingerprint";
 import * as db from "../db";
@@ -79,7 +79,15 @@ async function scrapeNewsAPI(daysBack = 2) {
   // 3. Skip already-stored articles (no wasted Groq calls)
   const knownIds = await db.existingExternalIds(prefiltered.map((c) => c.external_id));
   const processedIds = await db.existingProcessedSourceItemIds(prefiltered.map((c) => c.external_id));
-  const newItems = prefiltered.filter((c) => !knownIds.has(c.external_id) && !processedIds.has(c.external_id));
+  // The same article often came in already through the publisher's own RSS
+  // feed (Punch); classifying it again only makes a duplicate to review.
+  const seenElsewhere = await db.processedSourceUrls(prefiltered.map((c) => c.source_url));
+  const newItems = prefiltered.filter(
+    (c) =>
+      !knownIds.has(c.external_id) &&
+      !processedIds.has(c.external_id) &&
+      !seenElsewhere.has(db.articleUrl(c.source_url)),
+  );
 
   console.log(
     `[NewsAPI] ${raw.length} fetched → ${prefiltered.length} pass prefilter → ${newItems.length} new`,
@@ -107,8 +115,9 @@ async function scrapeNewsAPI(daysBack = 2) {
     if (!result.is_security_incident) continue;
 
     const fullText = `${item.title} ${item.description}`;
-    const geo = geocode(fullText) || geocode(item.title);
-    const state = geo?.state || extractState(fullText) || null;
+    // The classifier's own location first, as the other scrapers do; the
+    // article text only when it agrees with the state that location names.
+    const { geo, state } = locateReport({ locationText: result.location_text || "", fullText, title: item.title });
     const incidentDate = result.date || item.date;
 
     // Check for existing incident with matching fingerprint

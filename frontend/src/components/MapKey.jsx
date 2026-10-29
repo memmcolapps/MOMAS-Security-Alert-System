@@ -19,13 +19,25 @@ const RADIO_KEY = [
 ];
 
 /**
- * The basemap switch and the legend in one small corner control. Closed it is
- * a single row; the key opens only when someone wants to read it, instead of
- * permanently covering the pins in that corner.
+ * Everything about what the map shows, in one corner control: the basemap,
+ * which layers are on, and the key. The key opens only when someone wants to
+ * read it, instead of permanently covering the pins in that corner.
  */
-export function MapKey({ basemap, onBasemap, open, onToggle, className = "" }) {
+export function MapKey({
+  basemap,
+  onBasemap,
+  layers = {},
+  activeLayers = {},
+  onToggleLayer,
+  coverageHours,
+  coverageOptions = [],
+  onCoverageHours,
+  open,
+  onToggle,
+  className = "",
+}) {
   return (
-    <section className={`glass-panel z-[1000] w-[210px] rounded-md p-2 text-[10px] ${className}`}>
+    <section className={`glass-panel z-[1000] w-[230px] rounded-md p-2 text-[10px] ${className}`}>
       <div className="flex items-center gap-1">
         {BASEMAPS.map(([key, label]) => (
           <button
@@ -41,6 +53,33 @@ export function MapKey({ basemap, onBasemap, open, onToggle, className = "" }) {
         <button onClick={onToggle} className="rounded p-1 text-neutral-500 hover:text-neutral-100" title={open ? "Hide the key" : "Show the key"}>
           <Layers size={12} className="inline" /> {open ? <ChevronUp size={11} className="inline" /> : <ChevronDown size={11} className="inline" />}
         </button>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1 border-t border-white/10 pt-2">
+        {Object.entries(layers).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => onToggleLayer?.(key)}
+            className={`rounded border px-1.5 py-0.5 text-[10px] font-bold ${
+              activeLayers[key] ? "border-ops-red/70 bg-ops-red/20 text-red-200" : "border-white/10 text-neutral-500 hover:text-neutral-200"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+        {activeLayers.coverage && coverageOptions.length ? (
+          <select
+            className="rounded border border-white/10 bg-white/5 px-1 py-0.5 text-[10px]"
+            value={coverageHours}
+            onChange={(event) => onCoverageHours?.(event.target.value)}
+            title="How far back coverage looks"
+          >
+            {coverageOptions.map((hours) => (
+              <option key={hours} value={hours}>
+                Last {hours} h
+              </option>
+            ))}
+          </select>
+        ) : null}
       </div>
       {open ? (
         <div className="mt-2 space-y-2 border-t border-white/10 pt-2">

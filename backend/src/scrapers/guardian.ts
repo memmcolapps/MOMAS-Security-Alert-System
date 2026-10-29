@@ -1,6 +1,6 @@
 import axios from "axios";
 import { classifyMany } from "../classifier";
-import { geocode, extractState } from "../geocoder";
+import { extractState, geocode, locateReport } from "../geocoder";
 import { looksLikeSecurityIncident } from "../classifier/prefilter";
 import { buildFingerprint, fingerprintsMatch } from "../classifier/fingerprint";
 import * as db from "../db";
@@ -71,6 +71,13 @@ async function scrapeGuardian(daysBack = 2) {
       console.log(`[Guardian] "${query}": ${articles.length} articles`);
     } catch (err) {
       const msg = err.response?.data?.message || err.message;
+      // A rejected key fails every query the same way. Say so once, plainly,
+      // and stop, rather than logging six identical errors every run.
+      if (err.response?.status === 401 || /unauthori[sz]ed/i.test(msg)) {
+        console.warn('[Guardian] GUARDIAN_API_KEY was rejected — get a new key at open-platform.theguardian.com/access');
+        await db.logScrape({ source: 'guardian', status: 'error', items_found: 0, items_added: 0, error: 'API key rejected' });
+        break;
+      }
       console.warn(`[Guardian] Query failed ("${query}"): ${msg}`);
       await db.logScrape({ source: `guardian:${query.slice(0, 40)}`, status: 'error', items_found: 0, items_added: 0, error: msg });
       await delay(QUERY_DELAY_MS);
@@ -129,8 +136,9 @@ async function scrapeGuardian(daysBack = 2) {
       if (!result.is_security_incident) continue;
 
       const fullText = `${item.title} ${item.description}`;
-      const geo = geocode(fullText) || geocode(item.title);
-      const state = geo?.state || extractState(fullText) || null;
+      // The classifier's own location first, as the other scrapers do; the
+      // article text only when it agrees with the state that location names.
+      const { geo, state } = locateReport({ locationText: result.location_text || "", fullText, title: item.title });
       const incidentDate = result.date || item.date;
 
       // Check for existing incident with matching fingerprint

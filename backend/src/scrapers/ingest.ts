@@ -7,7 +7,7 @@ import {
   buildFingerprint,
   fingerprintsMatch,
 } from "../classifier/fingerprint";
-import { extractState, geocode } from "../geocoder";
+import { extractState, geocode, locateReport } from "../geocoder";
 import * as db from "../db";
 
 /**
@@ -27,6 +27,8 @@ async function persistIncident({
   published_at = null,
   approval_status = null,
   approved_by = null,
+  // Backfills only: judge the report as of this moment instead of now.
+  assessed_at = null,
 }) {
   const { type, fatalities, victims, severity } = result;
   const fullText = `${title} ${description}`;
@@ -34,13 +36,7 @@ async function persistIncident({
   // Prefer the classifier's extracted location; body text can contain
   // off-article place names that hijack first-match geocoding.
   const locText = result.location_text || "";
-  let geo = geocode(locText);
-  let state = geo?.state || extractState(locText) || null;
-  if (!geo) {
-    const fallback = geocode(fullText) || geocode(title);
-    if (fallback && (!state || fallback.state === state)) geo = fallback;
-    state = state || fallback?.state || extractState(fullText) || null;
-  }
+  const { geo, state } = locateReport({ locationText: locText, fullText, title });
 
   const fp = buildFingerprint({ date, state, type, title, description });
   const matches = await db.findMatchingIncidents({ date, state, type });
@@ -92,11 +88,15 @@ async function persistIncident({
     source_item_external_id: external_id.replace(/^osint:/, ""),
     approval_status,
     approved_by,
+    assessed_at,
   });
 
   if (!inserted) {
     return { status: "needs_review", incidentId: null };
   }
+  // Another outlet's report of this event was already an incident; this one
+  // was attached to it as more evidence.
+  if (inserted.linked) return { status: "merged", incidentId: inserted.id };
   return inserted
     ? { status: "inserted", incidentId: inserted.id }
     : { status: "skipped", incidentId: null };

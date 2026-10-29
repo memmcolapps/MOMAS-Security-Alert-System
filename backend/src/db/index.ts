@@ -14,9 +14,8 @@ import {
   scoreIncident,
   sourceFamily,
   sourceReliability,
-  locationAgreement,
 } from "../osint/confidence";
-import { buildFingerprint, fingerprintsMatch } from "../classifier/fingerprint";
+import { describeSameEvent, stateOf } from "../osint/corroboration";
 
 const pool = new Pool({
   connectionString:
@@ -111,6 +110,7 @@ async function init() {
     CREATE INDEX IF NOT EXISTS idx_source_items_status ON source_items(status);
     CREATE INDEX IF NOT EXISTS idx_source_items_source ON source_items(source_type, source);
     CREATE INDEX IF NOT EXISTS idx_source_items_published ON source_items(published_at);
+    CREATE INDEX IF NOT EXISTS idx_source_items_url ON source_items(source_url);
 
     CREATE TABLE IF NOT EXISTS sos_alerts (
       id           SERIAL PRIMARY KEY,
@@ -767,32 +767,30 @@ async function insertIncident(p) {
     ],
   );
 
-  const { rows: nearby } = await queryWithRetry(
-    `SELECT * FROM source_items
-      WHERE id <> $1
-        AND event_type = $2
-        AND event_date BETWEEN $3::DATE - INTERVAL '1 day' AND $3::DATE + INTERVAL '1 day'
-        AND (LOWER(event_state) = LOWER($4) OR ($4 = '' AND event_state IS NULL))
-        AND status NOT IN ('dismissed', 'non_incident')
-      ORDER BY created_at DESC
-      LIMIT 100`,
-    [sourceItem.id, p.type, p.date, p.state || ""],
-  );
-  const fingerprint = buildFingerprint(p);
-  const dbCorroborators = nearby.filter((item) =>
-    locationAgreement(p, item) && fingerprintsMatch(
-      fingerprint,
-      buildFingerprint({
-        date: item.event_date?.toISOString?.().slice(0, 10) || item.event_date,
-        state: item.event_state,
-        type: item.event_type,
-        title: item.title,
-        description: item.description,
-      }),
-    ),
-  );
+  // Reports of the same event from other outlets. The search is wide on
+  // purpose - the same state, a week either side - and describeSameEvent
+  // (osint/corroboration.ts) decides. A backfill passes assessed_at to judge a
+  // report as of when it arrived, with only the reports that existed then.
+  const assessedAt = p.assessed_at ? new Date(p.assessed_at) : new Date();
+  const eventState = stateOf(p);
+  const { rows: nearby } = eventState
+    ? await queryWithRetry(
+        `SELECT * FROM source_items
+          WHERE id <> $1
+            AND event_date BETWEEN COALESCE($2::DATE, $4::DATE) - INTERVAL '7 days'
+                               AND COALESCE($2::DATE, $4::DATE) + INTERVAL '7 days'
+            AND (LOWER(event_state) LIKE $3 || '%' OR COALESCE(event_state, '') = '')
+            AND status NOT IN ('dismissed', 'non_incident')
+            AND created_at <= $4
+          ORDER BY created_at DESC
+          LIMIT 200`,
+        [sourceItem.id, p.date || null, eventState, assessedAt],
+      )
+    : { rows: [] };
+  const candidate = { ...p, content_text: sourceItem.content_text };
+  const dbCorroborators = nearby.filter((item) => describeSameEvent(candidate, reportAsCandidate(item)));
   const corroborators = [
-    ...dbCorroborators,
+    ...dbCorroborators.map(reportAsCandidate),
     ...(Array.isArray(p.corroborating_sources) ? p.corroborating_sources : []),
   ];
   const assessment = assessIncidentCandidate({
@@ -800,8 +798,33 @@ async function insertIncident(p) {
     source_reliability: effectiveReliability,
     verification_status: verificationStatus,
     event_date_confirmed: eventDateConfirmed,
-  }, corroborators);
+  }, corroborators, assessedAt);
 
+  // The classifier's answer is kept with the report, so it can be published
+  // later without classifying it again - when a second outlet finally
+  // corroborates it, for instance.
+  const classification = {
+    external_id: p.external_id,
+    title: p.title,
+    description: p.description,
+    date: p.date,
+    location: p.location,
+    claimed_location: p.claimed_location || null,
+    state: p.state,
+    lat: p.lat,
+    lon: p.lon,
+    type: p.type,
+    severity: p.severity,
+    fatalities: p.fatalities,
+    victims: p.victims,
+    source: p.source,
+    source_url: p.source_url,
+    source_type: p.source_type,
+    published_at: p.published_at || null,
+    event_date_confirmed: eventDateConfirmed,
+    verification_status: verificationStatus,
+    source_reliability: effectiveReliability,
+  };
   await queryWithRetry(
     `UPDATE source_items
         SET confidence_score = $2,
@@ -810,14 +833,60 @@ async function insertIncident(p) {
             source_family = $5,
             status = CASE WHEN $6 THEN 'needs_review' ELSE status END,
             processed_at = CASE WHEN $6 THEN NOW() ELSE processed_at END,
+            raw = COALESCE(raw, '{}'::jsonb) || jsonb_build_object('classification', $7::jsonb),
             updated_at = NOW()
       WHERE id = $1`,
-    [sourceItem.id, assessment.score, assessment.reason, JSON.stringify(assessment.breakdown), assessment.sourceFamily, assessment.requiresHumanApproval],
+    [
+      sourceItem.id,
+      assessment.score,
+      assessment.reason,
+      JSON.stringify(assessment.breakdown),
+      assessment.sourceFamily,
+      assessment.requiresHumanApproval,
+      JSON.stringify(classification),
+    ],
   );
 
-  const humanApproved = p.approval_status === "human_approved";
-  if (assessment.score < AUTO_APPROVAL_THRESHOLD && !humanApproved) return null;
+  // Another outlet's report of this event is already an incident: this one is
+  // more evidence for it, not a second incident.
+  const published = dbCorroborators.find((item) => item.incident_id);
+  if (published) {
+    const incident = await attachReportToIncident(sourceItem.id, published.incident_id, {
+      source: p.source,
+      source_url: p.source_url,
+      fatalities: p.fatalities,
+      victims: p.victims,
+      verification_status: verificationStatus,
+    });
+    if (incident) return { ...incident, linked: true };
+  }
 
+  const humanApproved = p.approval_status === "human_approved";
+  if (assessment.score < AUTO_APPROVAL_THRESHOLD && !humanApproved) {
+    // Not enough on its own, but it may be the second source an earlier
+    // report was waiting for.
+    await promoteCorroboratedReport({ ...candidate, id: sourceItem.id, created_at: assessedAt }, dbCorroborators, assessedAt);
+    return null;
+  }
+
+  return publishIncident(p, assessment, sourceItem.id, dbCorroborators.map((item) => item.id), humanApproved);
+}
+
+/** A stored report in the shape the scoring and matching code reads. */
+function reportAsCandidate(item) {
+  return {
+    ...item,
+    date: item.event_date?.toISOString?.().slice(0, 10) || item.event_date,
+    state: item.event_state,
+    lat: item.event_lat,
+    lon: item.event_lon,
+    claimed_location: item.event_location,
+    type: item.event_type,
+  };
+}
+
+/** Insert an incident from a report and attach the reports that corroborate it. */
+async function publishIncident(p, assessment, sourceItemId, linkedIds, humanApproved) {
   const result = await queryWithRetry(
     `
     INSERT INTO incidents
@@ -855,7 +924,6 @@ async function insertIncident(p) {
   );
   const row = result.rows[0] || null;
   if (row) {
-    const corroboratorIds = dbCorroborators.map((item) => item.id);
     await queryWithRetry(
       `UPDATE source_items
           SET incident_id = $2,
@@ -863,7 +931,7 @@ async function insertIncident(p) {
               processed_at = NOW(),
               updated_at = NOW()
         WHERE id = $1 OR id = ANY($3::int[])`,
-      [sourceItem.id, row.id, corroboratorIds],
+      [sourceItemId, row.id, linkedIds],
     );
     await createAuditLog({
       organization_id: null,
@@ -880,6 +948,54 @@ async function insertIncident(p) {
     bus.emit("incident:new", row);
   }
   return row;
+}
+
+/** Attach a report to an incident another outlet's report already created. */
+async function attachReportToIncident(sourceItemId, incidentId, report) {
+  await queryWithRetry(
+    `UPDATE source_items
+        SET incident_id = $2, status = 'linked', processed_at = NOW(), updated_at = NOW()
+      WHERE id = $1`,
+    [sourceItemId, incidentId],
+  );
+  await mergeIntoIncident(incidentId, report);
+  return refreshIncidentConfidence(incidentId);
+}
+
+/**
+ * A new report that cannot publish on its own may complete an earlier one:
+ * the earlier report had everything but a second outlet, and now has it. The
+ * earlier report is re-scored with the newcomer as corroboration, and the
+ * first that clears the bar is published from its stored classification.
+ */
+async function promoteCorroboratedReport(newReport, matches, assessedAt) {
+  for (const earlier of matches) {
+    const stored = earlier.raw?.classification;
+    if (earlier.status !== "needs_review" || earlier.incident_id || !stored) continue;
+    const earlierCandidate = reportAsCandidate(earlier);
+    const support = [newReport, ...matches.filter((item) => item.id !== earlier.id).map(reportAsCandidate)]
+      .filter((other) => describeSameEvent(earlierCandidate, other));
+    const assessment = assessIncidentCandidate({
+      ...earlierCandidate,
+      ...stored,
+      source_reliability: stored.source_reliability,
+    }, support, assessedAt);
+    if (assessment.score < AUTO_APPROVAL_THRESHOLD) continue;
+    await queryWithRetry(
+      `UPDATE source_items
+          SET confidence_score = $2, confidence_reason = $3, confidence_breakdown = $4::jsonb, updated_at = NOW()
+        WHERE id = $1`,
+      [earlier.id, assessment.score, assessment.reason, JSON.stringify(assessment.breakdown)],
+    );
+    return publishIncident(
+      stored,
+      assessment,
+      earlier.id,
+      support.map((item) => item.id).filter(Boolean),
+      false,
+    );
+  }
+  return null;
 }
 
 /** Log a scrape run. */
@@ -1332,6 +1448,49 @@ async function existingExternalIds(ids) {
     [ids],
   );
   return new Set(rows.map((r) => r.external_id));
+}
+
+/**
+ * The stored id for each of these article links, where one exists. Lets a
+ * scraper keep an article's original id when the way ids are built changes,
+ * instead of treating every stored article as new.
+ */
+async function externalIdsByUrl(urls) {
+  const clean = [...new Set(urls.filter(Boolean))];
+  if (!clean.length) return new Map();
+  const { rows } = await pool.query(
+    `SELECT DISTINCT ON (source_url) source_url, external_id
+       FROM source_items
+      WHERE source_url = ANY($1)
+      ORDER BY source_url, created_at ASC`,
+    [clean],
+  );
+  return new Map(rows.map((row) => [row.source_url, row.external_id]));
+}
+
+/** An article link without tracking parameters or fragment, for comparing. */
+function articleUrl(url) {
+  return String(url || "").split("#")[0].split("?")[0].replace(/\/$/, "").toLowerCase();
+}
+
+/**
+ * Links among these that another stored report already carries - the same
+ * publisher article reached through a different feed (Punch via its own RSS
+ * with tracking parameters, and again via NewsAPI without). Compared without
+ * query strings; returns the matching links in that form.
+ */
+async function processedSourceUrls(urls, exceptIds = []) {
+  const clean = [...new Set(urls.filter(Boolean).map(articleUrl))].filter(Boolean);
+  if (!clean.length) return new Set();
+  const { rows } = await pool.query(
+    `SELECT DISTINCT rtrim(lower(split_part(split_part(source_url, '#', 1), '?', 1)), '/') AS url
+       FROM source_items
+      WHERE rtrim(lower(split_part(split_part(source_url, '#', 1), '?', 1)), '/') = ANY($1)
+        AND processed_at IS NOT NULL
+        AND NOT (external_id = ANY($2))`,
+    [clean, exceptIds],
+  );
+  return new Set(rows.map((row) => row.url));
 }
 
 async function existingProcessedSourceItemIds(ids) {
@@ -4904,6 +5063,9 @@ export {
   countIncidents,
   existingExternalIds,
   existingProcessedSourceItemIds,
+  externalIdsByUrl,
+  processedSourceUrls,
+  articleUrl,
   findMatchingIncidents,
   mergeIntoIncident,
   getStats,

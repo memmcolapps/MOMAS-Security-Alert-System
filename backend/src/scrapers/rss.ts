@@ -1,7 +1,8 @@
 import axios from "axios";
+import crypto from "node:crypto";
 import Parser from "rss-parser";
 import { classifyMany } from "../classifier";
-import { geocode, extractState } from "../geocoder";
+import { extractState, geocode, locateReport } from "../geocoder";
 import {
   buildFingerprint,
   fingerprintsMatch,
@@ -21,77 +22,95 @@ const FEEDS = [
   { name: "Vanguard", url: "https://www.vanguardngr.com/feed/" },
   { name: "Premium Times", url: "https://www.premiumtimesng.com/feed/" },
   { name: "Daily Trust", url: "https://dailytrust.com/feed/" },
+  { name: "Daily Post", url: "https://dailypost.ng/feed/" },
+  { name: "Leadership", url: "https://leadership.ng/feed/" },
+  { name: "Tribune", url: "https://tribuneonlineng.com/feed/" },
+  // Security-focused outlets whose own feeds refuse automated requests
+  // (HumAngle rate-limits, TheCable answers 403, Zagazola has no feed),
+  // reached through Google News instead.
+  {
+    name: "Google News — HumAngle",
+    url: "https://news.google.com/rss/search?q=site:humanglemedia.com+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
+  },
+  {
+    name: "Google News — Zagazola Makama",
+    url: "https://news.google.com/rss/search?q=site:zagazola.org+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
+  },
+  {
+    name: "Google News — TheCable Security",
+    url: "https://news.google.com/rss/search?q=site:thecable.ng+attack+OR+killed+OR+bandits+OR+kidnap+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
+  },
   {
     name: "Google News — NG Security",
-    url: "https://news.google.com/rss/search?q=nigeria+attack+killed+bomb+kidnap&hl=en-NG&gl=NG&ceid=NG:en",
+    url: "https://news.google.com/rss/search?q=nigeria+attack+killed+bomb+kidnap+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
   {
     name: "Google News — Borno",
-    url: "https://news.google.com/rss/search?q=borno+boko+haram+iswap+attack&hl=en-NG&gl=NG&ceid=NG:en",
+    url: "https://news.google.com/rss/search?q=borno+boko+haram+iswap+attack+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
   {
     name: "Google News — Bandits",
-    url: "https://news.google.com/rss/search?q=nigeria+bandits+kidnap+zamfara+kaduna+katsina&hl=en-NG&gl=NG&ceid=NG:en",
+    url: "https://news.google.com/rss/search?q=nigeria+bandits+kidnap+zamfara+kaduna+katsina+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
   {
     name: "Google News — Breaking Security",
-    url: "https://news.google.com/rss/search?q=nigeria+breaking+attack+killed+bomb+shooting&hl=en-NG&gl=NG&ceid=NG:en&tbs=qdr:d",
+    url: "https://news.google.com/rss/search?q=nigeria+breaking+attack+killed+bomb+shooting+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
   {
     name: "Google News — Middle Belt",
-    url: "https://news.google.com/rss/search?q=benue+plateau+nasarawa+kogi+attack+killed+herdsmen+gunmen&hl=en-NG&gl=NG&ceid=NG:en",
+    url: "https://news.google.com/rss/search?q=benue+plateau+nasarawa+kogi+attack+killed+herdsmen+gunmen+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
   {
     name: "Google News — South-East Security",
-    url: "https://news.google.com/rss/search?q=anambra+imo+enugu+ebonyi+abia+gunmen+attack+killed+IPOB&hl=en-NG&gl=NG&ceid=NG:en",
+    url: "https://news.google.com/rss/search?q=anambra+imo+enugu+ebonyi+abia+gunmen+attack+killed+IPOB+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
   {
     name: "Google News — Delta/Rivers",
-    url: "https://news.google.com/rss/search?q=delta+rivers+bayelsa+cult+attack+killing+pipeline&hl=en-NG&gl=NG&ceid=NG:en",
+    url: "https://news.google.com/rss/search?q=delta+rivers+bayelsa+cult+attack+killing+pipeline+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
   {
     name: "Google News — North-West Raids",
-    url: "https://news.google.com/rss/search?q=zamfara+sokoto+kebbi+niger+raid+bandits+village+attack&hl=en-NG&gl=NG&ceid=NG:en",
+    url: "https://news.google.com/rss/search?q=zamfara+sokoto+kebbi+niger+raid+bandits+village+attack+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
   {
     name: "Google News — Kaduna Axis",
-    url: "https://news.google.com/rss/search?q=kaduna+birnin+gwari+chikun+kajuru+attack+kidnap+gunmen&hl=en-NG&gl=NG&ceid=NG:en",
+    url: "https://news.google.com/rss/search?q=kaduna+birnin+gwari+chikun+kajuru+attack+kidnap+gunmen+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
   {
     name: "Google News — Plateau/Benue Fresh Attacks",
-    url: "https://news.google.com/rss/search?q=plateau+benue+fresh+attack+village+killed+gunmen&hl=en-NG&gl=NG&ceid=NG:en&tbs=qdr:d",
+    url: "https://news.google.com/rss/search?q=plateau+benue+fresh+attack+village+killed+gunmen+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
   {
     name: "Google News — North-East Ambush",
-    url: "https://news.google.com/rss/search?q=borno+yobe+adamawa+ambush+soldiers+terrorists+attack&hl=en-NG&gl=NG&ceid=NG:en",
+    url: "https://news.google.com/rss/search?q=borno+yobe+adamawa+ambush+soldiers+terrorists+attack+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
   {
     name: "Google News — Kidnap Watch",
-    url: "https://news.google.com/rss/search?q=nigeria+school+kidnap+abducted+hostages+released+ransom&hl=en-NG&gl=NG&ceid=NG:en&tbs=qdr:d",
+    url: "https://news.google.com/rss/search?q=nigeria+school+kidnap+abducted+hostages+released+ransom+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
   {
     name: "Google News — Herder/Farmer Clashes",
-    url: "https://news.google.com/rss/search?q=nigeria+herdsmen+farmers+clash+killed+village&hl=en-NG&gl=NG&ceid=NG:en",
+    url: "https://news.google.com/rss/search?q=nigeria+herdsmen+farmers+clash+killed+village+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
   {
     name: "Google News — South-South Security",
-    url: "https://news.google.com/rss/search?q=rivers+bayelsa+delta+akwa+ibom+pipeline+cult+attack+security&hl=en-NG&gl=NG&ceid=NG:en",
+    url: "https://news.google.com/rss/search?q=rivers+bayelsa+delta+akwa+ibom+pipeline+cult+attack+security+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
   {
     name: "Google News — South-West Security",
-    url: "https://news.google.com/rss/search?q=lagos+ogun+oyo+ondo+osun+ekiti+kidnap+attack+gunmen&hl=en-NG&gl=NG&ceid=NG:en",
+    url: "https://news.google.com/rss/search?q=lagos+ogun+oyo+ondo+osun+ekiti+kidnap+attack+gunmen+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
   {
     name: "Google News — FCT/Nasarawa/Niger",
-    url: "https://news.google.com/rss/search?q=abuja+fct+nasarawa+niger+kidnap+attack+security&hl=en-NG&gl=NG&ceid=NG:en",
+    url: "https://news.google.com/rss/search?q=abuja+fct+nasarawa+niger+kidnap+attack+security+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
   {
     name: "Google News — Communal Violence",
-    url: "https://news.google.com/rss/search?q=nigeria+communal+clash+violence+village+killed&hl=en-NG&gl=NG&ceid=NG:en",
+    url: "https://news.google.com/rss/search?q=nigeria+communal+clash+violence+village+killed+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
   {
     name: "Google News — Bomb/IED Watch",
-    url: "https://news.google.com/rss/search?q=nigeria+ied+blast+explosion+bomb+market+attack&hl=en-NG&gl=NG&ceid=NG:en&tbs=qdr:d",
+    url: "https://news.google.com/rss/search?q=nigeria+ied+blast+explosion+bomb+market+attack+when:3d&hl=en-NG&gl=NG&ceid=NG:en",
   },
 ];
 
@@ -148,9 +167,27 @@ function chooseIncidentDate(eventDate, isoDate, pubDate) {
   return published;
 }
 
+// Ids used to be the first 40 characters of the base64'd link - about 30
+// characters of URL. Every Google News link, and every Premium Times, Channels,
+// Vanguard and Sahara Reporters link, shares a longer prefix than that, so all
+// of a feed's articles got one id: the first was stored in May 2026 and every
+// later one was skipped as "already processed". Ids now hash the whole link.
+// A Google News article gets one id whichever search feed it appears in, so
+// it is classified once.
 function buildId(source, item) {
   const base = item.link || item.guid || item.title || "";
-  return `rss:${source}:${Buffer.from(base).toString("base64").slice(0, 40)}`;
+  const hash = crypto.createHash("sha1").update(base).digest("hex");
+  return /news\.google\.com/i.test(base) ? `rss:google-news:${hash}` : `rss:${source}:${hash}`;
+}
+
+// Google News ignores the "past day" setting the searches once used and
+// returned articles months old; the searches now ask for three days
+// ("when:3d"), and this holds every feed to the same window.
+const MAX_ARTICLE_AGE_DAYS = 3;
+
+function isRecent(publishedAt, now = Date.now()) {
+  const stamp = new Date(publishedAt || "").getTime();
+  return !Number.isFinite(stamp) || now - stamp <= MAX_ARTICLE_AGE_DAYS * 86_400_000;
 }
 
 function sanitizeXml(xml) {
@@ -217,16 +254,19 @@ async function scrapeFeed(feed) {
     return { found: 0, added: 0, skipped: 0, error: err.message };
   }
 
-  const items = feedData.items || [];
+  const items = (feedData.items || []).filter((item) => isRecent(item.isoDate || item.pubDate));
 
   // Build external_ids first, then persist raw source items and skip anything
   // already classified. This keeps non-incidents from being reprocessed forever.
+  // An article stored before ids changed keeps its id, so it is not
+  // classified a second time.
+  const knownIds = await db.externalIdsByUrl(items.map((item) => item.link));
   const classifyItems = items.map((item) => {
     const title = stripHtml(item.title || "");
     const rawContent =
       item["content:encoded"] || item.content || item.contentSnippet || "";
     const description = stripHtml(rawContent).slice(0, 1000);
-    const external_id = buildId(feed.name, item);
+    const external_id = knownIds.get(item.link) || buildId(feed.name, item);
     const publishedAt = item.isoDate || item.pubDate || null;
     return { title, description, item, external_id, publishedAt };
   });
@@ -270,8 +310,19 @@ async function scrapeFeed(feed) {
   );
 
   const enrichedItems = await enrichCandidates(freshItems, 3);
-  const newItems = enrichedItems.filter((ci) =>
-    ci.title || ci.description,
+  // A Google News result is often an article another feed already brought in
+  // (Punch, Daily Trust); once resolved to the publisher's link it is skipped.
+  const seenElsewhere = await db.processedSourceUrls(
+    enrichedItems.map((ci) => ci.resolvedUrl),
+    enrichedItems.map((ci) => ci.external_id),
+  );
+  const elsewhere = (ci) => Boolean(ci.resolvedUrl) && seenElsewhere.has(db.articleUrl(ci.resolvedUrl));
+  const newItems = enrichedItems.filter((ci) => (ci.title || ci.description) && !elsewhere(ci));
+  // Marked done, or they would be resolved and skipped again every run.
+  await Promise.all(
+    enrichedItems
+      .filter(elsewhere)
+      .map((ci) => db.markSourceItemProcessed(ci.external_id, { status: "merged" })),
   );
 
   console.log(
@@ -331,13 +382,7 @@ async function scrapeFeed(feed) {
     // hijack first-match geocoding. A body-text match only wins when it
     // doesn't contradict the state named in location_text.
     const locText = result.location_text || "";
-    let geo = geocode(locText);
-    let state = geo?.state || extractState(locText) || null;
-    if (!geo) {
-      const fallback = geocode(fullText) || geocode(title);
-      if (fallback && (!state || fallback.state === state)) geo = fallback;
-      state = state || fallback?.state || extractState(fullText) || null;
-    }
+    const { geo, state } = locateReport({ locationText: locText, fullText, title });
 
     const date = chooseIncidentDate(result.date, item.isoDate, item.pubDate);
 
@@ -405,7 +450,8 @@ async function scrapeFeed(feed) {
       if (inserted) added++;
       if (inserted) {
         await db.markSourceItemProcessed(external_id, {
-          status: "incident",
+          // Attached to another outlet's incident rather than creating one.
+          status: inserted.linked ? "linked" : "incident",
           incident_id: inserted.id,
           content_text: newItems[i].contentText || null,
         });
@@ -466,4 +512,4 @@ async function scrapeAll() {
   return results;
 }
 
-export { scrapeAll };
+export { buildId, isRecent, scrapeAll };

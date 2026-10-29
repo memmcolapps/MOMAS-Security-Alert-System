@@ -84,6 +84,7 @@ const COVERAGE_HOURS = ["1", "4", "12", "24"];
 const EMPTY_TRAIL = [];
 
 function LiveMonitoring({ stats, total }) {
+  // Every incident figure for the selected period, in one line.
   return (
     <>
       <div className="inline-flex items-center gap-1 rounded border border-ops-red bg-red-500/10 px-1.5 py-0.5 text-[8px] font-bold tracking-widest text-ops-red">
@@ -92,7 +93,9 @@ function LiveMonitoring({ stats, total }) {
       <div className="mt-1 text-[9px] tracking-wide text-neutral-500">
         <span className="font-bold text-ops-red">{stats.critical}</span> CRITICAL ·{" "}
         <span className="font-bold text-ops-red">{total}</span> TOTAL ·{" "}
-        <span className="font-bold text-orange-400">{stats.killed}</span> KILLED
+        <span className="font-bold text-orange-400">{stats.killed}</span> KILLED ·{" "}
+        <span className="font-bold text-orange-400">{stats.abducted}</span> ABDUCTED ·{" "}
+        <span className="font-bold text-neutral-300">{stats.states}</span> STATES
       </div>
     </>
   );
@@ -100,22 +103,6 @@ function LiveMonitoring({ stats, total }) {
 
 function iconForType(type) {
   return typeIcons[type] || "fa-circle-exclamation";
-}
-
-function toCSV(rows) {
-  const headers = ["date", "state", "location", "type", "severity", "fatalities", "victims", "title", "source_url"];
-  const esc = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
-  return [headers.join(","), ...rows.map((row) => headers.map((key) => esc(row[key])).join(","))].join("\n");
-}
-
-function downloadCSV(rows) {
-  const blob = new Blob([toCSV(rows)], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `momas-incidents-${todayISO()}.csv`;
-  anchor.click();
-  URL.revokeObjectURL(url);
 }
 
 async function downloadIncidentReport(incidentId) {
@@ -184,11 +171,9 @@ function usePersistentChoice(key, fallback, allowed) {
 export function OperationsRoute() {
   const queryClient = useQueryClient();
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
-  const orgName = meQuery.data?.user?.memberships?.[0]?.name;
   // Collection is platform-wide and spends shared API quota, so the trigger is
   // operator work. Showing it to tenants only bought them a 403.
   const canTriggerScrape = isPlatformOperator(meQuery.data?.user);
-  const opsLabel = orgName ? `EPAIL Intelligence · ${orgName}` : "EPAIL Intelligence";
   const today = todayISO();
   const [[from, to], setRange] = useState(() => rangeForMode("today", today));
   const [activeMode, setActiveMode] = useState("today");
@@ -197,7 +182,6 @@ export function OperationsRoute() {
   // were resetting to open on every visit, so anyone who closed them closed
   // them again all shift.
   const [panelOpen, setPanelOpen] = usePersistentFlag("momas_ops_feed_open", false);
-  const [statsMinimized, setStatsMinimized] = usePersistentFlag("momas_ops_stats_min", true);
   const [basemap, setBasemap] = usePersistentChoice("momas_ops_basemap", "satellite", ["satellite", "streets", "grey"]);
   const [radioFilter, setRadioFilter] = usePersistentChoice("momas_ops_radio_filter", "all", ["all", "moving", "online", "nofix", "offline", "nopos"]);
   const [fleetOpen, setFleetOpen] = usePersistentFlag("momas_ops_fleet_open", false);
@@ -718,6 +702,12 @@ export function OperationsRoute() {
       <MapKey
         basemap={basemap}
         onBasemap={setBasemap}
+        layers={LAYER_LABELS}
+        activeLayers={activeLayers}
+        onToggleLayer={(key) => setActiveLayers((current) => ({ ...current, [key]: !current[key] }))}
+        coverageHours={coverageHours}
+        coverageOptions={COVERAGE_HOURS}
+        onCoverageHours={setCoverageHours}
         open={keyOpen}
         onToggle={() => setKeyOpen((value) => !value)}
         className={`absolute top-[calc(var(--ops-chrome)+0.75rem)] hidden lg:block ${panelOpen ? "right-[400px]" : "right-5"}`}
@@ -871,90 +861,38 @@ export function OperationsRoute() {
         </section>
       ) : null}
 
+      {/* The incident period, and the tour that works over the whole map.
+          Fleet figures live in the fleet panel, incident figures in Live
+          Monitoring, and the basemap and layers in the map panel. */}
       <section
-        className={`glass-panel absolute z-[1000] min-w-[560px] rounded-lg px-3.5 py-2 transition-transform ${followTarget ? "bottom-[4.5rem]" : "bottom-3"} ${
+        className={`glass-panel absolute z-[1000] flex max-w-[calc(100vw-2rem)] flex-wrap items-center gap-1.5 rounded-lg px-2.5 py-1.5 transition-transform ${followTarget ? "bottom-[4.5rem]" : "bottom-3"} ${
           panelOpen ? "left-1/2 -translate-x-[calc(50%+190px)]" : "left-1/2 -translate-x-1/2"
         }`}
       >
-        <div className="mb-2 flex items-baseline justify-between">
-          <span className="text-[11px] font-bold text-ops-red">{opsLabel}</span>
-          <span className="text-[10px] text-neutral-500">{from || "All"} to {to || "present"}</span>
-          <button className="text-neutral-600 hover:text-neutral-300" onClick={() => setStatsMinimized(!statsMinimized)}>
-            {statsMinimized ? "▴" : "▾"}
+        <span className="text-[9px] font-bold uppercase tracking-wide text-neutral-600">Incidents</span>
+        {modes.map(([mode, label]) => (
+          <button
+            className={`rounded px-2 py-1 text-[10px] font-bold ${activeMode === mode ? "bg-ops-red text-black" : "text-neutral-400 hover:text-ops-red"}`}
+            key={mode}
+            onClick={() => setMode(mode)}
+          >
+            {label}
           </button>
-        </div>
-        {!statsMinimized ? (
-          <>
-            <div className="grid grid-cols-6 border-b border-white/10 pb-2 text-center">
-              <Metric value={devices.length} label="Total Devices" green />
-              <Metric value={locations.length} label="Reporting" green />
-              <Metric value={incidents.length} label="Incidents" />
-              <Metric value={stats.states} label="States" />
-              <Metric value={stats.killed} label="Killed" />
-              <Metric value={stats.abducted} label="Abducted" />
-            </div>
-            <div className="flex flex-wrap items-center gap-2 border-b border-white/10 py-2">
-              <span className="text-[9px] font-bold uppercase tracking-wide text-neutral-600">Period</span>
-              {modes.map(([mode, label]) => (
-                <button className={`rounded border px-2 py-1 text-[10px] font-bold ${activeMode === mode ? "border-ops-red bg-ops-red text-black" : "border-white/10 bg-white/5 text-neutral-400 hover:border-ops-red hover:text-ops-red"}`} key={mode} onClick={() => setMode(mode)}>
-                  {label}
-                </button>
-              ))}
-              <input className="rounded border border-white/10 bg-white/5 px-2 py-1 text-[10px]" type="date" value={from} onChange={(event) => setManualRange([event.target.value, to])} />
-              <span className="text-neutral-600">→</span>
-              <input className="rounded border border-white/10 bg-white/5 px-2 py-1 text-[10px]" type="date" value={to} onChange={(event) => setManualRange([from, event.target.value])} />
-            </div>
-            <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5">
-              <span className="text-[9px] font-bold uppercase tracking-wide text-neutral-600">Basemap</span>
-              <select className="rounded border border-ops-line bg-white/5 px-2 py-1 text-[10px]" value={basemap} onChange={(event) => setBasemap(event.target.value)}>
-                <option value="grey">Grey</option>
-                <option value="streets">Streets</option>
-                <option value="satellite">Satellite</option>
-              </select>
-              {Object.keys(LAYER_LABELS).map((key) => (
-                <button className={`rounded border px-2 py-1 text-[10px] font-bold ${activeLayers[key] ? "border-ops-red bg-ops-red text-black" : "border-ops-line bg-red-500/10 text-ops-red"}`} key={key} onClick={() => setActiveLayers({ ...activeLayers, [key]: !activeLayers[key] })}>
-                  {LAYER_LABELS[key]}
-                </button>
-              ))}
-              {activeLayers.coverage ? (
-                <select
-                  className="rounded border border-ops-line bg-white/5 px-2 py-1 text-[10px]"
-                  value={coverageHours}
-                  onChange={(event) => setCoverageHours(event.target.value)}
-                  title="How far back coverage looks"
-                >
-                  {COVERAGE_HOURS.map((hours) => (
-                    <option key={hours} value={hours}>
-                      Last {hours} h
-                    </option>
-                  ))}
-                </select>
-              ) : null}
-              <button
-                className="rounded border border-ops-line bg-red-500/10 px-2 py-1 text-[10px] font-bold text-ops-red hover:bg-red-500/20 disabled:opacity-50"
-                onClick={liveMode ? stopLiveMode : startLiveMode}
-                disabled={!liveMode && !tourStops.length}
-                title={tourStops.length ? `Tour ${tourStops.length} pins` : "No pins to tour"}
-              >
-                <Tv size={12} className="mr-1 inline" /> {liveMode ? "Exit Live" : "Live Mode"}
-              </button>
-              <button className="rounded border border-ops-line bg-red-500/10 px-2 py-1 text-[10px] font-bold text-ops-red hover:bg-red-500/20" onClick={() => downloadCSV(visibleIncidents)}>
-                <Download size={12} className="mr-1 inline" /> Export CSV
-              </button>
-            </div>
-          </>
-        ) : null}
+        ))}
+        <input className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px]" type="date" value={from} onChange={(event) => setManualRange([event.target.value, to])} aria-label="From" />
+        <span className="text-neutral-600">→</span>
+        <input className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px]" type="date" value={to} onChange={(event) => setManualRange([from, event.target.value])} aria-label="To" />
+        <span className="mx-1 h-4 w-px bg-white/10" />
+        <button
+          className="rounded px-2 py-1 text-[10px] font-bold text-ops-red hover:bg-red-500/15 disabled:opacity-50"
+          onClick={liveMode ? stopLiveMode : startLiveMode}
+          disabled={!liveMode && !tourStops.length}
+          title={tourStops.length ? `Tour ${tourStops.length} pins` : "No pins to tour"}
+        >
+          <Tv size={12} className="mr-1 inline" /> {liveMode ? "Exit Live" : "Live Mode"}
+        </button>
       </section>
     </main>
-  );
-}
-
-function Metric({ value, label, green }) {
-  return (
-    <div>
-      <div className={`text-[15px] font-bold ${green ? "text-ops-green" : "text-ops-red"}`}>{value}</div>
-      <div className="mt-0.5 text-[8px] uppercase tracking-wide text-neutral-500">{label}</div>
-    </div>
   );
 }
 

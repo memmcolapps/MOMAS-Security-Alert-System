@@ -6,7 +6,7 @@
 
 import axios from "axios";
 import { classifyMany } from "../classifier";
-import { geocode, extractState } from "../geocoder";
+import { extractState, geocode, locateReport } from "../geocoder";
 import {
   buildFingerprint,
   fingerprintsMatch,
@@ -190,13 +190,7 @@ async function scrapeChannel(channel) {
     // Prefer the classifier's extracted location over first-match geocoding
     // of the raw text (see rss.ts for rationale).
     const locText = result.location_text || "";
-    let geo = geocode(locText);
-    let state = geo?.state || extractState(locText) || null;
-    if (!geo) {
-      const fallback = geocode(fullText) || geocode(title);
-      if (fallback && (!state || fallback.state === state)) geo = fallback;
-      state = state || fallback?.state || extractState(fullText) || null;
-    }
+    const { geo, state } = locateReport({ locationText: locText, fullText, title });
 
     const date = result.date || msg.ts.toISOString().slice(0, 10);
 

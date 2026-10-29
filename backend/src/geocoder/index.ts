@@ -465,4 +465,127 @@ function searchPlaces(query, limit = 8) {
     }));
 }
 
-export { geocode, searchPlaces, extractState, reverseGeocode, STATE_NAMES };
+// ── Structured locations ──────────────────────────────────────────────────
+// The classifier hands back a location like "Binnari town, Karim-Lamdo LGA,
+// Taraba State". Free-text geocoding above deliberately knows only ~250 towns,
+// so that string used to resolve to "Taraba" - the state's centre - and the
+// village was lost. A structured location is safe to look up in the full
+// GeoNames list: each comma-separated part is a place name, not prose, and the
+// search is held to the state the location names.
+
+const PLACE_KIND_WORDS = /\b(local government area|local government|lga|l\.g\.a|town|village|community|communities|district|ward|quarters?|area|state|axis|nigeria)\b/g;
+
+function placeKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(PLACE_KIND_WORDS, " ")
+    .replace(/[^a-z\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const DENSE_BY_NAME = new Map<string, Array<[string, number, number, string, string, number]>>();
+for (const entry of DENSE_PLACES) {
+  const key = placeKey(entry[0]);
+  if (!key) continue;
+  if (!DENSE_BY_NAME.has(key)) DENSE_BY_NAME.set(key, []);
+  DENSE_BY_NAME.get(key)!.push(entry);
+}
+
+// LGA headquarters and other larger places carry a higher population tier;
+// an LGA is matched by its name in the LGA column as well as the place column.
+const LGA_SEATS = new Map<string, [string, number, number, string, string, number]>();
+for (const entry of DENSE_PLACES) {
+  const lga = placeKey(entry[4]);
+  if (!lga) continue;
+  const key = `${entry[3].toLowerCase()}|${lga}`;
+  const current = LGA_SEATS.get(key);
+  if (!current || entry[5] > current[5]) LGA_SEATS.set(key, entry);
+}
+
+// One letter out either way: news copy spells Karim-Lamido as Karim-Lamdo.
+function oneEditApart(a, b) {
+  if (a === b) return true;
+  if (a.length < 5 || b.length < 5 || Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i++;
+      j++;
+      continue;
+    }
+    if (++edits > 1) return false;
+    if (a.length > b.length) i++;
+    else if (b.length > a.length) j++;
+    else {
+      i++;
+      j++;
+    }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+
+function lookupInState(name, state) {
+  const inState = (entries) => (entries || []).filter((entry) => entry[3].toLowerCase() === state.toLowerCase());
+  const exact = inState(DENSE_BY_NAME.get(name));
+  const seat = LGA_SEATS.get(`${state.toLowerCase()}|${name}`);
+  if (exact.length) return { entry: exact.sort((a, b) => b[5] - a[5])[0], level: "place" };
+  if (seat) return { entry: seat, level: "lga" };
+  // Spelling slips, only for names long enough not to collide by chance.
+  if (name.length >= 5) {
+    for (const [key, entries] of DENSE_BY_NAME) {
+      if (key[0] !== name[0] || !oneEditApart(key, name)) continue;
+      const found = inState(entries);
+      if (found.length) return { entry: found.sort((a, b) => b[5] - a[5])[0], level: "place" };
+    }
+    for (const [key, entry] of LGA_SEATS) {
+      const [entryState, lga] = key.split("|");
+      if (entryState === state.toLowerCase() && lga[0] === name[0] && oneEditApart(lga, name)) return { entry, level: "lga" };
+    }
+  }
+  return null;
+}
+
+/**
+ * Coordinates for a structured location such as "Binnari town, Karim-Lamdo
+ * LGA, Taraba State": the most specific part found in the named state wins.
+ * Returns { lat, lon, state, matched, level } or null.
+ */
+function geocodeStructured(locationText, stateHint = null) {
+  if (!locationText) return null;
+  const state = stateHint || extractState(locationText);
+  if (!state) return null;
+  const stateKey = placeKey(state);
+  for (const part of String(locationText).split(/[,;]/)) {
+    const name = placeKey(part);
+    if (!name || name === stateKey || STATE_NAMES.some((s) => placeKey(s) === name)) continue;
+    const found = lookupInState(name, state);
+    if (found) {
+      const [placeName, lat, lon, entryState] = found.entry;
+      return { lat, lon, state: entryState, matched: found.level === "lga" ? `${toTitleCase(name)} LGA` : placeName, level: found.level };
+    }
+  }
+  return null;
+}
+
+/**
+ * Where a classified report happened: the classifier's own location first,
+ * looked up in full, then the curated towns, then the article text - which
+ * is only trusted when it agrees with the state the location names.
+ * Returns { geo, state }.
+ */
+function locateReport({ locationText = "", fullText = "", title = "" }) {
+  const stateHint = extractState(locationText || "");
+  let geo = geocodeStructured(locationText, stateHint) || geocode(locationText);
+  let state = geo?.state || stateHint || null;
+  if (!geo) {
+    const fallback = geocode(fullText) || geocode(title);
+    if (fallback && (!state || fallback.state === state)) geo = fallback;
+    state = state || fallback?.state || extractState(fullText) || null;
+  }
+  return { geo, state };
+}
+
+export { geocode, geocodeStructured, locateReport, searchPlaces, extractState, reverseGeocode, STATE_NAMES };
