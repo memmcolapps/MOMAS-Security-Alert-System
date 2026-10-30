@@ -168,6 +168,16 @@ function assetClusterGroup(kind, glyph) {
   return group;
 }
 
+// Takes a pin out of whichever layer holds it. While the radio layer is
+// switched off, markercluster's removeLayer forgets the pin but leaves its move
+// listener attached, so the next setLatLng quietly queues the pin back into the
+// cluster group; turning the layer on again then leaves stale entries in the
+// cluster grid and every later add throws "reading 'x'".
+function removePin(layer, marker) {
+  layer.removeLayer(marker);
+  if (layer._childMarkerEventHandlers && !layer._map) marker.off(layer._childMarkerEventHandlers, layer);
+}
+
 // A radio's pin, drawn from its status. Offline radios shrink to a dot: they
 // stay findable, but they are most of the fleet at any hour and should not
 // drown out the ones that can answer. Names show only where they earn the
@@ -538,7 +548,7 @@ export function OperationsMap({
     // every frame.
     const want = hidden ? null : status === "sos" ? "alert" : tracked || status === "moving" ? "moving" : "cluster";
     if (entry.layer !== want) {
-      if (entry.layer) layerFor[entry.layer].removeLayer(entry.marker);
+      if (entry.layer) removePin(layerFor[entry.layer], entry.marker);
       if (want) layerFor[want].addLayer(entry.marker);
       entry.layer = want;
     }
@@ -752,7 +762,7 @@ export function OperationsMap({
 
     for (const [uid, entry] of radios) {
       if (seen.has(uid)) continue;
-      if (entry.layer) layerFor[entry.layer].removeLayer(entry.marker);
+      if (entry.layer) removePin(layerFor[entry.layer], entry.marker);
       radios.delete(uid);
     }
   }, [devices, locations, radioFilter, trackedRadioId, refreshRadio]);
