@@ -587,3 +587,84 @@ textarea {
   border-right: 6px solid transparent;
   border-bottom: 9px solid #ede9fe;
 }
+
+/* Replay tab: each radio's head, in its trail colour. Moving heads carry an
+   arrow and a soft pulse; a radio that has gone silent (or has not reported
+   yet) is hollow, so a parked radio and a dead one never look the same. */
+.rp-head {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--c);
+  border: 2.5px solid #0a0a0a;
+  box-shadow: 0 0 0 1.5px var(--c);
+  transition: opacity 0.2s;
+}
+
+.rp-head.rp-moving {
+  box-shadow: 0 0 0 1.5px var(--c), 0 0 12px 3px var(--c);
+}
+
+.rp-head.rp-silent {
+  background: rgba(10, 10, 10, 0.75);
+  border: 2px dashed var(--c);
+  box-shadow: none;
+}
+
+.rp-arrow {
+  display: none;
+  position: absolute;
+  inset: -3px;
+  pointer-events: none;
+}
+
+.rp-arrow.rp-show {
+  display: block;
+}
+
+.rp-arrow::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -9px;
+  transform: translateX(-50%);
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 8px solid var(--c);
+}
+
+.rp-label {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  background: rgba(0, 0, 0, 0.82);
+  color: var(--c);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+/* Names only where they earn the space, as on the live map: a radio on the
+   move, or the one picked. A crowd parked at one office would otherwise be a
+   pile of overlapping labels; hovering any head still names it. */
+.rp-label {
+  display: none;
+}
+
+.rp-is-moving .rp-label,
+.rp-focused .rp-label {
+  display: block;
+}
+
+.rp-quiet {
+  opacity: 0.3;
+}
+
+.rp-quiet .rp-label {
+  display: none;
+}

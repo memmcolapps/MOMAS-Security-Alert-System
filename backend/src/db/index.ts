@@ -4256,6 +4256,45 @@ async function listRadioTrackBetween(deviceId, from, to) {
 }
 
 /**
+ * Every radio that reported between two moments: how many fixes, when, where
+ * on average, and how far apart its fixes spread (metres, the larger of the
+ * north-south and east-west extent). The spread is what tells a radio that
+ * went somewhere from one that sat on a desk drifting. deviceIds null means
+ * every radio.
+ */
+async function radioReplaySummary(deviceIds, from, to) {
+  const { rows } = await pool.query(
+    `SELECT device_id, count(*)::int AS fixes,
+            min(observed_at) AS first_at, max(observed_at) AS last_at,
+            avg(lat) AS lat, avg(lon) AS lon,
+            111320 * greatest(max(lat) - min(lat), (max(lon) - min(lon)) * cos(radians(avg(lat)))) AS extent_m
+       FROM radio_positions
+      WHERE observed_at >= $1 AND observed_at <= $2 AND ($3::text[] IS NULL OR device_id = ANY($3::text[]))
+      GROUP BY device_id`,
+    [from, to, deviceIds],
+  );
+  return rows;
+}
+
+/**
+ * Fixes for several radios between two moments, thinned to at most one per
+ * radio per bucketSec, oldest first. A day of 5-second fixes is more than a
+ * browser needs to draw a route; one every 15-30 s still follows the roads.
+ */
+async function radioReplayTracks(deviceIds, from, to, bucketSec) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT ON (device_id, floor(extract(epoch FROM observed_at) / $4))
+            device_id, lat, lon, observed_at
+       FROM radio_positions
+      WHERE observed_at >= $1 AND observed_at <= $2 AND device_id = ANY($3::text[])
+      ORDER BY device_id, floor(extract(epoch FROM observed_at) / $4), observed_at
+      LIMIT 200000`,
+    [from, to, deviceIds, bucketSec],
+  );
+  return rows;
+}
+
+/**
  * Where radios have been: fixes since a moment, binned into a grid of roughly
  * cellM-metre squares, with when each square was last visited and by how many
  * radios. deviceIds null means every radio.
@@ -5127,6 +5166,8 @@ export {
   listRecentRadioPoints,
   listReviewQueue,
   listRadioTrackBetween,
+  radioReplaySummary,
+  radioReplayTracks,
   radioCoverage,
   pruneRadioPositions,
   getUserByEmail,

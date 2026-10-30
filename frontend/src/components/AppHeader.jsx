@@ -1,6 +1,6 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, ChevronDown, FileSearch, LogOut, Map, MapPinned, Plane, Radio, ShieldAlert, ShieldCheck, Siren, UsersRound } from "lucide-react";
+import { Building2, ChevronDown, FileSearch, History, LogOut, Map, MapPinned, Plane, Radio, ShieldAlert, ShieldCheck, Siren, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getActiveOrganizationId, getMe, setActiveOrganizationId, setAuthToken } from "../lib/api";
 import { PLATFORM_ROLE_LABELS, isPlatformOwner, isPlatformStaff } from "../lib/platform-roles";
@@ -74,6 +74,7 @@ export function AppHeader() {
 
         <nav className="flex items-center gap-1 text-[11px] font-bold">
           <NavItem to="/" icon={Map} label="Map" active={path === "/"} />
+          <NavItem to="/replay" icon={History} label="Replay" active={isActive("/replay")} />
           <NavItem to="/alarms" icon={Siren} label="Alarms" active={isActive("/alarms")} />
           <NavItem to="/osint" icon={FileSearch} label="OSINT" active={isActive("/osint")} />
           <NavItem to="/devices" icon={Radio} label="Devices" active={isActive("/devices")} />

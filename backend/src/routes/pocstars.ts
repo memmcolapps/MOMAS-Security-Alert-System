@@ -1105,6 +1105,64 @@ router.get("/locations/:uid/replay", async (c) => {
   }
 });
 
+// Fleet replay: every radio this viewer can see that reported between two
+// moments. Radios whose fixes stayed within a few tens of metres (a handset on
+// a desk, drifting) come back as a summary only; the rest carry their route,
+// thinned so a whole day stays a few hundred kilobytes. Points are
+// [seconds after from, lat, lon] to keep the payload small.
+const FLEET_REPLAY_SPREAD_M = 60;
+router.get("/positions/replay", async (c) => {
+  const to = new Date(c.req.query("to") || Date.now());
+  const from = new Date(c.req.query("from") || to.getTime() - 3600_000);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to) {
+    return c.json({ error: "from and to must be times, from before to." }, 400);
+  }
+  if (to.getTime() - from.getTime() > REPLAY_MAX_MS) {
+    return c.json({ error: "Replay covers at most 24 hours at a time." }, 400);
+  }
+  const spanSec = (to.getTime() - from.getTime()) / 1000;
+  const bucketSec = Math.min(30, Math.max(5, Math.round(spanSec / 3000)));
+  try {
+    const visible = await visibleDeviceIds(c);
+    const summary = await db.radioReplaySummary(visible ? [...visible] : null, from, to);
+    const travelling = summary
+      .filter((row: any) => Number(row.extent_m) >= FLEET_REPLAY_SPREAD_M)
+      .map((row: any) => String(row.device_id));
+    const tracks = new Map<string, number[][]>();
+    if (travelling.length) {
+      for (const row of await db.radioReplayTracks(travelling, from, to, bucketSec)) {
+        const uid = String(row.device_id);
+        if (!tracks.has(uid)) tracks.set(uid, []);
+        tracks.get(uid)!.push([
+          Math.round((new Date(row.observed_at).getTime() - from.getTime()) / 1000),
+          Number(Number(row.lat).toFixed(6)),
+          Number(Number(row.lon).toFixed(6)),
+        ]);
+      }
+    }
+    return c.json({
+      from: from.toISOString(),
+      to: to.toISOString(),
+      bucketSec,
+      radios: summary.map((row: any) => {
+        const uid = String(row.device_id);
+        return {
+          uid,
+          fixes: row.fixes,
+          firstAt: new Date(row.first_at).getTime(),
+          lastAt: new Date(row.last_at).getTime(),
+          lat: Number(row.lat),
+          lon: Number(row.lon),
+          spreadM: Math.round(Number(row.extent_m)),
+          points: tracks.get(uid) || null,
+        };
+      }),
+    });
+  } catch (error: any) {
+    return c.json({ error: "fleet_replay_failed", message: error.message }, 500);
+  }
+});
+
 // Patrol coverage: where the radios this viewer can see have been in the last
 // few hours, as grid squares carrying when each was last visited.
 const COVERAGE_CELL_DEG = 0.0005; // about 55 m

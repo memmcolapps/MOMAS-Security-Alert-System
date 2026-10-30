@@ -152,6 +152,13 @@ const indexRoute = createRoute({
   component: page("OperationsRoute"),
 });
 
+const replayRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/replay",
+  beforeLoad: requireReadySession,
+  component: page("ReplayRoute"),
+});
+
 const devicesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/devices",
@@ -231,6 +238,7 @@ const orgAdminRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   alarmsRoute,
+  replayRoute,
   devicesRoute,
   dronesRoute,
   geofencesRoute,
