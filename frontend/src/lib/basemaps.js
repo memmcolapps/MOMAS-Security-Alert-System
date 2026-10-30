@@ -56,7 +56,17 @@ export const IMAGERY_LABEL_TILES = {
   options: { maxZoom: 21, maxNativeZoom: 19, opacity: 0.9, attribution: ESRI_ATTRIBUTION },
 };
 
-/** Basemaps that draw no place names of their own and need the overlay. */
+/**
+ * Street names for imagery, stacked under the place names. Seen from above,
+ * one road looks like the next; the name is what says where a radio is. Esri
+ * serves real tiles to zoom 19, so names stay sharp as far in as the imagery.
+ */
+export const IMAGERY_ROAD_TILES = {
+  url: `${ESRI_REFERENCE}/World_Transportation/MapServer/tile/{z}/{y}/{x}`,
+  options: { maxZoom: 21, maxNativeZoom: 19, opacity: 0.9, attribution: ESRI_ATTRIBUTION },
+};
+
+/** Basemaps that draw no place names of their own and need the overlays. */
 export const LABELLED_BASEMAPS = new Set(["satellite"]);
 
 /**
@@ -78,6 +88,40 @@ export const VECTOR_STYLES = {
 };
 
 /**
+ * The stock styles undersell street names, which are what tell an operator
+ * where a radio is at street level. Motorways get only a route shield - "E1",
+ * never "Lagos-Ibadan Expressway" - small-street names wait for zoom 15, and
+ * every name is 12-13px grey with no halo colour, so it sinks into the road it
+ * labels. Both styles use these layer ids; a missing one is skipped.
+ */
+const ROAD_NAME_SIZE = ["interpolate", ["linear"], ["zoom"], 13, 12, 16, 14, 18, 16];
+
+function emphasiseRoadNames(glMap) {
+  const has = (id) => Boolean(glMap.getLayer(id));
+  if (has("highway-name-major")) {
+    glMap.setFilter("highway-name-major", [
+      "match",
+      ["get", "class"],
+      ["motorway", "trunk", "primary", "secondary", "tertiary"],
+      true,
+      false,
+    ]);
+  }
+  // The shields sit above the names and are placed first; at their stock 200px
+  // spacing they leave no stretch long enough for "Lagos-Ibadan Expressway".
+  if (has("highway-shield-non-us")) glMap.setLayoutProperty("highway-shield-non-us", "symbol-spacing", 600);
+  // Zoom 14 is the deepest the tiles go, so every name is already loaded there.
+  if (has("highway-name-minor")) glMap.setLayerZoomRange("highway-name-minor", 14, 24);
+  for (const id of ["highway-name-major", "highway-name-minor"]) {
+    if (!has(id)) continue;
+    glMap.setLayoutProperty(id, "text-size", ROAD_NAME_SIZE);
+    glMap.setPaintProperty(id, "text-color", "#333");
+    glMap.setPaintProperty(id, "text-halo-color", "#fff");
+    glMap.setPaintProperty(id, "text-halo-width", 1.5);
+  }
+}
+
+/**
  * A Leaflet layer that draws one of VECTOR_STYLES. MapLibre is large, so it is
  * fetched only the first time someone picks a vector basemap, not on every
  * load of the satellite map most people use.
@@ -87,10 +131,17 @@ export async function vectorBasemapLayer(L, key) {
     import("@maplibre/maplibre-gl-leaflet"),
     import("maplibre-gl/dist/maplibre-gl.css"),
   ]);
-  return maplibreGL({
+  const layer = maplibreGL({
     style: VECTOR_STYLES[key],
     attribution: OSM_ATTRIBUTION,
     // Leaflet owns zoom and panning; MapLibre only paints underneath.
     interactive: false,
   });
+  // The plugin builds a fresh MapLibre map every time the layer is added, so
+  // the road names are re-emphasised each time this basemap is picked again.
+  layer.on("add", () => {
+    const glMap = layer.getMaplibreMap();
+    glMap?.on("style.load", () => emphasiseRoadNames(glMap));
+  });
+  return layer;
 }
