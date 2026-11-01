@@ -102,6 +102,12 @@ async function speakerName(session: ActiveSession, uid: unknown) {
   return name;
 }
 
+// An eviction by another login keeps its own code (see kickoutError in
+// live-client); every other voice failure is a dropped link.
+function voiceErrorCode(error: Error) {
+  return (error as Error & { code?: string }).code === "pocstars_kicked" ? "pocstars_kicked" : "pocstars_voice_error";
+}
+
 function attachSpeakerEvents(session: ActiveSession) {
   const { ws, client } = session;
   let lastAudioUid: string | null = null;
@@ -537,7 +543,7 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
     send(ws, { type: "ptt.state", state: state.speaking ? "granted" : "idle", reason: state.reason });
   });
   client.on("error", (error: Error) => {
-    if (!session.closed) send(ws, { type: "error", code: "pocstars_voice_error", message: error.message });
+    if (!session.closed) send(ws, { type: "error", code: voiceErrorCode(error), message: error.message });
   });
 
   try {
@@ -632,7 +638,7 @@ async function startMonitor(ws: WSContext, user: any, message: any) {
   liveSessions.add(session);
   attachSpeakerEvents(session);
   client.on("error", (error: Error) => {
-    if (!session.closed) send(ws, { type: "error", code: "pocstars_voice_error", message: error.message });
+    if (!session.closed) send(ws, { type: "error", code: voiceErrorCode(error), message: error.message });
   });
 
   try {

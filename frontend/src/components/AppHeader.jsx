@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Building2, ChevronDown, FileSearch, History, LogOut, Map, MapPinned, Plane, Radio, ShieldAlert, ShieldCheck, Siren, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getActiveOrganizationId, getMe, setActiveOrganizationId, setAuthToken } from "../lib/api";
+import { clearOfflineCache } from "../lib/offline-cache";
 import { PLATFORM_ROLE_LABELS, isPlatformOwner, isPlatformStaff } from "../lib/platform-roles";
 import { LocationStatus } from "./LocationStatus";
 
@@ -42,6 +43,7 @@ export function AppHeader() {
 
   function logout() {
     setAuthToken(null);
+    clearOfflineCache();
     queryClient.clear();
     navigate({ to: "/login" });
   }

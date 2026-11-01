@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { LogIn, Shield } from "lucide-react";
 import { useState } from "react";
@@ -7,11 +7,15 @@ import { isPlatformStaff } from "../lib/platform-roles";
 
 export function LoginRoute() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [form, setForm] = useState({ email: "", password: "" });
 
   const loginMutation = useMutation({
     mutationFn: login,
     onSuccess: ({ token, user }) => {
+      // A session that ended on a 401 leaves the last user's data in memory;
+      // the new one must not open on it.
+      queryClient.clear();
       setAuthToken(token);
       setActiveOrganizationId(isPlatformStaff(user) ? null : user.memberships?.[0]?.organization_id || null);
       const orgRole = user.active_membership?.role || user.memberships?.[0]?.role;

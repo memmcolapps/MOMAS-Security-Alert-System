@@ -13,13 +13,17 @@ import {
 } from "@tanstack/react-router";
 import { createRoot } from "react-dom/client";
 import { AppHeader } from "./components/AppHeader";
+import { ConnectionBanner } from "./components/ConnectionBanner";
 import { FollowBar } from "./components/FollowBar";
 import { LiveRadioBar } from "./components/LiveRadioBar";
 import { SosAlarmBanner, SosAlarmProvider } from "./components/SosAlarm";
 import { FollowProvider } from "./lib/follow-session";
 import { LiveRadioProvider } from "./lib/live-radio-session";
-import { getAuthToken, getMe } from "./lib/api";
+import { getActiveOrganizationId, getAuthToken, getMe } from "./lib/api";
+import { noteRestoredAt } from "./lib/connection";
+import { persistQueryCache, restoreQueryCache } from "./lib/offline-cache";
 import { PLATFORM_RANK, platformRank } from "./lib/platform-roles";
+import { registerServiceWorker } from "./lib/service-worker";
 import "./styles.css";
 
 // Each screen is its own chunk, fetched on first visit (or on hover, through
@@ -33,8 +37,14 @@ const queryClient = new QueryClient({
       refetchOnWindowFocus: false,
       retry: 1,
     },
+    // By default a change made offline is held and sent when the network
+    // returns. Here that could acknowledge an alarm someone else has already
+    // handled, so it fails at once with "You're offline. Nothing was saved."
+    mutations: { networkMode: "always" },
   },
 });
+
+const currentSession = () => ({ token: getAuthToken(), organizationId: getActiveOrganizationId() });
 
 function RootLayout() {
   const router = useRouterState();
@@ -68,6 +78,7 @@ function RootLayout() {
             <div ref={chromeRef} className="fixed left-0 right-0 top-0 z-[1100]">
               <AppHeader />
               <LiveRadioBar />
+              <ConnectionBanner />
             </div>
           ) : null}
           <Outlet />
@@ -107,6 +118,19 @@ const rootRoute = createRootRoute({
 
 async function requireSession() {
   if (!getAuthToken()) throw redirect({ to: "/login" });
+  // The saved copy restored at startup belongs to this same sign-in, so the
+  // page can open on it at once - with no network, or a server slow to answer -
+  // while the check runs behind. A server that says the session is over still
+  // ends it.
+  // An invalidated copy is skipped: a password change marks it so the next
+  // page sees the cleared must_change_password flag.
+  const cached = queryClient.getQueryData(["me"]);
+  if (cached && !queryClient.getQueryState(["me"])?.isInvalidated) {
+    queryClient.fetchQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 }).catch((error) => {
+      if (error?.status === 401) router.navigate({ to: "/login" });
+    });
+    return cached;
+  }
   try {
     return await queryClient.fetchQuery({
       queryKey: ["me"],
@@ -256,8 +280,13 @@ const router = createRouter({
   defaultPreload: "intent",
 });
 
-createRoot(document.getElementById("root")).render(
-  <QueryClientProvider client={queryClient}>
-    <RouterProvider router={router} />
-  </QueryClientProvider>,
-);
+restoreQueryCache(queryClient, currentSession()).then((savedAt) => {
+  noteRestoredAt(savedAt);
+  persistQueryCache(queryClient, currentSession);
+  createRoot(document.getElementById("root")).render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+  registerServiceWorker();
+});

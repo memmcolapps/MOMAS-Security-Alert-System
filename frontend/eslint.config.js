@@ -34,6 +34,21 @@ export default [
     },
   },
   {
+    // The service worker runs in its own global scope; the build prepends
+    // VERSION and PRECACHE (vite.config.js).
+    files: ["sw/**/*.js"],
+    languageOptions: {
+      sourceType: "script",
+      globals: {
+        caches: "readonly",
+        PRECACHE: "readonly",
+        Request: "readonly",
+        self: "readonly",
+        VERSION: "readonly",
+      },
+    },
+  },
+  {
     files: ["scripts/**/*.js", "*.config.js"],
     languageOptions: {
       globals: {

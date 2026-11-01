@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { getAuthToken } from "./api";
 import { BrowserRadioAudio, liveRadioUrl } from "./live-radio";
 
 // One live-radio session for the whole app. The listen bar monitors a division
@@ -19,6 +20,27 @@ const START_FAIL_CODES = new Set([
   "invalid_group_id",
 ]);
 
+// While a dropped channel is reconnecting, these can be our own ghost: the
+// server only notices a vanished connection after its idle timeout (about two
+// minutes), and until then the old session still holds the console seat or
+// the radio network. They are retried for this long, then given up.
+const RETRYABLE_CODES = new Set(["pocstars_monitor_failed", "radio_console_busy"]);
+const RETRYABLE_FOR_MS = 3 * 60_000;
+const MAX_RETRY_DELAY_MS = 30_000;
+
+// 1s, 2s, 4s ... capped at 30s, each spread ±30% so a room of consoles that
+// all lost the server together do not all come back in the same instant.
+export function reconnectDelay(attempt, random = Math.random) {
+  const base = Math.min(MAX_RETRY_DELAY_MS, 1000 * 2 ** attempt);
+  return Math.round(base * (0.7 + random() * 0.6));
+}
+
+// The radio network allows one login per dispatcher account. Being evicted
+// means someone else is using it now; reconnecting would evict them in turn.
+function isKickout(message) {
+  return message.code === "pocstars_kicked" || /used somewhere else/i.test(message.message || "");
+}
+
 export function LiveRadioProvider({ children }) {
   const socketRef = useRef(null);
   const audioRef = useRef(null);
@@ -26,6 +48,12 @@ export function LiveRadioProvider({ children }) {
   const modeRef = useRef(null);
   const resumeChannelRef = useRef(null);
   const startingRef = useRef(false);
+  // The channel the operator asked to monitor. A monitor that drops for any
+  // reason other than the operator stopping it is reconnected to this.
+  const wantedChannelRef = useRef(null);
+  // The socket teardown() closed on purpose, so its close is not a drop.
+  const closingRef = useRef(null);
+  const retryRef = useRef({ attempt: 0, since: 0, timer: null, onOnline: null });
   // Each start() bumps this. A socket's handlers capture their own id, so a
   // superseded (replaced) socket's late onclose is ignored, while the current
   // socket's onclose remains the single authority for resetting state.
@@ -71,12 +99,29 @@ export function LiveRadioProvider({ children }) {
     setCallDevice(null);
   }, []);
 
+  const clearRetryTimer = useCallback(() => {
+    const retry = retryRef.current;
+    if (retry.timer) window.clearTimeout(retry.timer);
+    if (retry.onOnline) window.removeEventListener("online", retry.onOnline);
+    retry.timer = null;
+    retry.onOnline = null;
+  }, []);
+
+  const cancelReconnect = useCallback(() => {
+    clearRetryTimer();
+    retryRef.current.attempt = 0;
+    retryRef.current.since = 0;
+  }, [clearRetryTimer]);
+
+  useEffect(() => cancelReconnect, [cancelReconnect]);
+
   // Send the leave frames and close the socket. Ref/state cleanup is left to
   // the socket's onclose so there is exactly one place that resets state.
   const teardown = useCallback(() => {
     heldRef.current = false;
     audioRef.current?.setTransmitting(false);
     const socket = socketRef.current;
+    closingRef.current = socket;
     if (socket?.readyState === window.WebSocket.OPEN) {
       if (modeRef.current === "private") {
         socket.send(JSON.stringify({ type: "ptt.stop" }));
@@ -88,11 +133,46 @@ export function LiveRadioProvider({ children }) {
     socket?.close();
   }, []);
 
-  const start = useCallback(async ({ nextMode, nextChannel, nextDevice }) => {
+  // Keep the channel on screen as "reconnecting" and try again after a backoff.
+  // With the browser offline there is no point counting down: wait for it to
+  // come back, then go almost at once.
+  const scheduleReconnect = useCallback((channel) => {
+    const retry = retryRef.current;
+    clearRetryTimer();
+    if (!retry.since) retry.since = Date.now();
+    setMode("monitor");
+    setChannel(channel);
+    setCallState("reconnecting");
+    setPttState("idle");
+    setSpeaker(null);
+    const fire = () => {
+      clearRetryTimer();
+      if (wantedChannelRef.current !== channel || !getAuthToken()) {
+        cancelReconnect();
+        resetVisibleState();
+        return;
+      }
+      void startRef.current({ nextMode: "monitor", nextChannel: channel, retry: true });
+    };
+    retry.onOnline = () => {
+      if (retry.timer) window.clearTimeout(retry.timer);
+      retry.timer = window.setTimeout(fire, reconnectDelay(0) / 2);
+    };
+    window.addEventListener("online", retry.onOnline);
+    if (window.navigator.onLine) retry.timer = window.setTimeout(fire, reconnectDelay(retry.attempt));
+    retry.attempt += 1;
+  }, [cancelReconnect, clearRetryTimer, resetVisibleState]);
+
+  const start = useCallback(async ({ nextMode, nextChannel, nextDevice, retry = false }) => {
     if (startingRef.current) return;
     startingRef.current = true;
-    setError("");
+    if (retry) clearRetryTimer();
+    else {
+      cancelReconnect();
+      setError("");
+    }
     setBusyBy(null);
+    wantedChannelRef.current = nextMode === "monitor" ? nextChannel : null;
     const mySession = (sessionIdRef.current += 1);
     try {
       const previous = socketRef.current;
@@ -115,7 +195,7 @@ export function LiveRadioProvider({ children }) {
       setChannel(nextChannel || null);
       setCallDevice(nextDevice || null);
       setSpeaker(null);
-      setCallState("connecting");
+      setCallState(retry ? "reconnecting" : "connecting");
 
       let socket = null;
       const audio = new BrowserRadioAudio((data) => {
@@ -147,6 +227,7 @@ export function LiveRadioProvider({ children }) {
         if (message.type === "ready") {
           setConfigured(Boolean(message.configured));
           if (!message.configured) {
+            wantedChannelRef.current = null;
             setCondition("Live radio is not configured on this MOMAS server.");
             socket.close();
             return;
@@ -160,6 +241,7 @@ export function LiveRadioProvider({ children }) {
         }
         if (message.type === "call.state" || message.type === "monitor.state") {
           setCallState(message.state);
+          if (message.state === "connected") cancelReconnect();
         }
         if (message.type === "ptt.state") {
           setPttState(message.state);
@@ -169,16 +251,40 @@ export function LiveRadioProvider({ children }) {
           setSpeaker(message.speaking ? { uid: message.uid, name: message.name } : null);
         }
         if (message.type === "error") {
-          setError(message.message || "Live radio failed.");
-          if (message.busyBy) setBusyBy(message.busyBy);
-          if (START_FAIL_CODES.has(message.code)) {
+          if (isKickout(message)) {
+            setError(message.message || "This radio session was ended because the account was used somewhere else.");
+            wantedChannelRef.current = null;
             resumeChannelRef.current = null;
             socket.close();
+            return;
           }
+          // The server's link to the radio network died but this socket is
+          // still open, which used to leave the bar saying "listening" over
+          // silence. Closing it brings the channel back through a reconnect.
+          if (message.code === "pocstars_voice_error" && modeRef.current === "monitor") {
+            socket.close();
+            return;
+          }
+          if (START_FAIL_CODES.has(message.code)) {
+            const since = retryRef.current.since;
+            const retrying = since && RETRYABLE_CODES.has(message.code) && Date.now() - since < RETRYABLE_FOR_MS;
+            if (!retrying) {
+              wantedChannelRef.current = null;
+              resumeChannelRef.current = null;
+              setError(message.message || "Live radio failed.");
+              if (message.busyBy) setBusyBy(message.busyBy);
+            }
+            socket.close();
+            return;
+          }
+          setError(message.message || "Live radio failed.");
+          if (message.busyBy) setBusyBy(message.busyBy);
         }
       };
       socket.onerror = () => {
-        if (sessionIdRef.current === mySession) {
+        // A monitor that fails to connect retries quietly; the bar already
+        // says it is reconnecting.
+        if (sessionIdRef.current === mySession && !wantedChannelRef.current) {
           setError("The live-radio connection could not be opened.");
         }
       };
@@ -189,17 +295,23 @@ export function LiveRadioProvider({ children }) {
         // A newer start() has superseded this socket — leave its state alone.
         if (sessionIdRef.current !== mySession) return;
         if (socketRef.current === socket) socketRef.current = null;
+        const intended = closingRef.current === socket;
+        if (intended) closingRef.current = null;
         const closedMode = modeRef.current;
         modeRef.current = null;
         const resume = resumeChannelRef.current;
+        const wanted = wantedChannelRef.current;
         if (closedMode === "private" && resume) {
           resumeChannelRef.current = null;
           resetVisibleState();
           setTimeout(() => {
             void startRef.current({ nextMode: "monitor", nextChannel: resume });
           }, 400);
+        } else if (!intended && wanted && getAuthToken()) {
+          scheduleReconnect(wanted);
         } else {
           resetVisibleState();
+          if (!intended && closedMode === "private") setError("The call dropped.");
         }
       };
     } catch (reason) {
@@ -211,7 +323,7 @@ export function LiveRadioProvider({ children }) {
     } finally {
       startingRef.current = false;
     }
-  }, [resetVisibleState, teardown]);
+  }, [cancelReconnect, clearRetryTimer, resetVisibleState, scheduleReconnect, teardown]);
 
   const startRef = useRef(start);
   startRef.current = start;
@@ -224,14 +336,20 @@ export function LiveRadioProvider({ children }) {
 
   const stopListening = useCallback(() => {
     resumeChannelRef.current = null;
+    wantedChannelRef.current = null;
+    cancelReconnect();
+    // Between reconnect attempts there is no socket whose close would reset
+    // the bar, so it is done here.
+    if (!socketRef.current) resetVisibleState();
     teardown();
-  }, [teardown]);
+  }, [cancelReconnect, resetVisibleState, teardown]);
 
   const callRadio = useCallback((device) => {
     if (!device?.device_id) return;
-    if (modeRef.current === "monitor") resumeChannelRef.current = channel;
+    // Covers a channel that is mid-reconnect too, not only one that is live.
+    if (wantedChannelRef.current) resumeChannelRef.current = wantedChannelRef.current;
     void start({ nextMode: "private", nextDevice: device });
-  }, [channel, start]);
+  }, [start]);
 
   const endCall = useCallback(() => {
     teardown();

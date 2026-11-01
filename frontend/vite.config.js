@@ -1,8 +1,34 @@
 import react from "@vitejs/plugin-react";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vite";
 
+// Emits /sw.js with the list of every built file, so the service worker can
+// hold the whole app on the device. The version is a hash of the file names,
+// which carry content hashes, so it changes exactly when a deploy changes.
+function serviceWorker() {
+  return {
+    name: "momas-service-worker",
+    apply: "build",
+    enforce: "post",
+    generateBundle(_options, bundle) {
+      const files = Object.keys(bundle)
+        .filter((name) => !name.endsWith(".map"))
+        .map((name) => (name === "index.html" ? "/" : `/${name}`))
+        .sort();
+      const version = createHash("sha256").update(files.join("\n")).digest("hex").slice(0, 12);
+      const source = readFileSync(new URL("./sw/service-worker.js", import.meta.url), "utf8");
+      this.emitFile({
+        type: "asset",
+        fileName: "sw.js",
+        source: `const VERSION = ${JSON.stringify(version)};\nconst PRECACHE = ${JSON.stringify(files)};\n\n${source}`,
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), serviceWorker()],
   build: {
     rollupOptions: {
       output: {

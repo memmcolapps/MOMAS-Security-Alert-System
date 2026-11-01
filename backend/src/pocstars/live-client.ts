@@ -91,11 +91,7 @@ export class PocstarsLiveClient extends EventEmitter {
     this.control.on("close", () => {
       this.connected = false;
       if (this.closing) return;
-      this.fail(new Error(
-        this.kicked
-          ? "This radio session was ended because the account was used somewhere else."
-          : "The radio voice connection closed.",
-      ));
+      this.fail(this.kicked ? kickoutError() : new Error("The radio voice connection closed."));
     });
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("The radio voice server timed out.")), this.options.timeoutMs || 10_000);
@@ -390,9 +386,7 @@ export class PocstarsLiveClient extends EventEmitter {
     // only sees a bare "connection closed" and no reason.
     if (name === "ptt.push.Kickout") {
       this.kicked = true;
-      this.emit("error", new Error(
-        "This radio session was ended because the account was used somewhere else.",
-      ));
+      this.emit("error", kickoutError());
       return;
     }
     // Presence, pushed as it changes rather than polled. Observed on the live
@@ -522,4 +516,14 @@ export class PocstarsLiveClient extends EventEmitter {
     }
     this.pending.clear();
   }
+}
+
+// Tagged so the browser can tell an eviction from a dropped link: a dropped
+// link is reconnected, an eviction must not be (it would evict the other
+// session in turn).
+function kickoutError() {
+  return Object.assign(
+    new Error("This radio session was ended because the account was used somewhere else."),
+    { code: "pocstars_kicked" },
+  );
 }

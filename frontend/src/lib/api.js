@@ -1,4 +1,6 @@
 import { config } from "./app-config";
+import { noteServerReached, noteServerUnreachable } from "./connection";
+import { clearOfflineCache } from "./offline-cache";
 
 const TOKEN_KEY = "momas_auth_token";
 const ORG_KEY = "momas_active_organization_id";
@@ -25,15 +27,32 @@ export function setActiveOrganizationId(organizationId) {
 }
 
 async function request(path, options = {}) {
-  const response = await fetch(`${config.apiBase}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {}),
-      ...(getActiveOrganizationId() ? { "X-Organization-Id": getActiveOrganizationId() } : {}),
-      ...options.headers,
-    },
-    ...options,
-  });
+  let response;
+  try {
+    response = await fetch(`${config.apiBase}${path}`, {
+      headers: {
+        "Content-Type": "application/json",
+        ...(getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {}),
+        ...(getActiveOrganizationId() ? { "X-Organization-Id": getActiveOrganizationId() } : {}),
+        ...options.headers,
+      },
+      ...options,
+    });
+  } catch (cause) {
+    if (cause?.name === "AbortError") throw cause;
+    // The browser's own "Failed to fetch" tells the operator nothing. Say
+    // what happened, and for a change, that it did not go through.
+    noteServerUnreachable();
+    const offline = !window.navigator.onLine;
+    const write = options.method && options.method !== "GET";
+    const error = new Error(
+      `${offline ? "You're offline." : "Can't reach the MOMAS server."}${write ? " Nothing was saved." : ""}`,
+    );
+    error.status = 0;
+    error.code = offline ? "offline" : "server_unreachable";
+    throw error;
+  }
+  noteServerReached();
   const text = await response.text();
   let body = null;
   if (text) {
@@ -44,7 +63,10 @@ async function request(path, options = {}) {
     }
   }
   if (!response.ok) {
-    if (response.status === 401) setAuthToken(null);
+    if (response.status === 401) {
+      setAuthToken(null);
+      clearOfflineCache();
+    }
     // `message` is the operator-facing sentence; `error` is the machine code.
     // Prefer the sentence so raw codes never reach the screen.
     const error = new Error(body?.message || body?.error || response.statusText);

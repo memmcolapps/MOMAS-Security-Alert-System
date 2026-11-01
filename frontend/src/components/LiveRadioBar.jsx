@@ -62,6 +62,7 @@ export function LiveRadioBar() {
   const listening = radio.mode === "monitor";
   const inCall = radio.mode === "private";
   const connecting = radio.callState === "connecting";
+  const reconnecting = radio.callState === "reconnecting";
   const currentValue = listening && radio.channel ? String(radio.channel.id) : selectedId;
 
   const pickChannel = (value) => {
@@ -120,7 +121,9 @@ export function LiveRadioBar() {
           </span>
         ) : null}
 
-        {radio.speaker ? (
+        {reconnecting ? (
+          <span className="text-amber-300/90">Connection to {radio.channel?.name} lost. Reconnecting…</span>
+        ) : radio.speaker ? (
           <span className="flex items-center gap-1.5 text-ops-green">
             <Volume2 size={12} className="animate-pulse" /> {radio.speaker.name || `Radio ${radio.speaker.uid}`} speaking
           </span>
