@@ -2,7 +2,7 @@ import L from "leaflet";
 import { useEffect, useRef } from "react";
 import { IMAGERY_LABEL_TILES, IMAGERY_ROAD_TILES, SATELLITE_TILES } from "../lib/basemaps";
 import { onFrame } from "../lib/frame-ticker";
-import { MOTION, fixAgeSec, fixFromLocation, trailSegments } from "../lib/radio-motion";
+import { MOTION, distanceMetres, fixAgeSec, fixFromLocation, trailSegments } from "../lib/radio-motion";
 import { newestPoint, sampleTrack } from "../lib/radio-playback";
 import { radioIcon } from "./OperationsMap";
 
@@ -133,7 +133,11 @@ export function TrackMap({ radios, radioTracks, trails, paused, onPause, onState
         if (!entry.marker) {
           entry.marker = L.marker([at.lat, at.lon], { keyboard: false }).addTo(map);
         } else {
-          entry.marker.setLatLng([at.lat, at.lon]);
+          // A walking radio moves well under a pixel a frame; across a wall of
+          // tiles, skipping those redraws is most of the frame budget.
+          const current = entry.marker.getLatLng();
+          const metresPerPixel = (156543 * Math.cos((at.lat * Math.PI) / 180)) / 2 ** map.getZoom();
+          if (distanceMetres({ lat: current.lat, lon: current.lng }, at) >= metresPerPixel * 0.5) entry.marker.setLatLng([at.lat, at.lon]);
         }
         pins.push(entry.marker.getLatLng());
 
