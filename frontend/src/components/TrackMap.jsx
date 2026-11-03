@@ -60,7 +60,9 @@ export function TrackMap({ radios, radioTracks, trails, paused, onPause, onState
     map.on("dragstart", () => propsRef.current.onPause?.());
     mapRef.current = map;
 
-    const resize = new window.ResizeObserver(() => map.invalidateSize({ pan: false }));
+    // Growing to fill the screen and shrinking back keep the same centre, so
+    // the radio stays in the middle rather than drifting to a corner.
+    const resize = new window.ResizeObserver(() => map.invalidateSize({ pan: true, animate: false }));
     resize.observe(nodeRef.current);
     const entries = entriesRef.current;
     return () => {
@@ -86,7 +88,8 @@ export function TrackMap({ radios, radioTracks, trails, paused, onPause, onState
         entries.set(radio.uid, entry);
       }
       const fix = fixFromLocation(radio.location);
-      const sos = radio.location?.processStatus === 1;
+      // From MOMAS's own alarms: the location feed carries no alarm flag.
+      const sos = Boolean(radio.sos);
       Object.assign(entry, { radio, fix, sos, offline: !sos && !radio.online });
     }
     for (const [uid, entry] of entries) {

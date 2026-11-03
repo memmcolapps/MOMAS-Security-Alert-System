@@ -105,9 +105,12 @@ function TrackTile({
         setDragOver(false);
         onDrop();
       }}
-      className={`relative flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border-2 bg-black shadow-lg shadow-black/40 ${
+      // Filling the screen lifts the tile out of its cell to cover the whole
+      // grid; it needs "absolute" alone, since "relative" would win and keep
+      // it in its cell.
+      className={`${maximised ? "absolute inset-0 z-10" : "relative"} flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border-2 bg-black shadow-lg shadow-black/40 ${
         sos ? "animate-pulse border-ops-red" : dim ? "border-amber-400/60" : ""
-      } ${maximised ? "absolute inset-0 z-10" : ""} ${hidden ? "invisible" : ""} ${dragOver ? "ring-2 ring-white/60" : ""}`}
+      } ${hidden ? "invisible" : ""} ${dragOver ? "ring-2 ring-white/60" : ""}`}
       style={sos || dim ? undefined : { borderColor: radio.colour }}
     >
       <header
@@ -266,7 +269,9 @@ function TogetherView({ radios, radioTracks, trails, onStop }) {
  */
 export function TrackGrid({
   style,
+  avoidKey,
   tracked,
+  sosRadioIds,
   devices,
   deviceRegistry,
   locations,
@@ -293,6 +298,38 @@ export function TrackGrid({
   const [overflowOpen, setOverflowOpen] = useState(false);
   const dragRef = useRef(null);
 
+  // Alarm banners from elsewhere on the page sit over the top of the grid,
+  // exactly when its bar matters most ("+2 not shown", who took whose tile).
+  // The grid starts below the lowest of them, and follows them as they wrap,
+  // grow or go.
+  const wrapperRef = useRef(null);
+  const [padTop, setPadTop] = useState(0);
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return undefined;
+    const measure = () => {
+      const top = wrapper.getBoundingClientRect().top;
+      let lowest = top;
+      for (const node of document.querySelectorAll("[data-grid-avoid]")) {
+        const rect = node.getBoundingClientRect();
+        if (rect.height) lowest = Math.max(lowest, rect.bottom + TILE_GAP);
+      }
+      setPadTop(Math.round(lowest - top));
+    };
+    measure();
+    // The banners render in the same commit as avoidKey changes, but a frame
+    // later is when their final size is known.
+    const frame = window.requestAnimationFrame(measure);
+    const observer = new window.ResizeObserver(measure);
+    document.querySelectorAll("[data-grid-avoid]").forEach((node) => observer.observe(node));
+    window.addEventListener("resize", measure);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [avoidKey]);
+
   useEffect(() => {
     const node = areaRef.current;
     if (!node) return undefined;
@@ -317,6 +354,14 @@ export function TrackGrid({
   useEffect(() => {
     if (maximised && !tracked.some((item) => item.deviceId === maximised)) setMaximised(null);
   }, [tracked, maximised]);
+  // A new SOS on any other tile ends "fill the screen", so it is never hidden
+  // behind the enlarged one.
+  const seenSosRef = useRef(sosRadioIds);
+  useEffect(() => {
+    const fresh = [...sosRadioIds].some((uid) => !seenSosRef.current.has(uid) && uid !== maximised);
+    seenSosRef.current = sosRadioIds;
+    if (fresh) setMaximised(null);
+  }, [sosRadioIds, maximised]);
 
   // What each tile needs about its radio, rebuilt only when it changes so a
   // tile's map is not handed a "new" radio on every render.
@@ -332,20 +377,33 @@ export function TrackGrid({
         recentreKey: item.recentreKey || 0,
         label: row?.name || `Radio ${item.deviceId}`,
         glyph: deviceTypeGlyph(row?.device_type),
+        sos: location?.processStatus === 1 || sosRadioIds.has(item.deviceId),
         online: Boolean(row?.pocstars_online) || location?.processStatus === 1,
         location,
       };
       const cached = radioCache.current.get(item.deviceId);
       const same =
-        cached && ["colour", "paused", "recentreKey", "label", "glyph", "online", "location"].every((key) => cached[key] === radio[key]);
+        cached && ["colour", "paused", "recentreKey", "label", "glyph", "sos", "online", "location"].every((key) => cached[key] === radio[key]);
       return same ? cached : radio;
     });
     radioCache.current = new Map(next.map((radio) => [radio.uid, radio]));
     return next;
-  }, [tracked, deviceRegistry, locations]);
+  }, [tracked, deviceRegistry, locations, sosRadioIds]);
 
-  const shown = view === "split" ? radios.slice(0, grid.shown) : radios;
-  const notShown = view === "split" ? radios.slice(grid.shown) : [];
+  // When not every radio fits - say an alarm banner has just squeezed the grid
+  // - radios in SOS keep their tiles first; the rest fill up in their order.
+  const { shown, notShown } = useMemo(() => {
+    if (view !== "split" || radios.length <= grid.shown) return { shown: radios, notShown: [] };
+    const keep = new Set(radios.filter((radio) => radio.sos).slice(0, grid.shown).map((radio) => radio.uid));
+    for (const radio of radios) {
+      if (keep.size >= grid.shown) break;
+      keep.add(radio.uid);
+    }
+    return { shown: radios.filter((radio) => keep.has(radio.uid)), notShown: radios.filter((radio) => !keep.has(radio.uid)) };
+  }, [radios, grid.shown, view]);
+  // SOS radios waiting for a tile come first in the list.
+  const overflowList = useMemo(() => [...notShown.filter((radio) => radio.sos), ...notShown.filter((radio) => !radio.sos)], [notShown]);
+  const waitingSos = overflowList.filter((radio) => radio.sos).length;
   const trackedIds = useMemo(() => new Set(tracked.map((item) => item.deviceId)), [tracked]);
   const emptyCells = view === "split" ? grid.cols * grid.rows - shown.length : 0;
 
@@ -354,7 +412,7 @@ export function TrackGrid({
       {/* The main map stays mounted underneath, so going back to one radio is
         instant; this hides it while the tiles are up. */}
       <div className="absolute inset-x-0 bottom-0 top-[var(--ops-chrome)] z-[899] bg-ops-bg" />
-      <div style={style} className="absolute z-[900] flex flex-col gap-2">
+      <div ref={wrapperRef} style={{ ...style, paddingTop: padTop }} className="absolute z-[900] flex flex-col gap-2 transition-[padding] duration-200">
         <div className="glass-panel flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md px-3 py-1.5 text-[11px] text-neutral-300">
           <span className="font-bold text-neutral-100">Tracking {tracked.length} radios</span>
           <Segmented
@@ -368,7 +426,7 @@ export function TrackGrid({
           {view === "split" ? (
             <>
               <span className="inline-flex items-center gap-1.5">
-                <span className="text-neutral-500">Tiles on this screen</span>
+                <span className="text-neutral-500">Tiles</span>
                 <Segmented
                   value={tileSize}
                   onChange={onTileSize}
@@ -386,14 +444,19 @@ export function TrackGrid({
             <span className="relative">
               <button
                 onClick={() => setOverflowOpen((open) => !open)}
-                className="rounded-md bg-amber-400/15 px-2 py-0.5 text-[10px] font-bold text-amber-200 hover:bg-amber-400/25"
+                className={`rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                  waitingSos ? "bg-red-500/20 text-red-200 hover:bg-red-500/30" : "bg-amber-400/15 text-amber-200 hover:bg-amber-400/25"
+                }`}
               >
-                +{notShown.length} not shown
+                +{notShown.length} not shown{waitingSos ? ` · ${waitingSos} SOS` : ""}
               </button>
               {overflowOpen ? (
-                <ul className="glass-panel absolute left-0 top-full z-20 mt-1 w-56 rounded-md py-1 shadow-xl">
-                  <li className="px-2 py-1 text-[10px] text-neutral-500">No room at this tile size. Pick one to show it first.</li>
-                  {notShown.map((radio) => (
+                // However many are waiting, the list stays on screen and scrolls.
+                <ul className="scrollbar-thin absolute left-0 top-full z-20 mt-1 max-h-[min(60vh,420px)] w-64 overflow-y-auto rounded-md border border-white/10 bg-neutral-950 py-1 shadow-xl">
+                  <li className="sticky top-0 bg-neutral-950/95 px-2 py-1 text-[10px] text-neutral-500">
+                    No room at this tile size. Pick one to show it first.
+                  </li>
+                  {overflowList.map((radio) => (
                     <li key={radio.uid}>
                       <button
                         onClick={() => {
@@ -402,8 +465,9 @@ export function TrackGrid({
                         }}
                         className="flex w-full items-center gap-2 px-2 py-1 text-left hover:bg-white/10"
                       >
-                        <span className="h-2 w-2 rounded-full" style={{ background: radio.colour }} />
-                        <span className="truncate">{radio.label}</span>
+                        <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: radio.colour }} />
+                        <span className="min-w-0 flex-1 truncate">{radio.label}</span>
+                        {radio.sos ? <span className="shrink-0 text-[9px] font-bold text-ops-red">SOS</span> : null}
                       </button>
                     </li>
                   ))}
@@ -411,7 +475,6 @@ export function TrackGrid({
               ) : null}
             </span>
           ) : null}
-          {notice ? <span className="text-amber-300">{notice}</span> : null}
           <span className="ml-auto text-[9px] text-neutral-600">Imagery © Esri</span>
           <button
             onClick={onStopAll}
@@ -419,6 +482,15 @@ export function TrackGrid({
           >
             Stop all
           </button>
+        </div>
+        {/* Floats over the top of the tiles rather than sitting in the bar, so
+            a long message never wraps the bar and costs a row of tiles. */}
+        <div className="relative z-20 -mt-2 h-0">
+          {notice ? (
+            <p className="absolute left-1/2 top-2 w-max max-w-[min(640px,100%)] -translate-x-1/2 rounded-md border border-amber-400/40 bg-neutral-950/95 px-3 py-1.5 text-[11px] font-semibold text-amber-200 shadow-xl">
+              {notice}
+            </p>
+          ) : null}
         </div>
 
         {view === "together" ? (

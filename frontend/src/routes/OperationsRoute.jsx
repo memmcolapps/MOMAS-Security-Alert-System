@@ -29,7 +29,7 @@ import { buildReplay } from "../lib/radio-replay";
 import { useSosAlarm } from "../components/SosAlarm";
 import { useFollow } from "../lib/follow-session";
 import { useRadioTracks } from "../lib/radio-tracks";
-import { DEFAULT_TILE_SIZE, TILE_SIZES, fitsTogether, nextColour } from "../lib/track-grid";
+import { DEFAULT_TILE_SIZE, TILE_SIZES, fitsTogether, nextColour, placeSosRadio } from "../lib/track-grid";
 import { fixFromLocation } from "../lib/radio-motion";
 import {
   dronePollInterval,
@@ -279,7 +279,7 @@ export function OperationsRoute() {
   gridCapacityRef.current = trackView === "split" ? gridCapacity : Infinity;
   useEffect(() => {
     if (!trackNotice) return undefined;
-    const timer = window.setTimeout(() => setTrackNotice(null), 5000);
+    const timer = window.setTimeout(() => setTrackNotice(null), 12_000);
     return () => window.clearTimeout(timer);
   }, [trackNotice]);
   // The Live tour moves the camera every few seconds and tracking pans it
@@ -362,6 +362,50 @@ export function OperationsRoute() {
       return next;
     });
   }, []);
+  // An SOS while several radios are tracked always gets a tile. Already on
+  // screen: nothing moves. Room left: it is added. Screen full: it takes the
+  // place of the radio that matters least - offline, then no fix, then still,
+  // then moving; never another SOS - which stays tracked under "not shown".
+  const radioStatusesRef = useRef({});
+  radioStatusesRef.current = radioStatuses;
+  const sosRadioIdsRef = useRef(new Set());
+  // Takes every radio whose SOS arrived together, so a burst of alarms is
+  // placed in one pass and reported in one message.
+  const showSosRadios = useCallback((deviceIds) => {
+    const ids = [...new Set(deviceIds.map(String))];
+    if (!ids.length) return;
+    setTracked((current) => {
+      const room = gridCapacityRef.current;
+      const rules = {
+        isSos: (uid) => sosRadioIdsRef.current.has(uid),
+        statusOf: (uid) => radioStatusesRef.current[uid]?.status,
+      };
+      let next = current;
+      const displaced = [];
+      for (const id of ids) {
+        const placed = placeSosRadio(next, id, room, rules);
+        next = placed.tracked;
+        if (placed.displaced) displaced.push(placed.displaced);
+      }
+      const name = (uid) => deviceRegistryRef.current.get(uid)?.name || uid;
+      const visible = new Set(next.slice(0, Math.min(next.length, room)).map((item) => item.deviceId));
+      const onScreen = ids.filter((id) => visible.has(id)).length;
+      const waiting = ids.length - onScreen;
+      // Radios pushed off screen may be pushed again by a later SOS in the
+      // same burst; only the ones still off screen are worth naming.
+      const moved = displaced.filter((uid) => !visible.has(uid));
+      if (ids.length === 1 && moved.length === 1) {
+        setTrackNotice(`SOS: ${name(ids[0])} took ${name(moved[0])}'s tile. ${name(moved[0])} is still tracked under "not shown".`);
+      } else if (ids.length > 1 && (moved.length || waiting)) {
+        setTrackNotice(
+          `SOS on ${ids.length} radios: ${onScreen} on screen${waiting ? `, ${waiting} waiting under "not shown"` : ""}.${
+            moved.length ? ` ${moved.length} radio${moved.length === 1 ? "" : "s"} they replaced ${moved.length === 1 ? "is" : "are"} still tracked.` : ""
+          }`,
+        );
+      }
+      return next;
+    });
+  }, []);
   const bringTrackedForward = useCallback((deviceId) => {
     setTracked((current) => {
       const item = current.find((entry) => entry.deviceId === deviceId);
@@ -424,8 +468,12 @@ export function OperationsRoute() {
     () => new Map(devices.map((device) => [String(device.device_id), device])),
     [devices],
   );
+  const deviceRegistryRef = useRef(deviceRegistry);
+  deviceRegistryRef.current = deviceRegistry;
   const trackedIds = useMemo(() => new Set(tracked.map((item) => item.deviceId)), [tracked]);
   const gridActive = tracked.length >= 2;
+  const gridActiveRef = useRef(gridActive);
+  gridActiveRef.current = gridActive;
   // Keep ?track= in step with what is tracked.
   const trackParam = tracked.map((item) => item.deviceId).join(",");
   useEffect(() => {
@@ -482,6 +530,7 @@ export function OperationsRoute() {
     () => new Set(activeAlerts.filter(isRadioSos).map((alert) => String(alert.device_id))),
     [activeAlerts],
   );
+  sosRadioIdsRef.current = sosRadioIds;
   const sosRadioKey = [...sosRadioIds].sort().join(",");
   const sosStartMs = useMemo(
     () => Math.min(...activeAlerts.filter(isRadioSos).map((alert) => new Date(alert.triggered_at).getTime() || Date.now())),
@@ -525,6 +574,15 @@ export function OperationsRoute() {
 
     const newIds = activeIds.filter((id) => !knownSosIdsRef.current.has(id));
     activeIds.forEach((id) => knownSosIdsRef.current.add(id));
+    // Several radios on screen: every new radio SOS gets a tile of its own.
+    if (gridActiveRef.current) {
+      const fresh = new Set(newIds);
+      showSosRadios(
+        activeAlerts
+          .filter((alert) => isRadioSos(alert) && fresh.has(String(alert.alert_key || `pocstars:${alert.sos_msg_id}`)))
+          .map((alert) => alert.device_id),
+      );
+    }
     newIds.forEach((id) => pendingSosFocusIdsRef.current.add(id));
     const focusAlert = activeAlerts.find(
       (alert) =>
@@ -551,7 +609,7 @@ export function OperationsRoute() {
     pendingSosFocusIdsRef.current.forEach((id) => {
       if (!activeSet.has(id)) pendingSosFocusIdsRef.current.delete(id);
     });
-  }, [activeAlerts, alertsQuery.isSuccess]);
+  }, [activeAlerts, alertsQuery.isSuccess, showSosRadios]);
 
   // "Show on operations map" hands an alarm over from the alarms screen.
   useEffect(() => {
@@ -784,6 +842,9 @@ export function OperationsRoute() {
 
       {gridActive ? (
         <TrackGrid
+          // Changes whenever an alarm banner appears, goes or changes, so the
+          // grid can move down out from under it.
+          avoidKey={`${activeAlerts.length}|${sosAlarm.ringing.length}|${sosAlarm.soundState}`}
           // Clear of the fleet list on the left (so radios can still be added)
           // and of the intelligence feed and its handle on the right.
           style={{
@@ -794,6 +855,7 @@ export function OperationsRoute() {
           }}
           tracked={tracked}
           devices={devices}
+          sosRadioIds={sosRadioIds}
           deviceRegistry={deviceRegistry}
           locations={latestDeviceLocations}
           radioTracks={radioTracks}
@@ -1027,7 +1089,9 @@ export function OperationsRoute() {
       </button>
 
       {activeAlerts.length ? (
-        <section className={`glass-panel absolute left-1/2 z-[1001] flex w-[min(440px,calc(100vw-32px))] -translate-x-1/2 items-center gap-3 rounded-lg border-red-500/50 px-3 py-2.5 ${liveMode ? "top-[calc(var(--ops-chrome)+3.5rem)]" : "top-[calc(var(--ops-chrome)+0.75rem)]"}`}>
+        <section
+          data-grid-avoid=""
+          className={`glass-panel absolute left-1/2 z-[1001] flex w-[min(440px,calc(100vw-32px))] -translate-x-1/2 items-center gap-3 rounded-lg border-red-500/50 px-3 py-2.5 ${liveMode ? "top-[calc(var(--ops-chrome)+3.5rem)]" : "top-[calc(var(--ops-chrome)+0.75rem)]"}`}>
           <span className="relative grid h-8 w-8 shrink-0 place-items-center rounded-full bg-red-500/15 text-red-300">
             <span className="absolute inset-0 animate-ping rounded-full border border-red-400/30" />
             <Siren size={15} />

@@ -4242,15 +4242,28 @@ async function listRadioTrack(deviceId, since) {
   return rows;
 }
 
-/** Several radios' fixes since a moment, in one query, oldest first. */
-async function listRadioTracks(deviceIds, since) {
+/**
+ * Several radios' fixes since a moment, in one query, oldest first, with at
+ * most about `maxPoints` per radio. One limit across every radio kept the
+ * oldest rows, so with many alarmed radios the newest part of each route -
+ * the part that matters - was the part cut. Each radio keeps its last
+ * `RECENT_FULL` fixes in full and every n-th fix before that.
+ */
+const RECENT_FULL = 120;
+async function listRadioTracks(deviceIds, since, maxPoints = 600) {
   const { rows } = await pool.query(
     `SELECT device_id, lat, lon, observed_at, received_at
-       FROM radio_positions
-      WHERE device_id = ANY($1) AND received_at >= $2
-      ORDER BY observed_at ASC
-      LIMIT 100000`,
-    [deviceIds, since],
+       FROM (
+         SELECT device_id, lat, lon, observed_at, received_at,
+                row_number() OVER (PARTITION BY device_id ORDER BY observed_at DESC) AS age_rank,
+                count(*) OVER (PARTITION BY device_id) AS total
+           FROM radio_positions
+          WHERE device_id = ANY($1) AND received_at >= $2
+       ) ranked
+      WHERE age_rank <= $3
+         OR age_rank % GREATEST(1, CEIL((total - $3)::numeric / GREATEST(1, $4 - $3)))::int = 0
+      ORDER BY device_id, observed_at ASC`,
+    [deviceIds, since, RECENT_FULL, maxPoints],
   );
   return rows;
 }

@@ -93,3 +93,41 @@ export function nextColour(used) {
   const taken = new Set(used);
   return TRACK_COLOURS.find((colour) => !taken.has(colour)) || TRACK_COLOURS[used.length % TRACK_COLOURS.length];
 }
+
+// Which tile an incoming SOS should take when the screen is full: the radio
+// that matters least goes first.
+const GIVE_UP_ORDER = { offline: 0, nofix: 1, nopos: 1, online: 2, moving: 3 };
+
+/**
+ * Where a radio that has just raised an SOS goes among the tracked radios,
+ * when `room` tiles fit. Already on screen: nothing moves. Room left: it is
+ * added. Screen full: it takes, in place, the tile of the radio that matters
+ * least - offline, then no fix, then still, then moving, never another SOS -
+ * and that radio moves to the end, still tracked but not shown.
+ *
+ * Returns the new list and the id of the radio moved off screen, if any.
+ */
+export function placeSosRadio(tracked, id, room, { isSos, statusOf }) {
+  const visible = Math.min(tracked.length, room);
+  const at = tracked.findIndex((item) => item.deviceId === id);
+  if (at >= 0 && at < visible) return { tracked, displaced: null };
+  const incoming =
+    at >= 0 ? tracked[at] : { deviceId: id, colour: nextColour(tracked.map((item) => item.colour)), paused: false, recentreKey: 0 };
+  const rest = tracked.filter((item) => item.deviceId !== id);
+  if (at < 0 && tracked.length < room) return { tracked: [...rest, incoming], displaced: null };
+
+  const rankOf = (uid) => GIVE_UP_ORDER[statusOf(uid)] ?? 1;
+  // Ties go to the tile furthest down the screen.
+  let drop = -1;
+  for (let index = visible - 1; index >= 0; index -= 1) {
+    const uid = tracked[index].deviceId;
+    if (isSos(uid)) continue;
+    if (drop < 0 || rankOf(uid) < rankOf(tracked[drop].deviceId)) drop = index;
+  }
+  // Every tile on screen is already an SOS: it waits under "not shown".
+  if (drop < 0) return { tracked: [...rest, incoming], displaced: null };
+  const displaced = tracked[drop];
+  const next = rest.filter((item) => item !== displaced);
+  next.splice(drop, 0, incoming);
+  return { tracked: [...next, displaced], displaced: displaced.deviceId };
+}

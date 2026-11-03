@@ -193,6 +193,8 @@ export function SosAlarmBanner() {
       <button
         type="button"
         onClick={enableAlerts}
+        // The tracked-radio tiles start below anything marked like this.
+        data-grid-avoid=""
         className="fixed left-1/2 top-[calc(var(--ops-chrome)+8px)] z-[1200] inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-amber-400/50 bg-[#1a1408]/95 px-3 py-1.5 text-[11px] font-bold text-amber-300 hover:bg-[#2a200c]"
       >
         <Volume2 size={13} /> SOS siren is off until this screen is clicked - click to arm
@@ -205,6 +207,7 @@ export function SosAlarmBanner() {
   return (
     <div
       role="alert"
+      data-grid-avoid=""
       className="fixed inset-x-0 top-[var(--ops-chrome)] z-[1200] animate-pulse border-b-2 border-red-300 bg-red-700 px-4 py-2.5 text-white"
     >
       <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-3">
