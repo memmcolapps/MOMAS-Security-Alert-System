@@ -80,7 +80,12 @@ export function sosPopup(alert) {
           ? `${Number(alert.map_lat).toFixed(5)}, ${Number(alert.map_lon).toFixed(5)}`
           : "Unknown"
       }</div>
-      <div style="font-size:10px;color:#888">${isGeofence ? `${Math.round(Number(alert.distance_outside_m) || 0)} m outside` : alert.map_location_source === "device" ? "Using latest device location" : "Using SOS location"}</div>
+      <div style="font-size:10px;color:#888">${isGeofence ? `${Math.round(Number(alert.distance_outside_m) || 0)} m outside` : alert.map_location_source === "device" ? "Radio's live position" : "Where the SOS was raised"}</div>
+      ${
+        !isGeofence && alert.map_location_source === "device" && Number.isFinite(Number(alert.origin_lat))
+          ? `<div style="font-size:10px;color:#888">Pressed at ${Number(alert.origin_lat).toFixed(5)}, ${Number(alert.origin_lon).toFixed(5)} · ${Math.round(distanceMetres({ lat: Number(alert.origin_lat), lon: Number(alert.origin_lon) }, { lat: Number(alert.map_lat), lon: Number(alert.map_lon) }))} m away now</div>`
+          : ""
+      }
       ${radioId ? `<button type="button" class="popup-track-btn" data-track-radio="${escapeHtml(radioId)}">Track this radio</button>` : ""}
     </div>
   `;
@@ -194,7 +199,12 @@ export function radioIcon({ label, glyph, status, bearing, tracked, ageSec, ring
       ? `<div class="device-heading" style="transform:rotate(${Math.round(bearing)}deg)"></div>`
       : "";
   const labelled = sos || tracked || status === "moving";
-  const age = status === "nofix" ? ` · ${escapeHtml(formatAge(ageSec))}` : "";
+  const age =
+    status === "nofix"
+      ? ` · ${escapeHtml(formatAge(ageSec))}`
+      : sos && ageSec >= SOS_STALE_LABEL_SEC
+        ? ` · fix ${escapeHtml(formatAge(ageSec))} ago`
+        : "";
   return L.divIcon({
     className: "",
     // A vehicle tracker and a handheld should not look identical on a map.
@@ -219,12 +229,19 @@ const TRACK_ZOOM_MAX = 19;
 // this often, which is plenty for things that change on a scale of seconds.
 const RADIO_VISUAL_MS = 250;
 const TRAIL_REDRAW_MS = 2000;
+const NO_IDS = new Set();
+const NO_SOS_TRAILS = {};
+// An alarmed radio's last fix gets its age on the label once it is this old,
+// so a responder can tell a live position from a stale one at a glance.
+const SOS_STALE_LABEL_SEC = 60;
 
 export function OperationsMap({
   incidents,
   devices,
   locations,
   sosAlerts = [],
+  sosRadioIds = NO_IDS,
+  sosTrails = NO_SOS_TRAILS,
   drones = [],
   geofences = [],
   activeLayers,
@@ -523,13 +540,13 @@ export function OperationsMap({
             ? "moving"
             : "online";
     const bearing = entry.motion?.bearing;
-    const iconKey = [entry.label, entry.glyph, status, status === "moving" ? Math.round(bearing / 5) : "", tracked, status === "nofix" ? formatAge(ageSec) : ""].join("|");
+    const iconKey = [entry.label, entry.glyph, status, status === "moving" ? Math.round(bearing / 5) : "", tracked, status === "nofix" || (status === "sos" && ageSec >= SOS_STALE_LABEL_SEC) ? formatAge(ageSec) : ""].join("|");
     if (iconKey !== entry.iconKey) {
       entry.marker.setIcon(radioIcon({ label: entry.label, glyph: entry.glyph, status, bearing, tracked, ageSec }));
       entry.marker.setZIndexOffset(status === "sos" ? 1000 : tracked ? 900 : status === "moving" ? 500 : status === "offline" ? -500 : 0);
       entry.iconKey = iconKey;
     }
-    const tooltip = `${escapeHtml(entry.label)}${status === "offline" ? " · offline" : ""}${status === "nofix" ? ` · no new fix for ${escapeHtml(formatAge(ageSec))}` : ""}`;
+    const tooltip = `${escapeHtml(entry.label)}${status === "offline" ? " · offline" : ""}${status === "nofix" ? ` · no new fix for ${escapeHtml(formatAge(ageSec))}` : ""}${status === "sos" ? ` · SOS · last fix ${escapeHtml(formatAge(ageSec))} ago` : ""}`;
     if (tooltip !== entry.tooltip) {
       if (entry.marker.getTooltip()) entry.marker.setTooltipContent(tooltip);
       else entry.marker.bindTooltip(tooltip, { direction: "top", offset: [0, -10], opacity: 0.95 });
@@ -570,6 +587,9 @@ export function OperationsMap({
     const points = (trailRef.current || []).filter((point) => new Date(point.observed_at).getTime() <= renderT);
     if (pin) points.push({ lat: pin.lat, lon: pin.lng, observed_at: new Date(renderT).toISOString() });
     const segments = trailSegments(points);
+    // Tracking a radio in alarm, its trail is the alarm's colour, or it would
+    // paint over the red route taken since the SOS.
+    const alarmed = Boolean(radiosRef.current.get(String(trackRef.current.id))?.sos);
     const times = segments.flat().map((point) => point.ms);
     if (!times.length) return;
     const oldest = Math.min(...times);
@@ -584,7 +604,7 @@ export function OperationsMap({
             [from.lat, from.lon],
             [to.lat, to.lon],
           ],
-          { color: "#00cc66", weight: 4, opacity: 0.15 + 0.75 * recency, lineCap: "round", interactive: false },
+          { color: alarmed ? "#ff4444" : "#00cc66", weight: 4, opacity: 0.15 + 0.75 * recency, lineCap: "round", interactive: false },
         ).addTo(trailLayer);
       }
     }
@@ -617,9 +637,12 @@ export function OperationsMap({
         let renderT = now;
         if (track?.path.length) {
           // An alarm is never shown late: an SOS radio sits on its newest point.
+          // Whether it is moving, and which way, still comes from playback, so
+          // a responder can see that someone in distress is on the move.
           if (entry.sos) {
             const newest = newestPoint(track);
-            sample = { lat: newest.lat, lon: newest.lon, moving: false, bearing: null, speedMs: 0 };
+            const motion = sampleTrack(track, now - track.delayMs);
+            sample = { ...motion, lat: newest.lat, lon: newest.lon };
           } else {
             renderT = now - track.delayMs;
             sample = sampleTrack(track, renderT);
@@ -733,7 +756,7 @@ export function OperationsMap({
       const uid = String(location.Uid);
       const fix = fixFromLocation(location);
       if (!fix) continue;
-      const sos = location.processStatus === 1;
+      const sos = location.processStatus === 1 || sosRadioIds.has(uid);
       const row = registry.get(uid);
       // A radio the network is not hearing from goes grey. An SOS stays red
       // whatever the handset's last check-in.
@@ -767,7 +790,7 @@ export function OperationsMap({
       if (entry.layer) removePin(layerFor[entry.layer], entry.marker);
       radios.delete(uid);
     }
-  }, [devices, locations, radioFilter, trackedRadioId, refreshRadio]);
+  }, [devices, locations, sosRadioIds, radioFilter, trackedRadioId, refreshRadio]);
 
   // Replay: the whole route faint, the part already travelled bright, a pin
   // where the radio was at the replay time, and a ring at each stop sized by
@@ -883,6 +906,30 @@ export function OperationsMap({
 
     for (const alert of sosAlerts) {
       if (Number(alert.status) >= 2) continue;
+      // A radio on the map already carries the alarm on its own pin, which
+      // follows it. What is added here is where the button was pressed and
+      // the route it has taken since, so a responder can follow it up.
+      const radioId = String(alert.device_id);
+      if (sosRadioIds.has(radioId) && radiosRef.current.has(radioId)) {
+        const route = (sosTrails[radioId] || []).map((point) => [Number(point.lat), Number(point.lon)]);
+        const originLat = Number(alert.origin_lat);
+        const originLon = Number(alert.origin_lon);
+        const origin = Number.isFinite(originLat) && Number.isFinite(originLon) ? [originLat, originLon] : null;
+        const line = origin ? [origin, ...route] : route;
+        if (line.length > 1) {
+          L.polyline(line, { color: "#ff4444", weight: 4, opacity: 0.8, lineCap: "round", interactive: false }).addTo(sosLayer);
+        }
+        if (origin) {
+          L.circleMarker(origin, { radius: 7, color: "#ff4444", weight: 2.5, fillColor: "#ff4444", fillOpacity: 0.2 })
+            .bindTooltip(`SOS pressed here · ${escapeHtml(new Date(alert.triggered_at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }))}`, {
+              direction: "top",
+              offset: [0, -6],
+            })
+            .bindPopup(sosPopup(alert))
+            .addTo(sosLayer);
+        }
+        continue;
+      }
       const lat = Number(alert.map_lat ?? alert.location_lat);
       const lon = Number(alert.map_lon ?? alert.location_lon);
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
@@ -895,7 +942,7 @@ export function OperationsMap({
       });
       L.marker([lat, lon], { icon, zIndexOffset: 1000 }).bindPopup(sosPopup(alert)).addTo(sosLayer);
     }
-  }, [sosAlerts]);
+  }, [sosAlerts, sosRadioIds, sosTrails, locations]);
 
   useEffect(() => {
     const map = mapRef.current;

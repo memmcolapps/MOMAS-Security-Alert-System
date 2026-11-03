@@ -29,7 +29,7 @@ import { buildReplay } from "../lib/radio-replay";
 import { useSosAlarm } from "../components/SosAlarm";
 import { useFollow } from "../lib/follow-session";
 import { useRadioTracks } from "../lib/radio-tracks";
-import { TILE_SIZES, defaultTileSize, fitsTogether, nextColour } from "../lib/track-grid";
+import { DEFAULT_TILE_SIZE, TILE_SIZES, fitsTogether, nextColour } from "../lib/track-grid";
 import { fixFromLocation } from "../lib/radio-motion";
 import {
   dronePollInterval,
@@ -86,6 +86,17 @@ const COVERAGE_HOURS = ["1", "4", "12", "24"];
 // Stable, so an idle map is not handed a "new" empty trail on every render.
 const EMPTY_TRAIL = [];
 const NO_TRAILS = {};
+
+// A radio's own SOS, as against a geofence alarm about some other asset.
+function isRadioAlarm(alert) {
+  const geofence = alert.source === "geofence" || alert.alert_type === "geofence_breach";
+  return Boolean(alert.device_id) && (!geofence || alert.asset_type === "radio");
+}
+
+// A radio's own SOS button, which puts the radio itself in alarm.
+function isRadioSos(alert) {
+  return Boolean(alert.device_id) && alert.source !== "geofence" && alert.alert_type !== "geofence_breach";
+}
 
 // The tracked radios live in the URL (?track=12,34), so a refresh or a shared
 // link brings back the same screen.
@@ -259,7 +270,7 @@ export function OperationsRoute() {
   const [trackView, setTrackView] = useState("split");
   const [tileSize, setTileSize] = usePersistentChoice(
     "momas_ops_tile_size",
-    defaultTileSize(typeof window === "undefined" ? 1440 : window.screen?.width || window.innerWidth),
+    DEFAULT_TILE_SIZE,
     Object.keys(TILE_SIZES),
   );
   const [gridCapacity, setGridCapacity] = useState(Infinity);
@@ -446,23 +457,58 @@ export function OperationsRoute() {
       allAlerts
         .filter((alert) => Number(alert.status) < 2 && !alert.returned_at)
         .map((alert) => {
+          // Someone in distress may keep moving, so the radio's live position
+          // comes first. Where the alarm was raised is kept as its origin.
           const sosLat = Number(alert.location_lat);
           const sosLon = Number(alert.location_lon);
-          if (Number.isFinite(sosLat) && Number.isFinite(sosLon)) {
-            return { ...alert, map_lat: sosLat, map_lon: sosLon, map_location_source: "sos" };
-          }
-
-          const deviceLocation = latestDeviceLocations.get(String(alert.device_id));
+          const origin = Number.isFinite(sosLat) && Number.isFinite(sosLon) ? { origin_lat: sosLat, origin_lon: sosLon } : {};
+          const deviceLocation = isRadioAlarm(alert) ? latestDeviceLocations.get(String(alert.device_id)) : null;
           const deviceLat = Number(deviceLocation?.Lat);
           const deviceLon = Number(deviceLocation?.Lng);
           if (Number.isFinite(deviceLat) && Number.isFinite(deviceLon)) {
-            return { ...alert, map_lat: deviceLat, map_lon: deviceLon, map_location_source: "device" };
+            return { ...alert, ...origin, map_lat: deviceLat, map_lon: deviceLon, map_location_source: "device" };
           }
-
+          if (origin.origin_lat !== undefined) {
+            return { ...alert, ...origin, map_lat: sosLat, map_lon: sosLon, map_location_source: "sos" };
+          }
           return alert;
         }),
     [allAlerts, latestDeviceLocations],
   );
+  // Radios with an open SOS, taken from MOMAS's own alarms. The radio network's
+  // location feed carries no alarm flag, and an SOS pressed during a private
+  // call never reaches its alarm list at all.
+  const sosRadioIds = useMemo(
+    () => new Set(activeAlerts.filter(isRadioSos).map((alert) => String(alert.device_id))),
+    [activeAlerts],
+  );
+  const sosRadioKey = [...sosRadioIds].sort().join(",");
+  const sosStartMs = useMemo(
+    () => Math.min(...activeAlerts.filter(isRadioSos).map((alert) => new Date(alert.triggered_at).getTime() || Date.now())),
+    [activeAlerts],
+  );
+  // The route each alarmed radio has taken since its alarm, so whoever
+  // responds can see where it has gone, not only where it is.
+  const sosTrailsQuery = useQuery({
+    queryKey: ["sos-trails", sosRadioKey],
+    queryFn: () =>
+      getRadioTracks(sosRadioKey.split(","), Math.min(240, Math.max(1, Math.ceil((Date.now() - sosStartMs) / 60_000) + 1))),
+    enabled: Boolean(sosRadioKey),
+    refetchInterval: 10_000,
+    placeholderData: (previous) => previous,
+  });
+  const sosTrails = useMemo(() => {
+    const tracks = sosRadioKey ? sosTrailsQuery.data?.tracks || {} : {};
+    const since = new Map(
+      activeAlerts.filter(isRadioSos).map((alert) => [String(alert.device_id), new Date(alert.triggered_at).getTime()]),
+    );
+    return Object.fromEntries(
+      Object.entries(tracks).map(([uid, points]) => [
+        uid,
+        points.filter((point) => new Date(point.observed_at).getTime() >= (since.get(uid) ?? Infinity)),
+      ]),
+    );
+  }, [sosTrailsQuery.data, sosRadioKey, activeAlerts]);
 
   useEffect(() => {
     // Wait for the first fetch to land before deciding what counts as "already
@@ -685,6 +731,8 @@ export function OperationsRoute() {
         devices={devices}
         locations={locations}
         sosAlerts={activeAlerts}
+        sosRadioIds={sosRadioIds}
+        sosTrails={sosTrails}
         drones={drones}
         geofences={geofences}
         activeLayers={activeLayers}
@@ -992,6 +1040,15 @@ export function OperationsRoute() {
               Latest: {activeAlerts[0].asset_name || activeAlerts[0].dev_name || activeAlerts[0].device_name || `Device ${activeAlerts[0].device_id}`} · {relativeDate(activeAlerts[0].triggered_at)}
             </p>
           </div>
+          {isRadioSos(activeAlerts[0]) && !trackedIds.has(String(activeAlerts[0].device_id)) ? (
+            <button
+              type="button"
+              className="shrink-0 rounded bg-red-500 px-2.5 py-1.5 text-[9px] font-bold text-white hover:bg-red-400"
+              onClick={() => trackRadio(activeAlerts[0].device_id)}
+            >
+              Track
+            </button>
+          ) : null}
           <Link to="/alarms" className="shrink-0 rounded border border-red-500/40 px-2.5 py-1.5 text-[9px] font-bold text-red-300 hover:bg-red-500/10">
             Open alarms
           </Link>

@@ -779,9 +779,18 @@ export function AlarmsRoute() {
 
             <section className="mt-3 rounded-lg border border-white/10 bg-white/[0.025] p-3">
               <div className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-2 text-[10px] font-bold text-neutral-400"><MapPin size={13} /> Alarm location</span>
-                {/* The map carries open alarms only, so a resolved one has nothing to focus. */}
-                {position && Number(selected.status) < 2 ? (
+                <span className="flex items-center gap-2 text-[10px] font-bold text-neutral-400"><MapPin size={13} /> {selected.source === "geofence" ? "Alarm location" : "Where the SOS was pressed"}</span>
+                {/* The map carries open alarms only, so a resolved one has nothing to focus.
+                    A radio SOS opens tracking instead: the person may still be moving. */}
+                {Number(selected.status) < 2 && selected.source !== "geofence" && selected.device_id ? (
+                  <Link
+                    className="inline-flex items-center gap-1 rounded bg-red-500 px-2 py-1 text-[9px] font-bold text-white hover:bg-red-400"
+                    search={{ track: String(selected.device_id) }}
+                    to="/"
+                  >
+                    <MapIcon size={10} /> Track on operations map
+                  </Link>
+                ) : position && Number(selected.status) < 2 ? (
                   <Link
                     className="inline-flex items-center gap-1 rounded border border-white/10 px-2 py-1 text-[9px] font-bold text-neutral-400 hover:bg-white/5 hover:text-neutral-100"
                     search={{ focus: selected.alert_key }}

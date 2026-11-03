@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { deviceTypeGlyph } from "../lib/domain";
 import { useSecondClock } from "../lib/frame-ticker";
 import { compassFor, formatAge } from "../lib/radio-motion";
-import { TILE_GAP, TILE_SIZES, gridFor } from "../lib/track-grid";
+import { TILE_GAP, TILE_SIZES, capacity, gridFor } from "../lib/track-grid";
 import { TrackMap } from "./TrackMap";
 
 const STATUS_TEXT = {
@@ -368,14 +368,18 @@ export function TrackGrid({
           {view === "split" ? (
             <>
               <span className="inline-flex items-center gap-1.5">
-                <span className="text-neutral-500">Tile size</span>
+                <span className="text-neutral-500">Tiles on this screen</span>
                 <Segmented
                   value={tileSize}
                   onChange={onTileSize}
-                  options={Object.entries(TILE_SIZES).map(([key, size]) => [key, size.label])}
+                  // How many each size fits on this screen, so the trade-off
+                  // is plain before anyone clicks.
+                  options={Object.entries(TILE_SIZES).map(([key, size]) => [
+                    key,
+                    area.width ? `${size.label} · ${capacity(area.width, area.height, key).max}` : size.label,
+                  ])}
                 />
               </span>
-              <span className="tabular-nums text-neutral-500">Room for {grid.max} on this screen</span>
             </>
           ) : null}
           {notShown.length ? (

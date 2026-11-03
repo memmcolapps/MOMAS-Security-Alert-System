@@ -14,12 +14,12 @@ export const TILE_SIZES = {
 // Space between tiles, in CSS pixels.
 export const TILE_GAP = 8;
 
-// Wider than this and it is a wall screen, not a desk.
-const WALL_SCREEN_WIDTH = 2500;
-
-export function defaultTileSize(screenWidth) {
-  return screenWidth >= WALL_SCREEN_WIDTH ? "wall" : "compact";
-}
+// Every screen starts on the smallest tile. Browser pixels say nothing about
+// how big a screen physically is: a 75-inch TV usually reports the same 1920
+// as a laptop, so guessing "wall screen" from them cut the tiles on exactly
+// the screens meant to show the most. The operator picks a bigger size if the
+// room can't read them.
+export const DEFAULT_TILE_SIZE = "compact";
 
 function fitCount(space, size) {
   return Math.max(1, Math.floor((space + TILE_GAP) / (size + TILE_GAP)));

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { TRACK_COLOURS, capacity, defaultTileSize, fitsTogether, gridFor, nextColour } from "./track-grid.js";
+import { TRACK_COLOURS, capacity, fitsTogether, gridFor, nextColour } from "./track-grid.js";
 
 test("the screen decides how many tiles fit, with no fixed limit", () => {
   assert.equal(capacity(1000, 600, "compact").max, 4);
@@ -31,9 +31,10 @@ test("more radios than fit are capped to what fits, not squeezed", () => {
   assert.ok(grid.cols <= 2 && grid.rows <= 2);
 });
 
-test("wall screens start on the large tile size", () => {
-  assert.equal(defaultTileSize(1440), "compact");
-  assert.equal(defaultTileSize(3840), "wall");
+test("a TV reporting 1920 pixels gets far more tiles at Compact than at Wall", () => {
+  // 1920 x 1080 less the radio list, margins and top bar.
+  assert.equal(capacity(1500, 920, "wall").max, 2);
+  assert.equal(capacity(1500, 920, "compact").max, 12);
 });
 
 test("radios a few hundred metres apart share one map; cities apart do not", () => {
