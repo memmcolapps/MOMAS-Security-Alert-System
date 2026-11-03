@@ -8,6 +8,7 @@
  */
 import { getDronePositions } from "../drones/mavlink-listener";
 import { fetchLastLocations } from "../pocstars/locations";
+import { recordedLocations } from "../pocstars/position-recorder";
 
 export type AssetRef = { asset_type: string; asset_id: string };
 export type AssetPosition = {
@@ -46,7 +47,9 @@ export async function currentAssetPositions(assets: AssetRef[]) {
 
   if (radioIds.length) {
     try {
-      const response = await fetchLastLocations(radioIds);
+      // The shared recorder already holds every radio's last fix; asking the
+      // vendor again is only the fallback when that snapshot is stale.
+      const response = recordedLocations(radioIds) ?? (await fetchLastLocations(radioIds));
       const rows = Array.isArray(response?.data) ? response.data : [];
       for (const row of rows) {
         const point = usable(row.Lat ?? row.lat, row.Lng ?? row.lng ?? row.Lon ?? row.lon);

@@ -33,6 +33,7 @@ import {
   resolveAlarm,
   startAlarmResponse,
 } from "../lib/api";
+import { isGeofenceAlarm, LEVEL_STYLES, levelOf } from "../lib/alarm-levels";
 import { isPlatformStaff } from "../lib/platform-roles";
 
 const FILTERS = [
@@ -54,8 +55,8 @@ const SORTS = [
 // what happened to the alarm, never as what happened to the vendor's server.
 const EVENT_LABELS = {
   received: "Panic button pressed on radio",
-  breach: "Asset left the geofence",
-  returned: "Asset returned inside the geofence",
+  breach: "Crossed the zone boundary",
+  returned: "Back on the safe side of the zone",
   response_requested: "Response requested",
   response_started: "Response started",
   response_started_upstream: "Response started on radio network",
@@ -770,7 +771,13 @@ export function AlarmsRoute() {
 
             <section className="mt-5 grid grid-cols-2 gap-2">
               <Detail label="Device" value={selected.device_id} />
-              <Detail label={selected.source === "geofence" ? "Fence" : "Operator"} value={selected.geofence_name || selected.dev_operator || selected.device_name} />
+              <Detail label={selected.source === "geofence" ? "Zone" : "Operator"} value={selected.geofence_name || selected.dev_operator || selected.device_name} />
+              {selected.source === "geofence" ? (
+                <Detail
+                  label="Level"
+                  value={`${LEVEL_STYLES[levelOf(selected)].label} · ${selected.trigger === "enter" ? "entered" : "left"} · ${Math.round(Number(selected.distance_outside_m) || 0)} m past the edge`}
+                />
+              ) : null}
               <Detail label="Organization" value={selected.organization_name || "Unassigned"} />
               <Detail label="Unit / group" value={selected.unit_name || selected.pocstars_group_name || "—"} />
               <Detail label="Started by" value={selected.acknowledged_by_name || selected.acknowledged_by_email || "—"} />
@@ -1025,6 +1032,15 @@ export function AlarmsRoute() {
 function KindTag({ alert, size = 12 }) {
   const kind = alarmKind(alert);
   const Icon = kind.icon;
+  if (isGeofenceAlarm(alert)) {
+    const level = LEVEL_STYLES[levelOf(alert)];
+    return (
+      <span className={`flex items-center gap-1.5 text-[10px] font-bold ${level.text}`} title={`${level.label} alarm`}>
+        <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: level.dot }} />
+        <Icon size={size} /> {alert.trigger === "enter" ? "Entered zone" : "Left zone"}
+      </span>
+    );
+  }
   return (
     <span className={`flex items-center gap-1.5 text-[10px] font-bold ${kind.className}`}>
       <Icon size={size} /> {kind.label}

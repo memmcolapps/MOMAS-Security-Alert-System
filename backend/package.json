@@ -12,7 +12,7 @@
     "check:live-deploy": "bun scripts/check-live-radio-deployment.ts",
     "backfill:osint": "bun scripts/backfill-osint.ts",
     "clean:osint-queue": "bun scripts/clean-osint-queue.ts",
-    "test:geofencing": "bun test src/geofencing/geometry.test.ts",
+    "test:geofencing": "bun test src/geofencing",
     "check": "bun run typecheck && bun test"
   },
   "dependencies": {

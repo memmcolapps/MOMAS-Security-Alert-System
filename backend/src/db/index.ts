@@ -473,9 +473,6 @@ async function init() {
     CREATE INDEX IF NOT EXISTS idx_geofence_assignments_asset ON geofence_assignments(asset_type, asset_id);
     CREATE INDEX IF NOT EXISTS idx_operational_alerts_scope ON operational_alerts(organization_id, unit_id, triggered_at DESC);
     CREATE INDEX IF NOT EXISTS idx_operational_alert_events_alert ON operational_alert_events(alert_id, created_at);
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_active_geofence_alert
-      ON operational_alerts(geofence_id, asset_type, asset_id)
-      WHERE status < 2 AND returned_at IS NULL;
   `);
 
   // Add new columns if they don't exist (idempotent migration)
@@ -685,6 +682,105 @@ async function init() {
     `);
   } catch (err) {
     console.warn("[DB] SOS migration note:", err.message);
+  }
+
+  // Geofences split into zones and rules. A zone (the geofences row) is only a
+  // place; a rule says who it watches, whether leaving or entering alarms, and
+  // how loud. Each old fence becomes one "must stay inside" rule per asset it
+  // watched, at red, because a breach rang the full siren before this change.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS geofence_rules (
+        id                     BIGSERIAL PRIMARY KEY,
+        geofence_id            INTEGER NOT NULL REFERENCES geofences(id) ON DELETE CASCADE,
+        organization_id        INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        target_type            TEXT NOT NULL CHECK (target_type IN ('radio', 'drone', 'unit', 'channel')),
+        target_id              TEXT NOT NULL,
+        trigger                TEXT NOT NULL CHECK (trigger IN ('exit', 'enter')),
+        level                  TEXT NOT NULL CHECK (level IN ('red', 'amber', 'yellow')),
+        buffer_m               REAL NOT NULL DEFAULT 30,
+        confirmations_required INTEGER NOT NULL DEFAULT 3,
+        active                 BOOLEAN NOT NULL DEFAULT true,
+        created_by             INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (geofence_id, target_type, target_id, trigger)
+      );
+      CREATE INDEX IF NOT EXISTS idx_geofence_rules_org ON geofence_rules(organization_id, active);
+
+      -- One row per rule and asset. A unit or channel rule watches many assets.
+      CREATE TABLE IF NOT EXISTS geofence_rule_states (
+        rule_id          BIGINT NOT NULL REFERENCES geofence_rules(id) ON DELETE CASCADE,
+        asset_type       TEXT NOT NULL,
+        asset_id         TEXT NOT NULL,
+        in_breach        BOOLEAN NOT NULL DEFAULT false,
+        breach_count     INTEGER NOT NULL DEFAULT 0,
+        last_lat         DOUBLE PRECISION,
+        last_lon         DOUBLE PRECISION,
+        last_observed_at TIMESTAMPTZ,
+        updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (rule_id, asset_type, asset_id)
+      );
+
+      ALTER TABLE operational_alerts ADD COLUMN IF NOT EXISTS rule_id BIGINT REFERENCES geofence_rules(id) ON DELETE SET NULL;
+      ALTER TABLE operational_alerts ADD COLUMN IF NOT EXISTS trigger TEXT NOT NULL DEFAULT 'exit';
+      ALTER TABLE operational_alerts ADD COLUMN IF NOT EXISTS level TEXT NOT NULL DEFAULT 'red';
+      ALTER TABLE geofence_assignments ADD COLUMN IF NOT EXISTS migrated_at TIMESTAMPTZ;
+    `);
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`
+        INSERT INTO geofence_rules
+          (geofence_id, organization_id, target_type, target_id, trigger, level,
+           buffer_m, confirmations_required, active, created_by)
+        SELECT g.id, g.organization_id, ga.asset_type, ga.asset_id, 'exit', 'red',
+               g.buffer_m, g.confirmations_required, g.active, g.created_by
+          FROM geofence_assignments ga
+          JOIN geofences g ON g.id = ga.geofence_id
+         WHERE ga.migrated_at IS NULL
+        ON CONFLICT DO NOTHING
+      `);
+      await client.query(`
+        INSERT INTO geofence_rule_states
+          (rule_id, asset_type, asset_id, in_breach, breach_count, last_lat, last_lon, last_observed_at)
+        SELECT r.id, ga.asset_type, ga.asset_id, s.is_outside, s.outside_count,
+               s.last_lat, s.last_lon, s.last_observed_at
+          FROM geofence_assignments ga
+          JOIN geofence_states s ON s.assignment_id = ga.id
+          JOIN geofence_rules r ON r.geofence_id = ga.geofence_id AND r.target_type = ga.asset_type
+                               AND r.target_id = ga.asset_id AND r.trigger = 'exit'
+         WHERE ga.migrated_at IS NULL
+        ON CONFLICT DO NOTHING
+      `);
+      await client.query(`
+        UPDATE operational_alerts a SET rule_id = r.id
+          FROM geofence_rules r
+         WHERE a.rule_id IS NULL AND a.geofence_id = r.geofence_id
+           AND r.target_type = a.asset_type AND r.target_id = a.asset_id AND r.trigger = 'exit'
+      `);
+      await client.query("UPDATE geofence_assignments SET migrated_at = NOW() WHERE migrated_at IS NULL");
+      // Zones no longer switch monitoring on and off; each rule does.
+      await client.query("UPDATE geofences SET active = true WHERE active = false");
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // One open alarm per rule and asset. The old index was per fence, which
+    // would stop a red and an amber rule on the same zone both firing.
+    await pool.query(`
+      DROP INDEX IF EXISTS uq_active_geofence_alert;
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_active_rule_alert
+        ON operational_alerts(rule_id, asset_type, asset_id)
+        WHERE status < 2 AND returned_at IS NULL AND rule_id IS NOT NULL;
+    `);
+  } catch (err) {
+    console.warn("[DB] Geofence rule migration note:", err.message);
   }
 
   console.log("[DB] PostgreSQL schema ready");

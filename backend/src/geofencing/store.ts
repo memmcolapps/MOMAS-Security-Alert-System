@@ -16,99 +16,13 @@ function scopeSql(scope: Scope, alias: string, start = 1) {
   return { values, conditions };
 }
 
-export async function listGeofences(scope: Scope = {}) {
-  const scoped = scopeSql(scope, "g");
-  const where = scoped.conditions.length ? `WHERE ${scoped.conditions.join(" AND ")}` : "";
-  const { rows } = await pool.query(
-    `SELECT g.*,
-            COALESCE(
-              json_agg(
-                json_build_object('id', ga.id, 'asset_type', ga.asset_type, 'asset_id', ga.asset_id)
-                ORDER BY ga.asset_type, ga.asset_id
-              ) FILTER (WHERE ga.id IS NOT NULL),
-              '[]'::json
-            ) AS assignments
-       FROM geofences g
-       LEFT JOIN geofence_assignments ga ON ga.geofence_id = g.id
-       ${where}
-      GROUP BY g.id
-      ORDER BY g.name`,
-    scoped.values,
-  );
-  return rows;
-}
-
-export async function getGeofence(id: number, scope: Scope = {}) {
-  const scoped = scopeSql(scope, "g", 2);
-  const { rows } = await pool.query(
-    `SELECT g.* FROM geofences g
-      WHERE g.id=$1 ${scoped.conditions.length ? `AND ${scoped.conditions.join(" AND ")}` : ""}`,
-    [id, ...scoped.values],
-  );
-  return rows[0] || null;
-}
-
-export async function saveGeofence(input: any) {
-  const values = [
-    input.organization_id,
-    input.unit_id || null,
-    input.name,
-    input.shape_type,
-    input.geometry ? JSON.stringify(input.geometry) : null,
-    input.center_lat ?? null,
-    input.center_lon ?? null,
-    input.radius_m ?? null,
-    input.buffer_m,
-    input.confirmations_required,
-    input.active,
-    input.created_by || null,
-  ];
-  const { rows } = input.id
-    ? await pool.query(
-        `UPDATE geofences SET
-           unit_id=$2, name=$3, shape_type=$4, geometry=$5::jsonb,
-           center_lat=$6, center_lon=$7, radius_m=$8, buffer_m=$9,
-           confirmations_required=$10, active=$11, updated_at=NOW()
-         WHERE id=$13 AND organization_id=$1
-         RETURNING *`,
-        [...values, input.id],
-      )
-    : await pool.query(
-        `INSERT INTO geofences
-           (organization_id, unit_id, name, shape_type, geometry, center_lat, center_lon,
-            radius_m, buffer_m, confirmations_required, active, created_by)
-         VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12)
-         RETURNING *`,
-        values,
-      );
-  return rows[0] || null;
-}
-
-/**
- * Only assets that actually left the fence are dropped, and only new ones are
- * inserted. Deleting the whole set and re-adding it cascaded `geofence_states`
- * away on every save, so renaming a fence wiped its breach state and every
- * asset still outside re-alarmed a few polls later.
- */
-export async function replaceAssignments(geofenceId: number, assignments: any[]) {
-  const keep = assignments.map((assignment) => `${assignment.asset_type}:${String(assignment.asset_id)}`);
+export async function transaction<T>(fn: (client: any) => Promise<T>) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query(
-      `DELETE FROM geofence_assignments
-        WHERE geofence_id=$1 AND (asset_type || ':' || asset_id) <> ALL($2::text[])`,
-      [geofenceId, keep],
-    );
-    for (const assignment of assignments) {
-      await client.query(
-        `INSERT INTO geofence_assignments (geofence_id, asset_type, asset_id)
-         VALUES ($1,$2,$3)
-         ON CONFLICT DO NOTHING`,
-        [geofenceId, assignment.asset_type, String(assignment.asset_id)],
-      );
-    }
+    const result = await fn(client);
     await client.query("COMMIT");
+    return result;
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -118,39 +32,167 @@ export async function replaceAssignments(geofenceId: number, assignments: any[])
 }
 
 /**
- * Marks assets as already-outside without raising an alarm, for the case where
- * a fence is drawn around assets that are currently elsewhere. Seeding the
- * state rather than muting the alert keeps the engine honest: nothing fires
- * now, and the asset alarms normally the next time it leaves.
+ * Everything a rule can point at in one organization, lean enough to load
+ * with the editor: units, channels, radios and drones. A unit-scoped admin
+ * gets their own unit subtree only.
  */
-export async function seedOutsideStates(geofenceId: number, positions: any[]) {
-  if (!positions.length) return 0;
-  const { rows } = await pool.query(
-    `SELECT ga.id AS assignment_id, ga.asset_type, ga.asset_id, g.confirmations_required
-       FROM geofence_assignments ga
-       JOIN geofences g ON g.id = ga.geofence_id
-      WHERE ga.geofence_id=$1`,
-    [geofenceId],
-  );
-  const byKey = new Map(rows.map((row: any) => [`${row.asset_type}:${row.asset_id}`, row]));
-  let seeded = 0;
-  for (const position of positions) {
-    const assignment: any = byKey.get(`${position.asset_type}:${position.asset_id}`);
-    if (!assignment) continue;
-    await saveGeofenceState({
-      assignment_id: assignment.assignment_id,
-      is_outside: true,
-      outside_count: Number(assignment.confirmations_required) || 1,
-      last_lat: position.lat,
-      last_lon: position.lon,
-      last_observed_at: position.observed_at ? new Date(position.observed_at) : new Date(),
-    });
-    seeded++;
-  }
-  return seeded;
+export async function listTargets(organizationId: number, unitIds: number[] | null) {
+  const unitFilter = unitIds ? "AND unit_id = ANY($2::int[])" : "";
+  const values = unitIds ? [organizationId, unitIds] : [organizationId];
+  const [units, channels, radios, drones] = await Promise.all([
+    pool.query(
+      `SELECT id, name, parent_unit_id FROM organization_units
+        WHERE organization_id=$1 ${unitIds ? "AND id = ANY($2::int[])" : ""} ORDER BY name`,
+      values,
+    ),
+    pool.query(
+      `SELECT id, name, unit_id FROM channels
+        WHERE organization_id=$1 AND active = true ${unitFilter} ORDER BY name`,
+      values,
+    ),
+    pool.query(
+      `SELECT device_id, name, unit_id FROM devices
+        WHERE organization_id=$1 AND active = true ${unitFilter} ORDER BY name NULLS LAST, device_id`,
+      values,
+    ),
+    pool.query(
+      `SELECT sysid, name, unit_id FROM drones
+        WHERE organization_id=$1 ${unitFilter} ORDER BY name NULLS LAST, sysid`,
+      values,
+    ),
+  ]);
+  return { units: units.rows, channels: channels.rows, radios: radios.rows, drones: drones.rows };
 }
 
-export async function deleteGeofence(id: number, organizationId?: number | null) {
+const RULES_JSON = `COALESCE(
+  json_agg(
+    json_build_object(
+      'id', r.id, 'target_type', r.target_type, 'target_id', r.target_id,
+      'trigger', r.trigger, 'level', r.level, 'buffer_m', r.buffer_m,
+      'confirmations_required', r.confirmations_required, 'active', r.active
+    ) ORDER BY r.id
+  ) FILTER (WHERE r.id IS NOT NULL),
+  '[]'::json
+) AS rules`;
+
+/** Zones with their rules nested, so the editor needs one request. */
+export async function listZones(scope: Scope = {}) {
+  const scoped = scopeSql(scope, "g");
+  const where = scoped.conditions.length ? `WHERE ${scoped.conditions.join(" AND ")}` : "";
+  const { rows } = await pool.query(
+    `SELECT g.id, g.organization_id, g.unit_id, g.name, g.shape_type, g.geometry,
+            g.center_lat, g.center_lon, g.radius_m, g.created_at, g.updated_at,
+            ${RULES_JSON}
+       FROM geofences g
+       LEFT JOIN geofence_rules r ON r.geofence_id = g.id
+       ${where}
+      GROUP BY g.id
+      ORDER BY g.name`,
+    scoped.values,
+  );
+  return rows;
+}
+
+export async function getZone(id: number, scope: Scope = {}) {
+  const scoped = scopeSql(scope, "g", 2);
+  const { rows } = await pool.query(
+    `SELECT g.id, g.organization_id, g.unit_id, g.name, g.shape_type, g.geometry,
+            g.center_lat, g.center_lon, g.radius_m, g.created_by, g.created_at, g.updated_at,
+            ${RULES_JSON}
+       FROM geofences g
+       LEFT JOIN geofence_rules r ON r.geofence_id = g.id
+      WHERE g.id=$1 ${scoped.conditions.length ? `AND ${scoped.conditions.join(" AND ")}` : ""}
+      GROUP BY g.id`,
+    [id, ...scoped.values],
+  );
+  return rows[0] || null;
+}
+
+export async function saveZone(client: any, input: any) {
+  const values = [
+    input.organization_id,
+    input.unit_id || null,
+    input.name,
+    input.shape_type,
+    input.geometry ? JSON.stringify(input.geometry) : null,
+    input.center_lat ?? null,
+    input.center_lon ?? null,
+    input.radius_m ?? null,
+  ];
+  const { rows } = input.id
+    ? await client.query(
+        `UPDATE geofences SET
+           unit_id=$2, name=$3, shape_type=$4, geometry=$5::jsonb,
+           center_lat=$6, center_lon=$7, radius_m=$8, updated_at=NOW()
+         WHERE id=$9 AND organization_id=$1
+         RETURNING *`,
+        [...values, input.id],
+      )
+    : await client.query(
+        `INSERT INTO geofences
+           (organization_id, unit_id, name, shape_type, geometry, center_lat, center_lon, radius_m, created_by)
+         VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9)
+         RETURNING *`,
+        [...values, input.created_by || null],
+      );
+  return rows[0] || null;
+}
+
+/**
+ * Makes the zone's rules match `rules`, keeping the id (and so the breach
+ * state) of every rule that survives. A rule whose target or direction
+ * changed is a different question, so its state is cleared; one that only
+ * changed level or tuning keeps it, and an asset already in breach does not
+ * re-alarm because somebody turned amber into red.
+ *
+ * Returns the ids whose state was cleared or created, which are the ones the
+ * caller seeds from live positions.
+ */
+export async function syncRules(client: any, zoneId: number, organizationId: number, rules: any[], userId: number | null) {
+  const { rows: existing } = await client.query("SELECT * FROM geofence_rules WHERE geofence_id=$1", [zoneId]);
+  const byId = new Map(existing.map((rule: any) => [Number(rule.id), rule]));
+  const keep = new Set(rules.filter((rule) => rule.id && byId.has(Number(rule.id))).map((rule) => Number(rule.id)));
+  const removed = existing.filter((rule: any) => !keep.has(Number(rule.id))).map((rule: any) => Number(rule.id));
+  if (removed.length) await client.query("DELETE FROM geofence_rules WHERE id = ANY($1::bigint[])", [removed]);
+
+  const fresh: number[] = [];
+  for (const rule of rules) {
+    const previous: any = rule.id ? byId.get(Number(rule.id)) : null;
+    const values = [
+      rule.target_type, String(rule.target_id), rule.trigger, rule.level,
+      rule.buffer_m, rule.confirmations_required, rule.active,
+    ];
+    if (previous) {
+      const sameQuestion =
+        previous.target_type === rule.target_type &&
+        String(previous.target_id) === String(rule.target_id) &&
+        previous.trigger === rule.trigger;
+      await client.query(
+        `UPDATE geofence_rules SET target_type=$1, target_id=$2, trigger=$3, level=$4,
+           buffer_m=$5, confirmations_required=$6, active=$7, updated_at=NOW()
+         WHERE id=$8`,
+        [...values, previous.id],
+      );
+      if (!sameQuestion) {
+        await client.query("DELETE FROM geofence_rule_states WHERE rule_id=$1", [previous.id]);
+        fresh.push(Number(previous.id));
+      }
+      continue;
+    }
+    const { rows } = await client.query(
+      `INSERT INTO geofence_rules
+         (geofence_id, organization_id, target_type, target_id, trigger, level,
+          buffer_m, confirmations_required, active, created_by)
+       VALUES ($8,$9,$1,$2,$3,$4,$5,$6,$7,$10)
+       RETURNING id`,
+      [...values, zoneId, organizationId, userId],
+    );
+    fresh.push(Number(rows[0].id));
+  }
+  return { fresh, removed };
+}
+
+export async function deleteZone(id: number, organizationId?: number | null) {
   const values: any[] = [id];
   let condition = "";
   if (organizationId) {
@@ -161,49 +203,55 @@ export async function deleteGeofence(id: number, organizationId?: number | null)
   return Boolean(result.rowCount);
 }
 
-export async function assignmentsForAsset(assetType: string, assetId: string) {
+/** Every active rule with its zone's shape, for the engine's in-memory index. */
+export async function loadActiveRules() {
   const { rows } = await pool.query(
-    `SELECT ga.id AS assignment_id, g.*
-       FROM geofence_assignments ga
-       JOIN geofences g ON g.id=ga.geofence_id
-      WHERE ga.asset_type=$1 AND ga.asset_id=$2 AND g.active=true`,
-    [assetType, assetId],
+    `SELECT r.*, g.name AS zone_name, g.unit_id AS zone_unit_id, g.shape_type, g.geometry,
+            g.center_lat, g.center_lon, g.radius_m
+       FROM geofence_rules r
+       JOIN geofences g ON g.id = r.geofence_id
+      WHERE r.active = true`,
   );
   return rows;
 }
 
-export async function listAssignedRadios() {
-  const { rows } = await pool.query(
-    `SELECT DISTINCT d.device_id
-       FROM devices d
-       JOIN geofence_assignments ga ON ga.asset_type='radio' AND ga.asset_id=d.device_id
-       JOIN geofences g ON g.id=ga.geofence_id AND g.active=true
-      WHERE d.active=true`,
-  );
-  return rows.map((row) => String(row.device_id));
+/** Who belongs to what: the inputs for resolving unit and channel rules. */
+export async function loadMembership() {
+  const [devices, drones, channels, units] = await Promise.all([
+    pool.query("SELECT device_id, unit_id, organization_id, name FROM devices WHERE active = true"),
+    pool.query("SELECT sysid, unit_id, organization_id, name FROM drones"),
+    pool.query(
+      `SELECT cd.channel_id, cd.device_id FROM channel_devices cd
+         JOIN channels c ON c.id = cd.channel_id AND c.active = true`,
+    ),
+    pool.query("SELECT id, parent_unit_id, organization_id FROM organization_units"),
+  ]);
+  return { devices: devices.rows, drones: drones.rows, channels: channels.rows, units: units.rows };
 }
 
-export async function getGeofenceState(assignmentId: number) {
-  const { rows } = await pool.query("SELECT * FROM geofence_states WHERE assignment_id=$1", [assignmentId]);
-  return rows[0] || null;
+export async function loadRuleStates() {
+  const { rows } = await pool.query("SELECT * FROM geofence_rule_states");
+  return rows;
 }
 
-export async function saveGeofenceState(input: any) {
+export async function saveRuleState(input: any) {
   await pool.query(
-    `INSERT INTO geofence_states
-       (assignment_id, is_outside, outside_count, last_lat, last_lon, last_observed_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,NOW())
-     ON CONFLICT (assignment_id) DO UPDATE SET
-       is_outside=EXCLUDED.is_outside,
-       outside_count=EXCLUDED.outside_count,
+    `INSERT INTO geofence_rule_states
+       (rule_id, asset_type, asset_id, in_breach, breach_count, last_lat, last_lon, last_observed_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+     ON CONFLICT (rule_id, asset_type, asset_id) DO UPDATE SET
+       in_breach=EXCLUDED.in_breach,
+       breach_count=EXCLUDED.breach_count,
        last_lat=EXCLUDED.last_lat,
        last_lon=EXCLUDED.last_lon,
        last_observed_at=EXCLUDED.last_observed_at,
        updated_at=NOW()`,
     [
-      input.assignment_id,
-      input.is_outside,
-      input.outside_count,
+      input.rule_id,
+      input.asset_type,
+      input.asset_id,
+      input.in_breach,
+      input.breach_count,
       input.last_lat,
       input.last_lon,
       input.last_observed_at,
@@ -211,36 +259,39 @@ export async function saveGeofenceState(input: any) {
   );
 }
 
-export async function createBreachAlert(fence: any, position: any, distanceOutsideM: number) {
+export async function createRuleAlert(rule: any, position: any, distanceM: number) {
   const registry =
     position.asset_type === "radio"
       ? await pool.query("SELECT name, organization_id, unit_id FROM devices WHERE device_id=$1", [position.asset_id])
       : await pool.query("SELECT name, organization_id, unit_id FROM drones WHERE sysid=$1", [Number(position.asset_id)]);
   const asset = registry.rows[0];
-  if (!asset?.organization_id || Number(asset.organization_id) !== Number(fence.organization_id)) return null;
+  if (!asset?.organization_id || Number(asset.organization_id) !== Number(rule.organization_id)) return null;
 
   const { rows } = await pool.query(
     `INSERT INTO operational_alerts
-       (organization_id, unit_id, asset_type, asset_id, asset_name, geofence_id,
-        geofence_name, triggered_at, location_lat, location_lon, distance_outside_m, metadata)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)
-     ON CONFLICT (geofence_id, asset_type, asset_id)
-       WHERE status < 2 AND returned_at IS NULL
+       (organization_id, unit_id, asset_type, asset_id, asset_name, geofence_id, geofence_name,
+        rule_id, trigger, level, triggered_at, location_lat, location_lon, distance_outside_m, metadata)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb)
+     ON CONFLICT (rule_id, asset_type, asset_id)
+       WHERE status < 2 AND returned_at IS NULL AND rule_id IS NOT NULL
      DO NOTHING
      RETURNING *`,
     [
-      fence.organization_id,
-      asset.unit_id || fence.unit_id || null,
+      rule.organization_id,
+      asset.unit_id || rule.zone_unit_id || null,
       position.asset_type,
       position.asset_id,
       asset.name || null,
-      fence.id,
-      fence.name,
+      rule.geofence_id,
+      rule.zone_name,
+      rule.id,
+      rule.trigger,
+      rule.level,
       position.observed_at,
       position.lat,
       position.lon,
-      distanceOutsideM,
-      JSON.stringify({ source: position.source || position.asset_type }),
+      distanceM,
+      JSON.stringify({ source: position.source || position.asset_type, target_type: rule.target_type, target_id: rule.target_id }),
     ],
   );
   const alert = rows[0];
@@ -248,19 +299,19 @@ export async function createBreachAlert(fence: any, position: any, distanceOutsi
   await pool.query(
     `INSERT INTO operational_alert_events (alert_id, event_type, metadata)
      VALUES ($1,'breach',$2::jsonb)`,
-    [alert.id, JSON.stringify({ distance_outside_m: distanceOutsideM })],
+    [alert.id, JSON.stringify({ distance_m: distanceM, trigger: rule.trigger })],
   );
   return alert;
 }
 
-export async function markAssetReturned(fence: any, position: any) {
+export async function markRuleCleared(rule: any, position: any) {
   const { rows } = await pool.query(
     `UPDATE operational_alerts SET
        returned_at=$4, updated_at=NOW()
-     WHERE geofence_id=$1 AND asset_type=$2 AND asset_id=$3
+     WHERE rule_id=$1 AND asset_type=$2 AND asset_id=$3
        AND status < 2 AND returned_at IS NULL
      RETURNING *`,
-    [fence.id, position.asset_type, position.asset_id, position.observed_at],
+    [rule.id, position.asset_type, position.asset_id, position.observed_at],
   );
   for (const alert of rows) {
     await pool.query(

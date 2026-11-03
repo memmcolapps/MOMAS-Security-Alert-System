@@ -9,8 +9,10 @@ import {
 } from "../auth";
 import { env } from "../config";
 import * as db from "../db";
-import { evaluateFence, fenceMetrics, ringSelfIntersects, validatePolygonGeometry } from "../geofencing/geometry";
+import { breachedCounts, judgeRule, membersOf, rulesChanged } from "../geofencing/engine";
+import { fenceMetrics, ringSelfIntersects, validatePolygonGeometry } from "../geofencing/geometry";
 import { assetKey, currentAssetPositions } from "../geofencing/positions";
+import { LEVELS, TARGET_TYPES, TRIGGERS, unitAndDescendants, zoneBounds } from "../geofencing/rules";
 import * as store from "../geofencing/store";
 import { reverseGeocode, searchPlaces } from "../geocoder";
 
@@ -40,43 +42,42 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Returns each asset's display name alongside it, so callers need not re-fetch. */
-async function validateAssignments(assignments: any[], organizationId: number, unitId?: number | null) {
-  const clean: Array<{ asset_type: "radio" | "drone"; asset_id: string; name: string }> = [];
-  const seen = new Set<string>();
-  for (const assignment of assignments || []) {
-    const assetType = assignment?.asset_type;
-    const assetId = String(assignment?.asset_id || "").trim();
-    if (!["radio", "drone"].includes(assetType) || !assetId) throw new Error("Invalid geofence assignment.");
-    const asset =
-      assetType === "radio"
-        ? await db.getDevice(assetId)
-        : await db.getDrone(Number(assetId));
-    if (!asset || Number(asset.organization_id) !== Number(organizationId)) {
-      throw new Error(`${assetType} ${assetId} is not registered to this organization.`);
-    }
-    if (unitId && Number(asset.unit_id) !== Number(unitId)) {
-      throw new Error(`${assetType} ${assetId} is outside the selected unit.`);
-    }
-    const key = `${assetType}:${assetId}`;
-    if (!seen.has(key)) clean.push({ asset_type: assetType, asset_id: assetId, name: asset.name || `${assetType} ${assetId}` });
-    seen.add(key);
-  }
-  return clean;
+/** The organization a request acts on: the caller's own, or the one staff name. */
+function organizationFor(c: any, requested: any) {
+  const user = c.get("user");
+  if (isPlatformStaff(user)) return Number(requested) || null;
+  return Number(primaryOrganization(user)?.organization_id) || null;
 }
 
-function validateFence(body: any) {
+function callerUnit(c: any) {
+  const membership = primaryOrganization(c.get("user"));
+  return membership?.scope_level === "unit" ? Number(membership.unit_id) : null;
+}
+
+/** A unit-scoped admin may point rules only at their own unit and those below it. */
+async function allowedUnits(organizationId: number, unitId: number | null) {
+  if (!unitId) return null;
+  const units = await db.listOrganizationUnits(organizationId);
+  const children = new Map<string, string[]>();
+  for (const unit of units) {
+    if (unit.parent_unit_id == null) continue;
+    const list = children.get(String(unit.parent_unit_id)) || [];
+    list.push(String(unit.id));
+    children.set(String(unit.parent_unit_id), list);
+  }
+  return [...unitAndDescendants(String(unitId), children)].map(Number);
+}
+
+function validateZone(body: any) {
   const name = String(body.name || "").trim();
   const shapeType = body.shape_type;
-  if (!name) throw new Error("Fence name is required.");
-  if (!["circle", "polygon"].includes(shapeType)) throw new Error("Fence shape must be circle or polygon.");
+  if (!name) throw new Error("Give the zone a name.");
+  if (!["circle", "polygon"].includes(shapeType)) throw new Error("A zone is a circle or a polygon.");
   if (shapeType === "polygon") {
     if (ringSelfIntersects(body.geometry?.coordinates?.[0])) {
-      throw new Error("This fence crosses over itself. Corners have to go round the area in order.");
+      throw new Error("This zone crosses over itself. Drag the corners so they go round the area in order.");
     }
-    if (!validatePolygonGeometry(body.geometry)) {
-      throw new Error("A polygon requires at least three valid map points.");
-    }
+    if (!validatePolygonGeometry(body.geometry)) throw new Error("A polygon needs at least three corners.");
   }
   if (
     shapeType === "circle" &&
@@ -84,7 +85,7 @@ function validateFence(body: any) {
       !Number.isFinite(Number(body.center_lon)) ||
       !Number.isFinite(Number(body.radius_m)) ||
       Number(body.radius_m) <= 0)
-  ) throw new Error("A circle requires a valid centre and radius.");
+  ) throw new Error("A circle needs a centre and a radius.");
 
   return {
     name,
@@ -93,195 +94,212 @@ function validateFence(body: any) {
     center_lat: shapeType === "circle" ? Number(body.center_lat) : null,
     center_lon: shapeType === "circle" ? Number(body.center_lon) : null,
     radius_m: shapeType === "circle" ? Number(body.radius_m) : null,
-    buffer_m: Math.max(0, Number(body.buffer_m) || env.GEOFENCE_DEFAULT_BUFFER_M),
-    confirmations_required: Math.min(10, Math.max(1, Number(body.confirmations_required) || env.GEOFENCE_CONFIRMATIONS)),
-    active: body.active !== false,
   };
 }
 
-/**
- * Resolves each assigned asset against a candidate shape, using live positions.
- *
- * This is the single source of truth for "who is inside this fence?" — the
- * editor's preview and the save-time arming gate both call it, so the sentence
- * shown to the operator is produced by the same `evaluateFence` the monitor
- * runs. A preview computed separately in the browser would eventually disagree
- * with the engine, which is the one thing it must never do.
- */
-async function describeFence(fenceInput: any, assignments: any[]) {
-  const positions = await currentAssetPositions(assignments);
+/** Checks each rule's target belongs to the organization (and the caller's units). */
+async function validateRules(rules: any[], organizationId: number, units: number[] | null) {
+  const clean: any[] = [];
+  const seen = new Set<string>();
+  const inScope = (unitId: any) => !units || units.includes(Number(unitId));
+  for (const raw of Array.isArray(rules) ? rules : []) {
+    const targetType = raw?.target_type;
+    const targetId = String(raw?.target_id ?? "").trim();
+    if (!TARGET_TYPES.includes(targetType) || !targetId) throw new Error("Each rule needs someone to watch.");
+    if (!TRIGGERS.includes(raw.trigger)) throw new Error("Each rule must say leave or enter.");
+    if (!LEVELS.includes(raw.level)) throw new Error("Each rule needs an alarm level.");
 
-  const assets = assignments.map((assignment) => {
-    const key = assetKey(assignment.asset_type, assignment.asset_id);
-    const position = positions.get(key);
-    const base = {
-      asset_type: assignment.asset_type,
-      asset_id: assignment.asset_id,
-      name: assignment.name || `${assignment.asset_type} ${assignment.asset_id}`,
-    };
-    if (!position) return { ...base, state: "unknown" as const };
-    const result = evaluateFence(fenceInput, position.lat, position.lon);
+    let target: any = null;
+    if (targetType === "radio") target = await db.getDevice(targetId);
+    if (targetType === "drone") target = await db.getDrone(Number(targetId));
+    if (targetType === "unit") {
+      target = await db.getOrganizationUnit(organizationId, Number(targetId));
+      if (target) target = { ...target, unit_id: target.id };
+    }
+    if (targetType === "channel") target = await db.getChannel(Number(targetId));
+    if (!target || Number(target.organization_id) !== Number(organizationId)) {
+      throw new Error(`That ${targetType} is not part of this organization.`);
+    }
+    if (!inScope(target.unit_id)) throw new Error(`That ${targetType} is outside your unit.`);
+
+    const key = `${targetType}:${targetId}:${raw.trigger}`;
+    if (seen.has(key)) throw new Error("The same rule is listed twice.");
+    seen.add(key);
+    clean.push({
+      id: raw.id ? Number(raw.id) : null,
+      target_type: targetType,
+      target_id: targetId,
+      trigger: raw.trigger,
+      level: raw.level,
+      buffer_m: Math.min(1000, Math.max(0, Number(raw.buffer_m ?? env.GEOFENCE_DEFAULT_BUFFER_M) || 0)),
+      confirmations_required: Math.min(10, Math.max(1, Number(raw.confirmations_required) || env.GEOFENCE_CONFIRMATIONS)),
+      active: raw.active !== false,
+    });
+  }
+  return clean;
+}
+
+/**
+ * Where everyone a draft rule watches stands against a draft zone, right now.
+ *
+ * Judged by the same function the engine runs, so the editor's "2 already
+ * outside" can never disagree with what the monitor will do once saved.
+ */
+async function describe(zone: any, rules: any[]) {
+  const membersByRule = rules.map((rule) => membersOf(rule));
+  const allMembers = [...new Map(membersByRule.flat().map((m) => [assetKey(m.asset_type, m.asset_id), m])).values()];
+  const positions = await currentAssetPositions(allMembers);
+
+  const verdicts = rules.map((rule, index) => {
+    const draft = { ...zone, ...rule, bounds: zoneBounds(zone, (Number(rule.buffer_m) || 0) + 5) };
+    const members = membersByRule[index].map((member) => {
+      const position = positions.get(assetKey(member.asset_type, member.asset_id));
+      if (!position) return { ...member, state: "unknown" };
+      const verdict = judgeRule(draft, position.lat, position.lon);
+      return {
+        ...member,
+        state: verdict.side === "violating" ? "breach" : "ok",
+        lat: position.lat,
+        lon: position.lon,
+        distance_m: Math.round(verdict.distanceM),
+      };
+    });
     return {
-      ...base,
-      state: result.outside ? ("outside" as const) : ("inside" as const),
-      lat: position.lat,
-      lon: position.lon,
-      observed_at: position.observed_at,
-      distance_outside_m: Math.round(result.distanceOutsideM),
+      members,
+      summary: {
+        total: members.length,
+        ok: members.filter((m) => m.state === "ok").length,
+        breach: members.filter((m) => m.state === "breach").length,
+        unknown: members.filter((m) => m.state === "unknown").length,
+      },
     };
   });
 
-  const metrics = fenceMetrics(fenceInput);
-  const place = metrics?.centre ? reverseGeocode(metrics.centre.lat, metrics.centre.lon) : null;
+  const metrics = fenceMetrics(zone);
   return {
-    assets,
-    place,
+    rules: verdicts,
     metrics,
-    summary: {
-      total: assets.length,
-      inside: assets.filter((asset) => asset.state === "inside").length,
-      outside: assets.filter((asset) => asset.state === "outside").length,
-      unknown: assets.filter((asset) => asset.state === "unknown").length,
-    },
+    place: metrics?.centre ? reverseGeocode(metrics.centre.lat, metrics.centre.lon) : null,
   };
 }
 
-/**
- * Records assets that are already outside as outside, without alarming.
- *
- * Drawing a fence around assets that happen to be elsewhere would otherwise
- * raise one alarm per asset within a couple of polls. The operator opts into
- * this from the save summary, having been told exactly how many it covers.
- */
-async function armFence(geofenceId: number, fenceInput: any, assignments: any[], suppress: boolean) {
-  if (!suppress || !assignments.length) return 0;
-  const positions = await currentAssetPositions(assignments);
-  const alreadyOutside = assignments
-    .map((assignment) => positions.get(assetKey(assignment.asset_type, assignment.asset_id)))
-    .filter((position): position is NonNullable<typeof position> =>
-      Boolean(position) && evaluateFence(fenceInput, position!.lat, position!.lon).outside,
-    );
-  return store.seedOutsideStates(geofenceId, alreadyOutside);
+function withBreaches(zone: any) {
+  const counts = breachedCounts();
+  return {
+    ...zone,
+    rules: (zone.rules || []).map((rule: any) => ({ ...rule, in_breach: counts.get(Number(rule.id)) || 0 })),
+  };
 }
 
 router.get("/", async (c) => {
   try {
-    return c.json({ geofences: await store.listGeofences(scope(c)) });
+    const zones = await store.listZones(scope(c));
+    return c.json({ zones: zones.map(withBreaches) });
   } catch (error) {
     return c.json({ error: errorMessage(error) }, 500);
   }
 });
 
-/** Type-ahead place search, so a fence can be located by name instead of by eye. */
+/** Units, channels, radios and drones a rule can watch, in one request. */
+router.get("/targets", async (c) => {
+  const organizationId = organizationFor(c, c.req.query("organization_id"));
+  if (!organizationId) return c.json({ units: [], channels: [], radios: [], drones: [] });
+  try {
+    const units = await allowedUnits(organizationId, callerUnit(c));
+    const targets = await store.listTargets(organizationId, units);
+    const members = (target_type: string, target_id: any) =>
+      membersOf({ target_type, target_id: String(target_id) }).map((m) => `${m.asset_type}:${m.asset_id}`);
+    return c.json({
+      // Member keys travel with each group, so the editor can light them up
+      // on the map and draw around them before any zone exists.
+      units: targets.units.map((unit: any) => ({ ...unit, members: members("unit", unit.id) })),
+      channels: targets.channels.map((channel: any) => ({ ...channel, members: members("channel", channel.id) })),
+      radios: targets.radios,
+      drones: targets.drones,
+    });
+  } catch (error) {
+    return c.json({ error: errorMessage(error) }, 500);
+  }
+});
+
+/** Type-ahead place search, so a zone can be found by name instead of by eye. */
 router.get("/places", (c) => {
   return c.json({ places: searchPlaces(c.req.query("q"), Number(c.req.query("limit")) || 8) });
 });
 
-/** Dry run of a candidate fence: what it covers, how big it is, and where it is. */
+/** Dry run: who each draft rule would see on the wrong side right now. */
 router.post("/preview", async (c) => {
-  const user: any = (c as any).get("user");
   const body = await c.req.json().catch(() => ({}));
   try {
-    const membership = primaryOrganization(user);
-    const organizationId =
-      isPlatformStaff(user) ? Number(body.organization_id) : Number(membership?.organization_id);
-    if (!organizationId) return c.json({ error: "organization_id is required." }, 400);
-    const unitId = body.unit_id ? Number(body.unit_id) : membership?.scope_level === "unit" ? membership.unit_id : null;
-    const fenceInput = validateFence(body);
-    const assignments = await validateAssignments(body.assignments || [], organizationId, unitId);
-    return c.json(await describeFence(fenceInput, assignments));
+    const organizationId = organizationFor(c, body.organization_id);
+    if (!organizationId) return c.json({ error: "Choose an organization first." }, 400);
+    const zone = validateZone({ ...body, name: body.name || "Preview" });
+    const rules = await validateRules(body.rules || [], organizationId, await allowedUnits(organizationId, callerUnit(c)));
+    return c.json(await describe(zone, rules));
   } catch (error) {
     return c.json({ error: errorMessage(error) }, 400);
   }
 });
 
-router.post("/", async (c) => {
-  const user: any = (c as any).get("user");
+async function saveZoneAndRules(c: any, existing: any | null) {
+  const user = c.get("user");
   const body = await c.req.json().catch(() => ({}));
+  const organizationId = existing ? Number(existing.organization_id) : organizationFor(c, body.organization_id);
+  if (!organizationId) return c.json({ error: "Choose an organization first." }, 400);
+  const unitId = existing ? existing.unit_id : callerUnit(c);
+  if (!canManage(c, unitId)) return c.json({ error: "forbidden" }, 403);
+
   try {
-    const membership = primaryOrganization(user);
-    const organizationId =
-      isPlatformStaff(user) ? Number(body.organization_id) : Number(membership?.organization_id);
-    const unitId = body.unit_id ? Number(body.unit_id) : membership?.scope_level === "unit" ? membership.unit_id : null;
-    if (!organizationId) return c.json({ error: "organization_id is required." }, 400);
-    if (!canManage(c, unitId)) return c.json({ error: "forbidden" }, 403);
-    if (unitId && !(await db.getOrganizationUnit(organizationId, unitId))) {
-      return c.json({ error: "The selected unit is outside this organization." }, 400);
-    }
-    const fenceInput = validateFence(body);
-    const assignments = await validateAssignments(body.assignments || [], organizationId, unitId);
-    const fence = await store.saveGeofence({
-      ...fenceInput,
-      organization_id: organizationId,
-      unit_id: unitId,
-      created_by: user.id,
+    const zoneInput = validateZone(body);
+    const rules = await validateRules(body.rules || [], organizationId, await allowedUnits(organizationId, callerUnit(c)));
+    const { zone, fresh, removed } = await store.transaction(async (client) => {
+      const zone = await store.saveZone(client, {
+        ...zoneInput,
+        id: existing?.id,
+        organization_id: organizationId,
+        unit_id: unitId,
+        created_by: existing?.created_by ?? user.id,
+      });
+      if (!zone) throw new Error("Zone not found.");
+      const synced = await store.syncRules(client, zone.id, organizationId, rules, user.id);
+      return { zone, ...synced };
     });
-    await store.replaceAssignments(fence.id, assignments);
-    const suppressed = await armFence(fence.id, fenceInput, assignments, body.suppress_existing_breaches === true);
+    // Quiet by default: nobody already on the wrong side alarms the moment
+    // the zone is saved. The editor says how many that is before saving.
+    const quieted = await rulesChanged(fresh, removed, body.quiet !== false);
     await db.createAuditLog({
       organization_id: organizationId,
       actor_user_id: user.id,
-      action: "geofence.create",
+      action: existing ? "geofence.update" : "geofence.create",
       target_type: "geofence",
-      target_id: String(fence.id),
-      metadata: { assignment_count: assignments.length, suppressed_existing_breaches: suppressed },
+      target_id: String(zone.id),
+      metadata: { rule_count: rules.length, quieted_existing: quieted },
     });
-    return c.json({ geofence: await store.getGeofence(fence.id, { organizationId }), suppressed });
+    return c.json({ zone: withBreaches(await store.getZone(zone.id, { organizationId })), quieted });
   } catch (error) {
     return c.json({ error: errorMessage(error) }, 400);
   }
-});
+}
+
+router.post("/", (c) => saveZoneAndRules(c, null));
 
 router.put("/:id", async (c) => {
-  const user: any = (c as any).get("user");
   const id = Number(c.req.param("id"));
-  const body = await c.req.json().catch(() => ({}));
-  if (!Number.isInteger(id)) return c.json({ error: "Invalid geofence id." }, 400);
-  try {
-    const existing = await store.getGeofence(id, scope(c));
-    if (!existing) return c.json({ error: "Geofence not found." }, 404);
-    if (!canManage(c, existing.unit_id)) return c.json({ error: "forbidden" }, 403);
-    const nextUnitId = body.unit_id ?? existing.unit_id;
-    if (nextUnitId && !(await db.getOrganizationUnit(existing.organization_id, nextUnitId))) {
-      return c.json({ error: "The selected unit is outside this organization." }, 400);
-    }
-    const fenceInput = validateFence(body);
-    const assignments = await validateAssignments(
-      body.assignments || [],
-      Number(existing.organization_id),
-      nextUnitId,
-    );
-    await store.saveGeofence({
-      ...fenceInput,
-      id,
-      organization_id: existing.organization_id,
-      unit_id: nextUnitId,
-      created_by: existing.created_by,
-    });
-    await store.replaceAssignments(id, assignments);
-    const suppressed = await armFence(id, fenceInput, assignments, body.suppress_existing_breaches === true);
-    await db.createAuditLog({
-      organization_id: existing.organization_id,
-      actor_user_id: user.id,
-      action: "geofence.update",
-      target_type: "geofence",
-      target_id: String(id),
-      metadata: { assignment_count: assignments.length, suppressed_existing_breaches: suppressed },
-    });
-    return c.json({ geofence: await store.getGeofence(id, scope(c)), suppressed });
-  } catch (error) {
-    return c.json({ error: errorMessage(error) }, 400);
-  }
+  if (!Number.isInteger(id)) return c.json({ error: "Invalid zone id." }, 400);
+  const existing = await store.getZone(id, scope(c));
+  if (!existing) return c.json({ error: "Zone not found." }, 404);
+  return saveZoneAndRules(c, existing);
 });
 
 router.delete("/:id", async (c) => {
   const user: any = (c as any).get("user");
   const id = Number(c.req.param("id"));
-  const existing = await store.getGeofence(id, scope(c));
-  if (!existing) return c.json({ error: "Geofence not found." }, 404);
+  const existing = await store.getZone(id, scope(c));
+  if (!existing) return c.json({ error: "Zone not found." }, 404);
   if (!canManage(c, existing.unit_id)) return c.json({ error: "forbidden" }, 403);
   try {
-    await store.deleteGeofence(id, existing.organization_id);
+    await store.deleteZone(id, existing.organization_id);
+    await rulesChanged([], (existing.rules || []).map((rule: any) => Number(rule.id)), false);
     await db.createAuditLog({
       organization_id: existing.organization_id,
       actor_user_id: user.id,

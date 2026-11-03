@@ -57,7 +57,7 @@ const envSchema = z.object({
   // Monitoring-only geofencing. This never sends commands to a radio,
   // Mission Planner, or an autopilot.
   GEOFENCE_ENABLE: boolFromEnv(true),
-  GEOFENCE_RADIO_POLL_SEC: intFromEnv(15),
+  GEOFENCE_RADIO_POLL_SEC: intFromEnv(5),
   GEOFENCE_DEFAULT_BUFFER_M: intFromEnv(30),
   GEOFENCE_CONFIRMATIONS: intFromEnv(3),
   // One shared poll of every active radio's position. It feeds the map (so

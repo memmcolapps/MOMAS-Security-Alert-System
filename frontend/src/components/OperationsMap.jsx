@@ -1,4 +1,5 @@
 import L from "leaflet";
+import { LEVEL_STYLES, levelOf } from "../lib/alarm-levels";
 import "leaflet.heat";
 import "leaflet.markercluster";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -70,17 +71,17 @@ export function sosPopup(alert) {
   const radioId = !isGeofence || alert.asset_type === "radio" ? alert.device_id : null;
   return `
     <div>
-      <div style="font-size:13px;font-weight:700;color:#ff4444;margin-bottom:5px">${isGeofence ? "Geofence Breach" : "SOS Alarm"}</div>
+      <div style="font-size:13px;font-weight:700;color:${isGeofence ? LEVEL_STYLES[levelOf(alert)].dot : "#ff4444"};margin-bottom:5px">${isGeofence ? (alert.trigger === "enter" ? "Entered zone" : "Left zone") : "SOS Alarm"}</div>
       <div style="font-size:11px;color:#ccc"><strong>Device:</strong> ${escapeHtml(alert.asset_name || alert.dev_name || alert.device_name || `Device ${alert.device_id}`)}</div>
       <div style="font-size:11px;color:#ccc"><strong>UID:</strong> ${escapeHtml(alert.device_id || "—")}</div>
-      ${isGeofence ? `<div style="font-size:11px;color:#ccc"><strong>Fence:</strong> ${escapeHtml(alert.geofence_name || "—")}</div>` : ""}
+      ${isGeofence ? `<div style="font-size:11px;color:#ccc"><strong>Zone:</strong> ${escapeHtml(alert.geofence_name || "—")}</div>` : ""}
       <div style="font-size:11px;color:#ccc"><strong>When:</strong> ${escapeHtml(alert.triggered_at ? new Date(alert.triggered_at).toLocaleString() : "—")}</div>
       <div style="font-size:11px;color:#ccc"><strong>Location:</strong> ${
         Number.isFinite(Number(alert.map_lat)) && Number.isFinite(Number(alert.map_lon))
           ? `${Number(alert.map_lat).toFixed(5)}, ${Number(alert.map_lon).toFixed(5)}`
           : "Unknown"
       }</div>
-      <div style="font-size:10px;color:#888">${isGeofence ? `${Math.round(Number(alert.distance_outside_m) || 0)} m outside` : alert.map_location_source === "device" ? "Radio's live position" : "Where the SOS was raised"}</div>
+      <div style="font-size:10px;color:#888">${isGeofence ? `${Math.round(Number(alert.distance_outside_m) || 0)} m ${alert.trigger === "enter" ? "inside" : "outside"}` : alert.map_location_source === "device" ? "Radio's live position" : "Where the SOS was raised"}</div>
       ${
         !isGeofence && alert.map_location_source === "device" && Number.isFinite(Number(alert.origin_lat))
           ? `<div style="font-size:10px;color:#888">Pressed at ${Number(alert.origin_lat).toFixed(5)}, ${Number(alert.origin_lon).toFixed(5)} · ${Math.round(distanceMetres({ lat: Number(alert.origin_lat), lon: Number(alert.origin_lon) }, { lat: Number(alert.map_lat), lon: Number(alert.map_lon) }))} m away now</div>`

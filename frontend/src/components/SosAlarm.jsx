@@ -3,7 +3,8 @@ import { Link } from "@tanstack/react-router";
 import { BellOff, Siren, Volume2 } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { alertsEventsUrl, listAlarms } from "../lib/api";
-import { armSiren, sirenState, startSiren, stopSiren, subscribeSiren } from "../lib/sos-siren";
+import { alarmHeadline, levelOf } from "../lib/alarm-levels";
+import { armSiren, playChime, sirenState, startSiren, stopSiren, subscribeSiren } from "../lib/sos-siren";
 
 const SosAlarmContext = createContext({ ringing: [], silence: () => {}, soundState: "blocked" });
 
@@ -12,7 +13,7 @@ export function useSosAlarm() {
 }
 
 const alarmKey = (alert) => String(alert.alert_key || `pocstars:${alert.sos_msg_id}`);
-const alarmLabel = (alert) => alert.asset_name || alert.dev_name || alert.device_name || `Device ${alert.device_id}`;
+const alarmLabel = (alert) => alarmHeadline(alert);
 
 /**
  * Rings for alarms that arrive while the console is open, on every page.
@@ -21,6 +22,10 @@ const alarmLabel = (alert) => alert.asset_name || alert.dev_name || alert.device
  * devices screen heard nothing. An alarm rings until somebody starts a
  * response to it (status leaves 0) or silences it here; silencing covers the
  * alarms ringing now, never the next one.
+ *
+ * Only red alarms (every SOS, and red geofence rules) sound the siren. An
+ * amber one chimes once and shows a quieter banner; a yellow one is only
+ * logged, so it never reaches this provider's ringing set.
  */
 export function SosAlarmProvider({ enabled = true, children }) {
   const queryClient = useQueryClient();
@@ -94,7 +99,9 @@ export function SosAlarmProvider({ enabled = true, children }) {
     // of them on every page load is what this guards against.
     if (!enabled || !alertsQuery.isSuccess) return;
     if (!knownRef.current && alertsQuery.dataUpdatedAt < sessionStartRef.current) return;
-    const unanswered = alerts.filter((alert) => Number(alert.status) === 0 && !alert.returned_at);
+    const unanswered = alerts.filter(
+      (alert) => Number(alert.status) === 0 && !alert.returned_at && levelOf(alert) !== "yellow",
+    );
     const unansweredKeys = new Set(unanswered.map(alarmKey));
     if (!knownRef.current) {
       knownRef.current = new Set(alerts.map(alarmKey));
@@ -103,6 +110,7 @@ export function SosAlarmProvider({ enabled = true, children }) {
     const arrived = unanswered.filter((alert) => !knownRef.current.has(alarmKey(alert)));
     alerts.forEach((alert) => knownRef.current.add(alarmKey(alert)));
     if (arrived.length) notifyDesktop(arrived);
+    if (arrived.some((alert) => levelOf(alert) === "amber") && !arrived.some((alert) => levelOf(alert) === "red")) playChime();
     setRingingKeys((current) => {
       const next = new Set([...current].filter((key) => unansweredKeys.has(key)));
       arrived.forEach((alert) => next.add(alarmKey(alert)));
@@ -115,14 +123,16 @@ export function SosAlarmProvider({ enabled = true, children }) {
     [alerts, ringingKeys],
   );
 
+  const redCount = useMemo(() => ringing.filter((alert) => levelOf(alert) === "red").length, [ringing]);
+
   useEffect(() => {
-    if (!ringing.length) {
+    if (!redCount) {
       stopSiren();
       return undefined;
     }
     void startSiren();
     return undefined;
-  }, [ringing.length]);
+  }, [redCount]);
 
   useEffect(() => () => stopSiren(), []);
 
@@ -131,11 +141,11 @@ export function SosAlarmProvider({ enabled = true, children }) {
   useEffect(() => {
     if (!ringing.length) return undefined;
     const original = window.document.title;
-    window.document.title = `(${ringing.length}) SOS - ${original}`;
+    window.document.title = `(${ringing.length}) ${redCount ? "ALARM" : "Alert"} - ${original}`;
     return () => {
       window.document.title = original;
     };
-  }, [ringing.length]);
+  }, [ringing.length, redCount]);
 
   // Any click or key press unlocks audio, so the first touch of the console
   // arms the siren without anyone having to find a particular button.
@@ -161,7 +171,7 @@ function notifyDesktop(arrived) {
   if (!window.document.hidden) return;
   arrived.forEach((alert) => {
     try {
-      const notification = new window.Notification("SOS alarm", {
+      const notification = new window.Notification(levelOf(alert) === "red" ? "Alarm" : "Alert", {
         body: alarmLabel(alert),
         tag: alarmKey(alert),
         requireInteraction: true,
@@ -197,46 +207,51 @@ export function SosAlarmBanner() {
         data-grid-avoid=""
         className="fixed left-1/2 top-[calc(var(--ops-chrome)+8px)] z-[1200] inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-amber-400/50 bg-[#1a1408]/95 px-3 py-1.5 text-[11px] font-bold text-amber-300 hover:bg-[#2a200c]"
       >
-        <Volume2 size={13} /> SOS siren is off until this screen is clicked - click to arm
+        <Volume2 size={13} /> Alarm sound is off until this screen is clicked - click to turn it on
       </button>
     );
   }
 
-  const names = ringing.slice(0, 3).map(alarmLabel).join(", ");
-  const more = ringing.length > 3 ? ` and ${ringing.length - 3} more` : "";
+  // Red first: the loudest alarm leads the banner and decides its colour.
+  const ordered = [...ringing].sort((a, b) => (levelOf(a) === "red" ? 0 : 1) - (levelOf(b) === "red" ? 0 : 1));
+  const red = levelOf(ordered[0]) === "red";
+  const names = ordered.slice(0, 3).map(alarmLabel).join(", ");
+  const more = ordered.length > 3 ? ` and ${ordered.length - 3} more` : "";
   return (
     <div
       role="alert"
       data-grid-avoid=""
-      className="fixed inset-x-0 top-[var(--ops-chrome)] z-[1200] animate-pulse border-b-2 border-red-300 bg-red-700 px-4 py-2.5 text-white"
+      className={`fixed inset-x-0 top-[var(--ops-chrome)] z-[1200] border-b-2 px-4 py-2.5 ${
+        red ? "animate-pulse border-red-300 bg-red-700 text-white" : "border-amber-300 bg-amber-500 text-black"
+      }`}
     >
       <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-3">
         <Siren size={20} className="shrink-0" />
         <p className="min-w-0 flex-1 text-sm font-black">
-          SOS - {names}
+          {names}
           {more}
         </p>
         {blocked ? (
           <button
             type="button"
             onClick={enableAlerts}
-            className="rounded border border-white/70 bg-white px-3 py-1.5 text-[11px] font-black text-red-700"
+            className={`rounded border border-white/70 bg-white px-3 py-1.5 text-[11px] font-black ${red ? "text-red-700" : "text-amber-700"}`}
           >
             <Volume2 size={13} className="mr-1 inline" /> Sound is blocked - click to hear
           </button>
         ) : null}
         <Link
           to="/alarms"
-          className="rounded border border-white/60 px-3 py-1.5 text-[11px] font-bold hover:bg-white/10"
+          className={`rounded border px-3 py-1.5 text-[11px] font-bold ${red ? "border-white/60 hover:bg-white/10" : "border-black/40 hover:bg-black/10"}`}
         >
           Open alarms
         </Link>
         <button
           type="button"
           onClick={silence}
-          className="inline-flex items-center gap-1.5 rounded border border-white/60 px-3 py-1.5 text-[11px] font-bold hover:bg-white/10"
+          className={`inline-flex items-center gap-1.5 rounded border px-3 py-1.5 text-[11px] font-bold ${red ? "border-white/60 hover:bg-white/10" : "border-black/40 hover:bg-black/10"}`}
         >
-          <BellOff size={13} /> Silence
+          <BellOff size={13} /> {red ? "Silence" : "Dismiss"}
         </button>
       </div>
     </div>

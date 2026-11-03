@@ -581,11 +581,17 @@ export function deleteGeofence(id) {
   return request(`/api/geofences/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
+/** Units, channels, radios and drones a geofence rule can watch. */
+export function getGeofenceTargets(organizationId) {
+  const query = organizationId ? `?${new URLSearchParams({ organization_id: organizationId })}` : "";
+  return request(`/api/geofences/targets${query}`);
+}
+
 export function searchPlaces(query) {
   return request(`/api/geofences/places?${new URLSearchParams({ q: query })}`);
 }
 
-/** Dry run: what this shape covers, how big it is, and where it is. */
+/** Dry run: who each draft rule would find on the wrong side right now. */
 export function previewGeofence(payload) {
   return request("/api/geofences/preview", {
     method: "POST",

@@ -25,6 +25,7 @@ function normalizeSos(alert: any) {
     source: "pocstars",
     alert_key: `pocstars:${alert.sos_msg_id}`,
     alert_type: "sos",
+    level: "red",
     asset_type: "radio",
     asset_id: String(alert.device_id),
     asset_name: alert.dev_name || alert.device_name || null,

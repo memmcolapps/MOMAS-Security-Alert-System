@@ -140,3 +140,25 @@ export function stopSiren() {
   source.disconnect();
   source = null;
 }
+
+/**
+ * A single two-note chime for an amber alarm: heard once, then quiet. Uses
+ * the same audio context as the siren, so it is armed by the same first click.
+ */
+export function playChime() {
+  if (!ensureContext() || ctx.state !== "running") return;
+  const now = ctx.currentTime;
+  [[880, 0], [660, 0.22]].forEach(([hz, offset]) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = hz;
+    gain.gain.setValueAtTime(0, now + offset);
+    gain.gain.linearRampToValueAtTime(0.5, now + offset + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.6);
+    osc.connect(gain);
+    gain.connect(output);
+    osc.start(now + offset);
+    osc.stop(now + offset + 0.65);
+  });
+}

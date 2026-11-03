@@ -218,7 +218,7 @@ try {
 ║  Server  : http://localhost:${PORT}             ║
 ╚══════════════════════════════════════════════╝`);
 
-  startGeofenceMonitor();
+  void startGeofenceMonitor();
   startMavlinkListener();
   void startRadioPositionRecorder();
 

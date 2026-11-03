@@ -284,6 +284,22 @@ export function bufferRing(ring, bufferM) {
   return fromLocal(offsetRing(counterClockwise(local), Number(bufferM)), centre);
 }
 
+/**
+ * The alarm line of a "must not enter" rule: every point `bufferM` inside the
+ * zone. Drawn only; a zone thinner than twice the allowance has no honest
+ * inner line, and the caller simply shows what comes back.
+ */
+export function insetRing(ring, bufferM) {
+  if (!Array.isArray(ring) || ring.length < 3 || !(Number(bufferM) > 0)) return null;
+  const points = ring.map(([lon, lat]) => ({ lat, lon }));
+  const centre = centroidOf(points);
+  if (!centre) return null;
+  const local = dropRepeats(toLocal(points, centre));
+  if (local.length < 3) return null;
+  // Clockwise winding turns offsetRing's outward normals inward.
+  return fromLocal(offsetRing([...counterClockwise(local)].reverse(), Number(bufferM), "miter"), centre);
+}
+
 export function formatDistance(metres) {
   if (!Number.isFinite(metres)) return "—";
   return metres >= 1000 ? `${(metres / 1000).toFixed(metres >= 10_000 ? 0 : 1)} km` : `${Math.round(metres)} m`;

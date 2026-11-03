@@ -41,6 +41,21 @@ function observedMs(row: any) {
   return Number.isFinite(stamp) ? stamp : null;
 }
 
+// Each new fix goes to the geofence engine as it lands, so it never polls the
+// vendor a second time for positions this recorder already has.
+function emitFixes(rows: Array<{ device_id: string; lat: number; lon: number; observed_at: Date }>, source: string) {
+  for (const row of rows) {
+    bus.emit("position:update", {
+      asset_type: "radio",
+      asset_id: row.device_id,
+      lat: row.lat,
+      lon: row.lon,
+      observed_at: row.observed_at,
+      source,
+    });
+  }
+}
+
 async function activeDeviceIds() {
   if (Date.now() - deviceIdsAt < DEVICE_LIST_TTL_MS) return deviceIds;
   const devices = await db.listDevices({});
@@ -88,7 +103,10 @@ async function poll() {
     // While the bridge is pushing every point, those are the trail. This poll's
     // fixes carry the vendor's save time rather than the handset's, so storing
     // both would put every position on the trail twice.
-    if (fresh.length && !positionPushLive()) await db.insertRadioPositions(fresh);
+    if (fresh.length && !positionPushLive()) {
+      await db.insertRadioPositions(fresh);
+      emitFixes(fresh, "pocstars");
+    }
     if (now - lastPruneAt > PRUNE_EVERY_MS) {
       lastPruneAt = now;
       const cutoff = new Date(now - env.RADIO_TRACK_RETENTION_DAYS * 86_400_000);
@@ -127,6 +145,7 @@ export async function ingestPushedPoints(points: PushedPoint[]) {
   }
   if (!rows.length) return;
   await db.insertRadioPositions(rows);
+  emitFixes(rows, "pocstars-push");
   bus.emit(
     "radio-points",
     rows.map((row) => ({ uid: row.device_id, lat: row.lat, lon: row.lon, t: row.observed_at.getTime() })),
