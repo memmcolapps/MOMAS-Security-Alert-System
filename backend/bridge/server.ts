@@ -38,6 +38,7 @@ const timeoutMs = Number(process.env.POCSTARS_PTT_TIMEOUT_MS || 10_000);
 // survives the site being re-addressed, which hardcoded LAN addresses did not.
 const sosBase = process.env.BRIDGE_SOS_BASE || "http://127.0.0.1:6891";
 const sosPollMs = Number(process.env.BRIDGE_SOS_POLL_MS || 1000);
+const MISSED_SOS_WINDOW_MS = 24 * 60 * 60 * 1000;
 const maxPttSeconds = Number(process.env.POCSTARS_PTT_MAX_SECONDS || 60);
 const positionsPollMs = Number(process.env.BRIDGE_POSITIONS_POLL_MS || 2000);
 
@@ -217,7 +218,13 @@ function watchSos(ws: ServerWebSocket<BridgeSession>, targetUid: string) {
   if (ws.data.sosUnsubscribe) return;
   let watch = sosWatches.get(targetUid);
   if (!watch) {
-    watch = new SosWatch({ baseUrl: sosBase, targetUid, intervalMs: sosPollMs });
+    // Alarms routed past the recipient stay open upstream forever, so only
+    // recent ones are raised; an old one would be noise, not an emergency.
+    const db = provisioning;
+    const readMissed = db
+      ? () => db.openSosAlarmsMissedBy(Number(targetUid), Date.now() - MISSED_SOS_WINDOW_MS)
+      : undefined;
+    watch = new SosWatch({ baseUrl: sosBase, targetUid, intervalMs: sosPollMs, readMissed });
     sosWatches.set(targetUid, watch);
   }
   ws.data.sosUnsubscribe = watch.subscribe({
@@ -608,6 +615,7 @@ const server = Bun.serve<BridgeSession>({
               ? null
               : Math.round((Date.now() - watch.lastOkAt) / 1000),
           lastError: watch.lastError,
+          missedAlarmsError: watch.missedError,
         })),
         sessions: [...sessions]
           .filter((ws) => ws.data.seatUid !== null)

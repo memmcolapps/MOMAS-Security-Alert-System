@@ -850,6 +850,47 @@ export class PocstarsProvisioning {
     return rows.length ? Number(rows[0].uid) : null;
   }
 
+  // Open alarms from the recipient's own company that the SOS service never
+  // addressed to the recipient. The service sends an alarm to whatever group
+  // the radio is in when the button is pressed; during a private call that is
+  // a temporary group holding only the caller, so the alarm skips the
+  // recipient and never shows up in its /sos/mg/records page. Rows come back
+  // in the same shape that page uses, so both feed one pipeline.
+  async openSosAlarmsMissedBy(targetUid: number, sinceMs: number) {
+    const [rows]: any = await this.pool.query(
+      `SELECT m.sos_msg_id AS sosMsgId, m.sos_from_id AS sosFromId,
+              m.sos_sender_name AS sosSendName, m.sos_cg_id AS sosCgId,
+              m.sos_location_at AS sosLocationAt,
+              m.sos_processor_id AS sosProcessorId,
+              m.sos_processor_name AS sosProcessorName,
+              m.sos_start_time_stamp AS sosStamp, m.sos_status AS sosStatus
+         FROM tb_sos_alarm_message m
+         JOIN tb_User sender ON sender.User_ID = m.sos_from_id
+         JOIN tb_User target ON target.User_ID = ?
+        WHERE m.sos_status = 0
+          AND COALESCE(m.sos_valid, 0) = 0
+          AND m.sos_start_time_stamp >= ?
+          AND sender.User_CompanyID = target.User_CompanyID
+          AND NOT EXISTS (
+                SELECT 1 FROM tb_sos_alarm_message_record r
+                 WHERE r.sos_msg_id = m.sos_msg_id AND r.sos_to_uid = ?)
+        ORDER BY m.sos_msg_id DESC
+        LIMIT 50`,
+      [targetUid, sinceMs, targetUid],
+    );
+    return rows.map((row: any) => ({
+      ...row,
+      sosMsgId: Number(row.sosMsgId),
+      sosFromId: Number(row.sosFromId),
+      sosCgId: row.sosCgId === null ? null : Number(row.sosCgId),
+      sosStamp: Number(row.sosStamp),
+      sosStatus: Number(row.sosStatus),
+      // Marks the alarm for the console: it reached the radio network but was
+      // routed past this recipient.
+      sosMissedRecipient: true,
+    }));
+  }
+
   // The whole inventory read in one call: the same two queries listGroups and
   // listRadios run, but for every company at once. The inventory sync used to
   // ask company by company, and each ask is a round trip over the reverse

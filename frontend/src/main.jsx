@@ -172,7 +172,11 @@ const indexRoute = createRoute({
   beforeLoad: requireReadySession,
   // `focus` carries an alarm key so the alarms screen can hand an alarm to the
   // operations map ("Show on operations map").
-  validateSearch: (search) => (search.focus ? { focus: String(search.focus) } : {}),
+  // `track` lists the tracked radios, so a refresh keeps the split screen.
+  validateSearch: (search) => ({
+    ...(search.focus ? { focus: String(search.focus) } : {}),
+    ...(search.track ? { track: String(search.track) } : {}),
+  }),
   component: page("OperationsRoute"),
 });
 

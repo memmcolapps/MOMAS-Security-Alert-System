@@ -21,6 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OperationsMap, devicePopup, dronePopup, incidentPopup, sosPopup } from "../components/OperationsMap";
 import { FloatingRadioCard } from "../components/RadioConsole";
 import { TrackingStrip } from "../components/TrackingStrip";
+import { TrackGrid } from "../components/TrackGrid";
 import { RadioFleetPanel } from "../components/RadioFleetPanel";
 import { MapKey } from "../components/MapKey";
 import { ReplayPanel, replayRange } from "../components/ReplayPanel";
@@ -28,6 +29,8 @@ import { buildReplay } from "../lib/radio-replay";
 import { useSosAlarm } from "../components/SosAlarm";
 import { useFollow } from "../lib/follow-session";
 import { useRadioTracks } from "../lib/radio-tracks";
+import { TILE_SIZES, defaultTileSize, fitsTogether, nextColour } from "../lib/track-grid";
+import { fixFromLocation } from "../lib/radio-motion";
 import {
   dronePollInterval,
   getDronePositions,
@@ -36,7 +39,7 @@ import {
   getIncidents,
   getLocations,
   getMe,
-  getRadioTrack,
+  getRadioTracks,
   getRadioReplay,
   getRadioCoverage,
   RADIO_POLL_MS,
@@ -82,6 +85,19 @@ const COVERAGE_HOURS = ["1", "4", "12", "24"];
 
 // Stable, so an idle map is not handed a "new" empty trail on every render.
 const EMPTY_TRAIL = [];
+const NO_TRAILS = {};
+
+// The tracked radios live in the URL (?track=12,34), so a refresh or a shared
+// link brings back the same screen.
+function trackedFromSearch(value) {
+  const ids = [...new Set(String(value || "").split(",").map((id) => id.trim()).filter(Boolean))];
+  const colours = [];
+  return ids.map((deviceId) => {
+    const colour = nextColour(colours);
+    colours.push(colour);
+    return { deviceId, colour, paused: false, recentreKey: 0 };
+  });
+}
 
 function LiveMonitoring({ stats, total }) {
   // Every incident figure for the selected period, in one line.
@@ -221,26 +237,56 @@ export function OperationsRoute() {
     refetchInterval: RADIO_POLL_MS,
   });
 
-  // One radio at a time can be tracked: the camera keeps it in view and its
-  // trail is drawn. Dragging the map pauses the camera, not the tracking.
-  const [tracking, setTracking] = useState(null);
+  // Tracked radios. One is followed on the main map, as before; a second
+  // splits the screen into a tile per radio (TrackGrid). Dragging a map
+  // pauses its camera, not the tracking.
+  const [tracked, setTracked] = useState(() => trackedFromSearch(routeSearch?.track));
   const [trackedMotion, setTrackedMotion] = useState(null);
-  // Every GPS point each radio sends, streamed; the map plays them back.
+  // Every GPS point each radio sends, streamed; the maps play them back.
   const radioTracks = useRadioTracks();
-  const trackedRadioId = tracking?.deviceId || null;
-  const trackQuery = useQuery({
-    queryKey: ["radio-track", trackedRadioId],
-    queryFn: () => getRadioTrack(trackedRadioId, TRAIL_MINUTES),
-    enabled: Boolean(trackedRadioId),
+  const trackedRadioId = tracked.length === 1 ? tracked[0].deviceId : null;
+  const trackedKey = tracked.map((item) => item.deviceId).sort().join(",");
+  // Every tracked radio's trail in one request, however many there are.
+  const trailsQuery = useQuery({
+    queryKey: ["radio-tracks", trackedKey],
+    queryFn: () => getRadioTracks(trackedKey.split(","), TRAIL_MINUTES),
+    enabled: Boolean(trackedKey),
     refetchInterval: 10_000,
+    // Adding a radio must not blank every other tile's trail while it loads.
+    placeholderData: (previous) => previous,
   });
+  const trails = trailsQuery.data?.tracks || NO_TRAILS;
+  const [trackView, setTrackView] = useState("split");
+  const [tileSize, setTileSize] = usePersistentChoice(
+    "momas_ops_tile_size",
+    defaultTileSize(typeof window === "undefined" ? 1440 : window.screen?.width || window.innerWidth),
+    Object.keys(TILE_SIZES),
+  );
+  const [gridCapacity, setGridCapacity] = useState(Infinity);
+  const [trackNotice, setTrackNotice] = useState(null);
+  const gridCapacityRef = useRef(Infinity);
+  gridCapacityRef.current = trackView === "split" ? gridCapacity : Infinity;
+  useEffect(() => {
+    if (!trackNotice) return undefined;
+    const timer = window.setTimeout(() => setTrackNotice(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [trackNotice]);
   // The Live tour moves the camera every few seconds and tracking pans it
-  // back, so starting one ends the other.
+  // back, so starting one ends the other. Tracking another radio adds it.
   const trackRadio = useCallback((deviceId) => {
     if (!deviceId) return;
+    const id = String(deviceId);
     setLiveMode(false);
     setReplay(null);
-    setTracking({ deviceId: String(deviceId), paused: false });
+    setTracked((current) => {
+      if (current.some((item) => item.deviceId === id)) return current;
+      if (current.length >= 2 && current.length >= gridCapacityRef.current) {
+        setTrackNotice("The screen is full. Close a tile or pick a smaller tile size.");
+        return current;
+      }
+      const colour = nextColour(current.map((item) => item.colour));
+      return [...current, { deviceId: id, colour, paused: false, recentreKey: 0 }];
+    });
   }, []);
 
   // Replaying a radio's shift. The window is fixed when it is picked, so a
@@ -259,7 +305,7 @@ export function OperationsRoute() {
   );
   const startReplay = useCallback((deviceId) => {
     setLiveMode(false);
-    setTracking(null);
+    setTracked([]);
     setTrackedMotion(null);
     setReplay({ deviceId: String(deviceId), choice: "1h", ...replayRange("1h") });
   }, []);
@@ -270,17 +316,47 @@ export function OperationsRoute() {
     refetchInterval: 60_000,
   });
   const stopTracking = useCallback(() => {
-    setTracking(null);
+    setTracked([]);
     setTrackedMotion(null);
   }, []);
+  const stopTrackingOne = useCallback((deviceId) => {
+    setTracked((current) => current.filter((item) => item.deviceId !== deviceId));
+  }, []);
+  // With no id, the one radio followed on the main map.
   const pauseTracking = useCallback(
-    () => setTracking((current) => (current && !current.paused ? { ...current, paused: true } : current)),
+    (deviceId) =>
+      setTracked((current) =>
+        current.map((item) =>
+          (deviceId ? item.deviceId === deviceId : current.length === 1) && !item.paused ? { ...item, paused: true } : item,
+        ),
+      ),
     [],
   );
   const resumeTracking = useCallback(
-    () => setTracking((current) => (current ? { ...current, paused: false } : current)),
+    (deviceId) =>
+      setTracked((current) =>
+        current.map((item) =>
+          deviceId ? (item.deviceId === deviceId ? { ...item, paused: false, recentreKey: item.recentreKey + 1 } : item) : { ...item, paused: false },
+        ),
+      ),
     [],
   );
+  const reorderTracked = useCallback((fromId, toId) => {
+    setTracked((current) => {
+      const from = current.findIndex((item) => item.deviceId === fromId);
+      const to = current.findIndex((item) => item.deviceId === toId);
+      if (from < 0 || to < 0) return current;
+      const next = [...current];
+      [next[from], next[to]] = [next[to], next[from]];
+      return next;
+    });
+  }, []);
+  const bringTrackedForward = useCallback((deviceId) => {
+    setTracked((current) => {
+      const item = current.find((entry) => entry.deviceId === deviceId);
+      return item ? [item, ...current.filter((entry) => entry !== item)] : current;
+    });
+  }, []);
   // The map only reports when something it shows has changed.
   const reportTrackedMotion = useCallback((next) => setTrackedMotion(next), []);
 
@@ -337,6 +413,34 @@ export function OperationsRoute() {
     () => new Map(devices.map((device) => [String(device.device_id), device])),
     [devices],
   );
+  const trackedIds = useMemo(() => new Set(tracked.map((item) => item.deviceId)), [tracked]);
+  const gridActive = tracked.length >= 2;
+  // Keep ?track= in step with what is tracked.
+  const trackParam = tracked.map((item) => item.deviceId).join(",");
+  useEffect(() => {
+    if ((routeSearch?.track || "") === trackParam) return;
+    navigate({
+      to: "/",
+      search: (previous) => {
+        const { track: _old, ...rest } = previous || {};
+        return trackParam ? { ...rest, track: trackParam } : rest;
+      },
+      replace: true,
+    });
+  }, [trackParam, routeSearch?.track, navigate]);
+  // Going from one tracked radio to two picks the view once: one map when
+  // they are close enough to share it at street zoom, tiles when they are not.
+  // After that the operator's choice stands.
+  const latestLocationsRef = useRef(latestDeviceLocations);
+  latestLocationsRef.current = latestDeviceLocations;
+  const wasGridRef = useRef(gridActive);
+  useEffect(() => {
+    if (gridActive && !wasGridRef.current) {
+      const positions = tracked.map((item) => fixFromLocation(latestLocationsRef.current.get(item.deviceId))).filter(Boolean);
+      setTrackView(fitsTogether(positions, window.innerWidth - 440, window.innerHeight - 120) ? "together" : "split");
+    }
+    wasGridRef.current = gridActive;
+  }, [gridActive, tracked]);
   const activeAlerts = useMemo(
     () =>
       allAlerts
@@ -420,7 +524,7 @@ export function OperationsRoute() {
       popupHtml: sosPopup(alert),
     });
     // Drop the parameter once used so a later refresh does not re-focus.
-    navigate({ to: "/", search: {}, replace: true });
+    navigate({ to: "/", search: (previous) => (previous?.track ? { track: previous.track } : {}), replace: true });
   }, [requestedFocusKey, activeAlerts, navigate]);
 
   const visibleIncidents = useMemo(
@@ -590,8 +694,8 @@ export function OperationsRoute() {
         onRadioSelect={openRadioCard}
         followLine={followTarget && followPosition ? { from: followPosition, to: followTarget } : null}
         trackedRadioId={trackedRadioId}
-        trackPaused={Boolean(tracking?.paused)}
-        trail={trackQuery.data?.points || EMPTY_TRAIL}
+        trackPaused={Boolean(trackedRadioId && tracked[0].paused)}
+        trail={(trackedRadioId && trails[trackedRadioId]) || EMPTY_TRAIL}
         radioTracks={radioTracks}
         radioFilter={radioFilter}
         onRadioStatuses={setRadioStatuses}
@@ -617,16 +721,49 @@ export function OperationsRoute() {
         />
       ) : null}
 
-      {tracking ? (
+      {trackedRadioId ? (
         <TrackingStrip
           device={deviceRegistry.get(trackedRadioId) || { device_id: trackedRadioId }}
           location={latestDeviceLocations.get(trackedRadioId)}
           motion={trackedMotion}
-          paused={tracking.paused}
+          paused={tracked[0].paused}
           trailMinutes={TRAIL_MINUTES}
-          onRecentre={resumeTracking}
+          onRecentre={() => resumeTracking()}
           onStop={stopTracking}
           onReplay={() => startReplay(trackedRadioId)}
+        />
+      ) : null}
+
+      {gridActive ? (
+        <TrackGrid
+          // Clear of the fleet list on the left (so radios can still be added)
+          // and of the intelligence feed and its handle on the right.
+          style={{
+            top: "calc(var(--ops-chrome) + 0.75rem)",
+            bottom: "0.75rem",
+            left: activeLayers.devices ? "calc(4rem + 280px + 0.75rem)" : "0.75rem",
+            right: panelOpen ? "calc(380px + 2.5rem)" : "2.5rem",
+          }}
+          tracked={tracked}
+          devices={devices}
+          deviceRegistry={deviceRegistry}
+          locations={latestDeviceLocations}
+          radioTracks={radioTracks}
+          trails={trails}
+          view={trackView}
+          onView={setTrackView}
+          tileSize={tileSize}
+          onTileSize={setTileSize}
+          onCapacity={setGridCapacity}
+          notice={trackNotice}
+          onTrack={trackRadio}
+          onStop={stopTrackingOne}
+          onStopAll={stopTracking}
+          onPause={pauseTracking}
+          onResume={resumeTracking}
+          onReplay={startReplay}
+          onReorder={reorderTracked}
+          onBringForward={bringTrackedForward}
         />
       ) : null}
 
@@ -648,8 +785,8 @@ export function OperationsRoute() {
             onShowOnMap={(coords) =>
               setFocusTarget({ ...coords, zoom: 15, key: `card-${card.deviceId}-${Date.now()}` })
             }
-            tracking={trackedRadioId === card.deviceId}
-            onTrack={() => (trackedRadioId === card.deviceId ? stopTracking() : trackRadio(card.deviceId))}
+            tracking={trackedIds.has(card.deviceId)}
+            onTrack={() => (trackedIds.has(card.deviceId) ? stopTrackingOne(card.deviceId) : trackRadio(card.deviceId))}
             onReplay={() => startReplay(card.deviceId)}
           />
         );
@@ -686,7 +823,7 @@ export function OperationsRoute() {
           statuses={radioStatuses}
           filter={radioFilter}
           onFilter={setRadioFilter}
-          trackedId={trackedRadioId}
+          trackedIds={trackedIds}
           onTrack={trackRadio}
           onOpen={openRadioCard}
           open={fleetOpen}
@@ -710,7 +847,7 @@ export function OperationsRoute() {
         onCoverageHours={setCoverageHours}
         open={keyOpen}
         onToggle={() => setKeyOpen((value) => !value)}
-        className={`absolute top-[calc(var(--ops-chrome)+0.75rem)] hidden lg:block ${panelOpen ? "right-[400px]" : "right-5"}`}
+        className={`absolute top-[calc(var(--ops-chrome)+0.75rem)] hidden ${gridActive ? "" : "lg:block"} ${panelOpen ? "right-[400px]" : "right-5"}`}
       />
 
       <aside
@@ -865,7 +1002,7 @@ export function OperationsRoute() {
           Fleet figures live in the fleet panel, incident figures in Live
           Monitoring, and the basemap and layers in the map panel. */}
       <section
-        className={`glass-panel absolute z-[1000] flex max-w-[calc(100vw-2rem)] flex-wrap items-center gap-1.5 rounded-lg px-2.5 py-1.5 transition-transform ${followTarget ? "bottom-[4.5rem]" : "bottom-3"} ${
+        className={`glass-panel absolute z-[1000] max-w-[calc(100vw-2rem)] flex-wrap items-center gap-1.5 rounded-lg px-2.5 py-1.5 transition-transform ${gridActive ? "hidden" : "flex"} ${followTarget ? "bottom-[4.5rem]" : "bottom-3"} ${
           panelOpen ? "left-1/2 -translate-x-[calc(50%+190px)]" : "left-1/2 -translate-x-1/2"
         }`}
       >

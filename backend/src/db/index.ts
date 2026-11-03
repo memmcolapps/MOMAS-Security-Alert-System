@@ -4242,6 +4242,19 @@ async function listRadioTrack(deviceId, since) {
   return rows;
 }
 
+/** Several radios' fixes since a moment, in one query, oldest first. */
+async function listRadioTracks(deviceIds, since) {
+  const { rows } = await pool.query(
+    `SELECT device_id, lat, lon, observed_at, received_at
+       FROM radio_positions
+      WHERE device_id = ANY($1) AND received_at >= $2
+      ORDER BY observed_at ASC
+      LIMIT 100000`,
+    [deviceIds, since],
+  );
+  return rows;
+}
+
 /** One radio's fixes taken between two moments, for replaying a shift. */
 async function listRadioTrackBetween(deviceId, from, to) {
   const { rows } = await pool.query(
@@ -5163,6 +5176,7 @@ export {
   insertRadioPositions,
   latestRadioPositions,
   listRadioTrack,
+  listRadioTracks,
   listRecentRadioPoints,
   listReviewQueue,
   listRadioTrackBetween,

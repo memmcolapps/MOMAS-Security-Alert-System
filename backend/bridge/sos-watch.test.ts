@@ -121,6 +121,50 @@ describe("SosWatch", () => {
     expect((await watch.pollOnce()).map((row) => row.sosMsgId)).toEqual([2]);
   });
 
+  test("reports an alarm routed past the recipient, read from the database", async () => {
+    const service = fakeService();
+    service.page = [alarm(1)];
+    const missed = { rows: [] as SosRow[] };
+    const watch = new SosWatch({
+      baseUrl: "http://127.0.0.1:6891",
+      targetUid: "39",
+      intervalMs: 60_000,
+      fetchImpl: service.fetch,
+      readMissed: async () => missed.rows,
+    });
+    cleanups.push(() => watch.stop());
+    await watch.pollOnce();
+    // Pressed during a private call: the service's page never lists it.
+    missed.rows = [alarm(2)];
+    expect((await watch.pollOnce()).map((row) => row.sosMsgId)).toEqual([2]);
+    expect(watch.snapshot().map((row) => row.sosMsgId)).toEqual([1, 2]);
+    expect(await watch.pollOnce()).toEqual([]);
+  });
+
+  test("a failed database read neither drops nor repeats a missed alarm", async () => {
+    const service = fakeService();
+    let fail = false;
+    const watch = new SosWatch({
+      baseUrl: "http://127.0.0.1:6891",
+      targetUid: "39",
+      intervalMs: 60_000,
+      fetchImpl: service.fetch,
+      readMissed: async () => {
+        if (fail) throw new Error("connect ECONNREFUSED 127.0.0.1:3306");
+        return [alarm(5)];
+      },
+    });
+    cleanups.push(() => watch.stop());
+    await watch.pollOnce();
+    fail = true;
+    expect(await watch.pollOnce()).toEqual([]);
+    expect(watch.snapshot().map((row) => row.sosMsgId)).toEqual([5]);
+    expect(watch.missedError).toContain("ECONNREFUSED");
+    fail = false;
+    expect(await watch.pollOnce()).toEqual([]);
+    expect(watch.missedError).toBeNull();
+  });
+
   test("stops polling when the last listener leaves", () => {
     const watch = watchWith(fakeService());
     const unsubscribe = watch.subscribe(recorder().listener);

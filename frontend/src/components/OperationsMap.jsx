@@ -182,7 +182,9 @@ function removePin(layer, marker) {
 // stay findable, but they are most of the fleet at any hour and should not
 // drown out the ones that can answer. Names show only where they earn the
 // space - moving, tracked, in alarm - and on hover everywhere else.
-function radioIcon({ label, glyph, status, bearing, tracked, ageSec }) {
+// `ring` colours the tracked outline, so several tracked radios on one map can
+// be told apart and matched to their tiles.
+export function radioIcon({ label, glyph, status, bearing, tracked, ageSec, ring = null }) {
   if (status === "offline" && !tracked) {
     return L.divIcon({ className: "", html: '<div class="device-dot"></div>', iconSize: [10, 10], iconAnchor: [5, 5] });
   }
@@ -198,7 +200,7 @@ function radioIcon({ label, glyph, status, bearing, tracked, ageSec }) {
     // A vehicle tracker and a handheld should not look identical on a map.
     // An SOS keeps the alarm glyph whatever the device is - what it is
     // matters less than that it is shouting.
-    html: `${heading}<div class="device-pin status-${status} ${tracked ? "tracked" : ""}">${sos ? '<i class="fas fa-triangle-exclamation"></i>' : glyph}</div>${
+    html: `${heading}<div class="device-pin status-${status} ${tracked ? "tracked" : ""}"${ring ? ` style="outline-color:${ring}"` : ""}>${sos ? '<i class="fas fa-triangle-exclamation"></i>' : glyph}</div>${
       labelled ? `<div class="device-label status-${status}">${escapeHtml(label)}${age}</div>` : ""
     }`,
     iconSize: [26, 42],

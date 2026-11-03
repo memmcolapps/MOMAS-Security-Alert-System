@@ -42,7 +42,7 @@ function detail(info) {
  * map, and a list sorted by what needs attention - alarms, then whatever is
  * moving. Finding a radio no longer means hunting for its pin.
  */
-export function RadioFleetPanel({ devices, statuses, filter, onFilter, trackedId, onTrack, onOpen, open, onToggle, header }) {
+export function RadioFleetPanel({ devices, statuses, filter, onFilter, trackedIds, onTrack, onOpen, open, onToggle, header }) {
   const [query, setQuery] = useState("");
 
   // Every registered radio in service, with what the map knows about it - or
@@ -127,7 +127,7 @@ export function RadioFleetPanel({ devices, statuses, filter, onFilter, trackedId
           <ul className="scrollbar-thin min-h-0 flex-1 overflow-y-auto border-t border-white/5">
             {rows.map(({ device, info }) => {
               const uid = String(device.device_id);
-              const tracked = uid === trackedId;
+              const tracked = trackedIds?.has(uid);
               return (
                 <li key={uid}>
                   <button

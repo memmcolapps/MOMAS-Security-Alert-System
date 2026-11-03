@@ -1214,6 +1214,34 @@ router.get("/locations/:uid/track", async (c) => {
   }
 });
 
+// The trails behind several tracked radios at once, so a split screen of
+// tracked radios costs one request rather than one per tile.
+const TRACKS_MAX_RADIOS = 200;
+router.get("/locations/tracks", async (c) => {
+  const uids = [...new Set(String(c.req.query("uids") || "").split(",").map((uid) => uid.trim()).filter(Boolean))].slice(0, TRACKS_MAX_RADIOS);
+  if (!uids.length) return c.json({ minutes: 0, tracks: {} });
+  if (!(await ensureDeviceAccess(c, uids))) {
+    return c.json({ error: "That device is outside your operational scope." }, 403);
+  }
+  const minutes = Math.min(Math.max(Number(c.req.query("minutes")) || 30, 1), TRACK_MAX_MINUTES);
+  try {
+    const since = new Date(Date.now() - minutes * 60_000);
+    const rows = await db.listRadioTracks(uids, since);
+    const tracks: Record<string, any[]> = Object.fromEntries(uids.map((uid) => [uid, []]));
+    for (const row of rows) {
+      tracks[String(row.device_id)]?.push({
+        lat: Number(row.lat),
+        lon: Number(row.lon),
+        observed_at: new Date(row.observed_at).toISOString(),
+        received_at: new Date(row.received_at).toISOString(),
+      });
+    }
+    return c.json({ minutes, tracks });
+  } catch (error: any) {
+    return c.json({ error: "radio_tracks_failed", message: error.message }, 500);
+  }
+});
+
 router.get("/history", async (c) => {
   const { uid, start, end } = c.req.query();
   if (!uid || !start || !end) return c.json({ error: "uid, start, end required" }, 400);

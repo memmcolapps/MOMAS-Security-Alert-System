@@ -23,6 +23,10 @@ type SosWatchOptions = {
   intervalMs?: number;
   timeoutMs?: number;
   fetchImpl?: SosFetch;
+  // Open alarms the service routed past the recipient (an SOS pressed during a
+  // private call goes to the call's temporary group instead). Read from the
+  // vendor database, since the service's own page never lists them.
+  readMissed?: () => Promise<SosRow[]>;
 };
 
 export type SosListener = {
@@ -33,7 +37,10 @@ export type SosListener = {
 };
 
 export class SosWatch {
-  private options: Required<Omit<SosWatchOptions, "fetchImpl">> & { fetchImpl: SosFetch };
+  private options: Required<Omit<SosWatchOptions, "fetchImpl" | "readMissed">> & {
+    fetchImpl: SosFetch;
+    readMissed?: () => Promise<SosRow[]>;
+  };
   private listeners = new Set<SosListener>();
   // Joined before the first page arrived, so still owed their snapshot.
   private awaitingSnapshot = new Set<SosListener>();
@@ -44,9 +51,13 @@ export class SosWatch {
   // is how an alarm raised while the VPS was cut off still arrives.
   private open = new Map<string, SosRow>();
   private primed = false;
+  // Last good read of the missed alarms. Kept through a failed read so an open
+  // alarm is not dropped and then reported again as new.
+  private missed: SosRow[] = [];
 
   lastOkAt: number | null = null;
   lastError: string | null = null;
+  missedError: string | null = null;
 
   constructor(options: SosWatchOptions) {
     this.options = {
@@ -87,6 +98,25 @@ export class SosWatch {
 
   /** One poll. Public so tests can drive it without timers. */
   async pollOnce() {
+    // Both reads are local and independent, so neither waits on the other.
+    const [rows, missed] = await Promise.all([this.fetchPage(), this.readMissed()]);
+    this.lastOkAt = Date.now();
+    this.lastError = null;
+    return this.absorb([...rows, ...missed]);
+  }
+
+  private async readMissed() {
+    if (!this.options.readMissed) return [];
+    try {
+      this.missed = await this.options.readMissed();
+      this.missedError = null;
+    } catch (error) {
+      this.missedError = error instanceof Error ? error.message : String(error);
+    }
+    return this.missed;
+  }
+
+  private async fetchPage() {
     const url = new URL(`${this.options.baseUrl}/sos/mg/records`);
     url.searchParams.set("targetUid", this.options.targetUid);
     url.searchParams.set("status", "0");
@@ -98,9 +128,7 @@ export class SosWatch {
     if (!response.ok) throw new Error(`SOS service answered HTTP ${response.status}`);
     const body = await response.json();
     const rows: SosRow[] = Array.isArray(body?.data?.rows) ? body.data.rows : [];
-    this.lastOkAt = Date.now();
-    this.lastError = null;
-    return this.absorb(rows);
+    return rows;
   }
 
   /** Folds one page into the open set and returns the rows that are new. */

@@ -439,6 +439,12 @@ export function getRadioTrack(uid, minutes = 30) {
   return request(`/api/pocstars/locations/${encodeURIComponent(uid)}/track?minutes=${minutes}`);
 }
 
+// The trails behind several tracked radios, in one request: { tracks: { uid: points } }.
+export function getRadioTracks(uids, minutes = 30) {
+  const query = new URLSearchParams({ uids: uids.join(","), minutes: String(minutes) });
+  return request(`/api/pocstars/locations/tracks?${query}`);
+}
+
 // One radio's points between two moments (epoch ms), for replaying its shift.
 export function getRadioReplay(uid, from, to) {
   const query = new URLSearchParams({ from: new Date(from).toISOString(), to: new Date(to).toISOString() });
