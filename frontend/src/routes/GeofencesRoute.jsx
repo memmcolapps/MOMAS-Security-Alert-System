@@ -58,14 +58,15 @@ const EMPTY_ZONE = {
   radius_m: 300,
 };
 
+// In the editor a rule card holds any number of radios, plus units or
+// channels as a shortcut. It shares one direction and one level. On save it
+// becomes one stored rule per radio or group, so each radio still alarms on its own.
 let ruleSeq = 0;
 function newRule(patch = {}) {
   ruleSeq += 1;
   return {
     key: `new-${ruleSeq}`,
-    id: null,
-    target_type: "",
-    target_id: "",
+    targets: [],
     trigger: "exit",
     level: "amber",
     buffer_m: 30,
@@ -108,25 +109,55 @@ function toForm(zone) {
       center_lon: zone.center_lon == null ? null : Number(zone.center_lon),
       radius_m: Number(zone.radius_m) || 300,
     },
-    rules: (zone.rules || []).map((rule) => ({
-      key: `rule-${rule.id}`,
-      id: rule.id,
-      target_type: rule.target_type,
-      target_id: String(rule.target_id),
-      trigger: rule.trigger,
-      level: rule.level,
-      buffer_m: Number(rule.buffer_m),
-      confirmations_required: Number(rule.confirmations_required),
-      active: rule.active !== false,
-      saved_as: `${rule.target_type}:${rule.target_id}:${rule.trigger}`,
+    rules: groupRules(zone.rules || []).map((group) => ({
+      key: `rule-${group[0].id}`,
+      targets: group.map((rule) => ({
+        id: rule.id,
+        target_type: rule.target_type,
+        target_id: String(rule.target_id),
+        saved_as: `${rule.target_type}:${rule.target_id}:${rule.trigger}`,
+      })),
+      trigger: group[0].trigger,
+      level: group[0].level,
+      buffer_m: Number(group[0].buffer_m),
+      confirmations_required: Number(group[0].confirmations_required),
+      active: group[0].active !== false,
     })),
   };
 }
 
-/** New, or now asks a different question: the server records where everyone stands for these. */
-function isFreshRule(rule) {
-  return !rule.id || rule.saved_as !== `${rule.target_type}:${rule.target_id}:${rule.trigger}`;
+/** Stored rules that share direction, level and tuning read as one card. */
+function groupRules(rules) {
+  const groups = new Map();
+  for (const rule of rules) {
+    const key = [rule.trigger, rule.level, Number(rule.buffer_m), Number(rule.confirmations_required), rule.active !== false].join("|");
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(rule);
+  }
+  return [...groups.values()];
 }
+
+/** One stored rule per radio or group in the card, each flagged if it is new or changed. */
+function expandRule(card) {
+  return card.targets.map((target) => ({
+    cardKey: card.key,
+    fresh: !target.id || target.saved_as !== `${target.target_type}:${target.target_id}:${card.trigger}`,
+    payload: {
+      // A rule that changed direction is replaced rather than kept, so the
+      // server starts it fresh instead of carrying the old breach state over.
+      id: target.saved_as === `${target.target_type}:${target.target_id}:${card.trigger}` ? target.id : null,
+      target_type: target.target_type,
+      target_id: target.target_id,
+      trigger: card.trigger,
+      level: card.level,
+      buffer_m: Number(card.buffer_m),
+      confirmations_required: Number(card.confirmations_required),
+      active: card.active,
+    },
+  }));
+}
+
+const hasTarget = (card, type, id) => card.targets.some((t) => t.target_type === type && String(t.target_id) === String(id));
 
 function isPlaced(zone) {
   return zone.shape_type === "polygon" ? zone.points.length >= 3 : zone.center_lat != null && Number(zone.radius_m) > 0;
@@ -145,19 +176,6 @@ function zonePayload(zone) {
     center_lat: zone.center_lat,
     center_lon: zone.center_lon,
     radius_m: zone.shape_type === "circle" ? Number(zone.radius_m) : null,
-  };
-}
-
-function rulePayload(rule) {
-  return {
-    id: rule.id,
-    target_type: rule.target_type,
-    target_id: rule.target_id,
-    trigger: rule.trigger,
-    level: rule.level,
-    buffer_m: Number(rule.buffer_m),
-    confirmations_required: Number(rule.confirmations_required),
-    active: rule.active,
   };
 }
 
@@ -200,10 +218,17 @@ function useTargetIndex(allTargets) {
   }, [allTargets]);
 }
 
-function targetLabel(index, rule) {
-  if (!rule.target_type) return "Choose who";
-  const key = `${rule.target_type}:${rule.target_id}`;
-  return index.names.get(key) || `${rule.target_type} ${rule.target_id}`;
+function targetLabel(index, target) {
+  const key = `${target.target_type}:${target.target_id}`;
+  const name = index.names.get(key) || `${target.target_type} ${target.target_id}`;
+  return target.target_type === "unit" || target.target_type === "channel" ? `${name} (all)` : name;
+}
+
+/** "Bello, Musa +3" — enough to recognise a card without reading every chip. */
+function targetsSummary(index, targets, max = 2) {
+  if (!targets.length) return "Nobody yet";
+  const names = targets.slice(0, max).map((target) => targetLabel(index, target)).join(", ");
+  return targets.length > max ? `${names} +${targets.length - max}` : names;
 }
 
 function ZoneMap({
@@ -564,7 +589,7 @@ function radioPopup(map, radio, editing, handlers) {
   title.style.cssText = "font-size:12px;font-weight:700;margin-bottom:6px;color:#f5f5f5";
   root.appendChild(title);
   const actions = editing
-    ? [["watch", "Watch this radio"]]
+    ? [["watch", "Add to / remove from this zone"]]
     : [
         ["exit", "Alarm if it leaves an area"],
         ["enter", "Alarm if it enters an area"],
@@ -635,8 +660,11 @@ function PlaceSearch({ onPick }) {
   );
 }
 
-/** Searchable picker over units, channels, radios and drones. */
-function TargetPicker({ rule, targets, index, onPick }) {
+/**
+ * Pick radios one by one, ticking as many as needed; the list stays open.
+ * Units and channels sit underneath as a shortcut for "all of them".
+ */
+function TargetPicker({ rule, targets, onToggle }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const rootRef = useRef(null);
@@ -654,47 +682,44 @@ function TargetPicker({ rule, targets, index, onPick }) {
   const match = (name, id) => !needle || String(name || "").toLowerCase().includes(needle) || String(id).toLowerCase().includes(needle);
   const groups = [
     {
-      title: "Units",
-      icon: Users,
-      items: (targets?.units || []).filter((u) => match(u.name, u.id)).map((u) => ({
-        type: "unit", id: String(u.id), name: u.name, meta: `${u.members?.length || 0} assets`,
-      })),
-    },
-    {
-      title: "Channels",
-      icon: Users,
-      items: (targets?.channels || []).filter((c) => match(c.name, c.id)).map((c) => ({
-        type: "channel", id: String(c.id), name: c.name, meta: `${c.members?.length || 0} radios`,
-      })),
-    },
-    {
       title: "Radios",
-      icon: Radio,
       items: (targets?.radios || []).filter((r) => match(r.name, r.device_id)).map((r) => ({
         type: "radio", id: String(r.device_id), name: r.name || `Radio ${r.device_id}`, meta: r.device_id,
       })),
     },
     {
       title: "Drones",
-      icon: Radio,
       items: (targets?.drones || []).filter((d) => match(d.name, d.sysid)).map((d) => ({
         type: "drone", id: String(d.sysid), name: d.name || `Drone ${d.sysid}`, meta: `#${d.sysid}`,
       })),
     },
+    {
+      title: "Whole unit (includes radios added later)",
+      items: (targets?.units || []).filter((u) => match(u.name, u.id)).map((u) => ({
+        type: "unit", id: String(u.id), name: u.name, meta: `${u.members?.length || 0}`,
+      })),
+    },
+    {
+      title: "Whole channel (includes radios added later)",
+      items: (targets?.channels || []).filter((c) => match(c.name, c.id)).map((c) => ({
+        type: "channel", id: String(c.id), name: c.name, meta: `${c.members?.length || 0}`,
+      })),
+    },
   ].filter((group) => group.items.length);
 
-  const chosen = Boolean(rule.target_type);
   return (
-    <div className="relative min-w-0 flex-1" ref={rootRef}>
+    <div className="relative" ref={rootRef}>
       <button
         className={`flex w-full items-center gap-1.5 rounded-md border px-2.5 py-2 text-left text-[11px] font-bold transition-colors ${
-          chosen ? "border-white/15 bg-white/[0.05] text-neutral-100 hover:bg-white/[0.08]" : "border-red-400/40 bg-red-500/[0.06] text-red-200 hover:bg-red-500/10"
+          rule.targets.length
+            ? "border-white/15 bg-white/[0.04] text-neutral-300 hover:bg-white/[0.08]"
+            : "border-red-400/40 bg-red-500/[0.06] text-red-200 hover:bg-red-500/10"
         }`}
         onClick={() => setOpen((value) => !value)}
         type="button"
       >
-        {rule.target_type === "unit" || rule.target_type === "channel" ? <Users size={12} /> : <Radio size={12} />}
-        <span className="truncate">{targetLabel(index, rule)}</span>
+        <Plus size={12} />
+        <span className="truncate">{rule.targets.length ? "Add or remove radios" : "Choose radios"}</span>
         <ChevronDown className="ml-auto shrink-0 text-neutral-500" size={12} />
       </button>
       {open ? (
@@ -705,7 +730,7 @@ function TargetPicker({ rule, targets, index, onPick }) {
               autoFocus
               className="field-input pl-7"
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search units, channels, radios"
+              placeholder="Search by name or ID"
               value={query}
             />
           </div>
@@ -713,20 +738,21 @@ function TargetPicker({ rule, targets, index, onPick }) {
             {groups.map((group) => (
               <div key={group.title}>
                 <div className="px-3 pb-1 pt-2 text-[9px] font-bold uppercase tracking-wide text-neutral-600">{group.title}</div>
-                {group.items.slice(0, needle ? 50 : 30).map((item) => {
-                  const selected = rule.target_type === item.type && String(rule.target_id) === item.id;
+                {group.items.slice(0, needle ? 100 : 60).map((item) => {
+                  const selected = hasTarget(rule, item.type, item.id);
                   return (
                     <button
-                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] hover:bg-white/5 ${selected ? "text-red-200" : "text-neutral-300"}`}
+                      aria-pressed={selected}
+                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] hover:bg-white/5 ${selected ? "text-neutral-100" : "text-neutral-400"}`}
                       key={`${item.type}:${item.id}`}
-                      onClick={() => {
-                        onPick(item.type, item.id);
-                        setOpen(false);
-                        setQuery("");
-                      }}
+                      onClick={() => onToggle(item.type, item.id)}
                       type="button"
                     >
-                      {selected ? <Check className="shrink-0" size={12} /> : <span className="w-3 shrink-0" />}
+                      <span
+                        className={`grid h-3.5 w-3.5 shrink-0 place-items-center rounded border ${selected ? "border-red-400 bg-red-400 text-black" : "border-white/25"}`}
+                      >
+                        {selected ? <Check size={10} strokeWidth={3} /> : null}
+                      </span>
                       <span className="truncate">{item.name}</span>
                       <span className="ml-auto shrink-0 font-mono text-[9px] text-neutral-600">{item.meta}</span>
                     </button>
@@ -736,17 +762,58 @@ function TargetPicker({ rule, targets, index, onPick }) {
             ))}
             {!groups.length ? <p className="px-3 py-4 text-center text-[10px] text-neutral-600">Nothing matches.</p> : null}
           </div>
+          <div className="border-t border-white/10 p-2">
+            <button
+              className="w-full rounded-md bg-red-400 px-3 py-1.5 text-[10px] font-bold text-black hover:opacity-90"
+              onClick={() => setOpen(false)}
+              type="button"
+            >
+              Done · {rule.targets.length} selected
+            </button>
+          </div>
         </div>
       ) : null}
     </div>
   );
 }
 
+/** The chosen radios as removable chips; long lists fold behind "+N more". */
+function TargetChips({ rule, index, onToggle }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!rule.targets.length) return null;
+  const shown = expanded ? rule.targets : rule.targets.slice(0, 8);
+  return (
+    <div className="mb-2 flex flex-wrap gap-1">
+      {shown.map((target) => (
+        <span
+          className="inline-flex max-w-full items-center gap-1 rounded-full border border-white/15 bg-white/[0.06] py-0.5 pl-2 pr-1 text-[10px] font-bold text-neutral-200"
+          key={`${target.target_type}:${target.target_id}`}
+        >
+          {target.target_type === "unit" || target.target_type === "channel" ? <Users size={10} /> : <Radio size={10} />}
+          <span className="truncate">{targetLabel(index, target)}</span>
+          <button
+            aria-label={`Remove ${targetLabel(index, target)}`}
+            className="rounded-full p-0.5 text-neutral-500 hover:bg-white/10 hover:text-neutral-100"
+            onClick={() => onToggle(target.target_type, target.target_id)}
+            type="button"
+          >
+            <X size={10} />
+          </button>
+        </span>
+      ))}
+      {rule.targets.length > 8 ? (
+        <button className="px-1 text-[10px] font-bold text-neutral-500 hover:text-neutral-200" onClick={() => setExpanded((v) => !v)} type="button">
+          {expanded ? "Show less" : `+${rule.targets.length - 8} more`}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function verdictText(rule, verdict) {
-  if (!rule.target_type) return null;
-  if (!verdict) return null;
+  if (!rule.targets.length || !verdict) return null;
   const { summary, members } = verdict;
-  if (!summary.total) return { tone: "text-neutral-500", text: "Nobody in this group yet." };
+  if (!summary.total) return { tone: "text-neutral-500", text: "No radios in that group yet." };
   const okWord = rule.trigger === "exit" ? "inside" : "outside";
   const breachWord = rule.trigger === "exit" ? "outside" : "inside";
   const breached = members.filter((member) => member.state === "breach");
@@ -759,7 +826,7 @@ function verdictText(rule, verdict) {
   return { tone: breached.length ? "text-amber-300" : "text-green-300", text: parts.join(" · ") };
 }
 
-function RuleCard({ rule, targets, index, verdict, focused, onFocus, onChange, onRemove }) {
+function RuleCard({ rule, targets, index, verdict, focused, onFocus, onChange, onToggle, onRemove, removable }) {
   const [advanced, setAdvanced] = useState(false);
   const status = verdictText(rule, verdict);
   return (
@@ -768,17 +835,19 @@ function RuleCard({ rule, targets, index, verdict, focused, onFocus, onChange, o
       onFocusCapture={onFocus}
       onPointerDown={onFocus}
     >
-      <div className="flex items-center gap-1.5">
-        <TargetPicker index={index} onPick={(type, id) => onChange({ target_type: type, target_id: id })} rule={rule} targets={targets} />
-        <button
-          aria-label="Remove rule"
-          className="shrink-0 rounded p-1.5 text-neutral-600 hover:bg-red-500/10 hover:text-red-300"
-          onClick={onRemove}
-          type="button"
-        >
-          <X size={13} />
-        </button>
-      </div>
+      {removable ? (
+        <div className="-mt-1 mb-1 flex justify-end">
+          <button
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-bold text-neutral-600 hover:bg-red-500/10 hover:text-red-300"
+            onClick={onRemove}
+            type="button"
+          >
+            <Trash2 size={10} /> Remove rule
+          </button>
+        </div>
+      ) : null}
+      <TargetChips index={index} onToggle={onToggle} rule={rule} />
+      <TargetPicker onToggle={onToggle} rule={rule} targets={targets} />
 
       <div className="mt-2 grid grid-cols-2 gap-1 rounded-md bg-black/30 p-0.5">
         {["exit", "enter"].map((trigger) => (
@@ -950,19 +1019,20 @@ export function GeofencesRoute() {
     const keys = new Set();
     if (!editing) return keys;
     for (const rule of rules) {
-      if (!rule.target_type) continue;
-      for (const key of index.members.get(`${rule.target_type}:${rule.target_id}`) || []) keys.add(key);
+      for (const target of rule.targets) {
+        for (const key of index.members.get(`${target.target_type}:${target.target_id}`) || []) keys.add(key);
+      }
     }
     return keys;
   }, [editing, rules, index]);
 
   const placed = isPlaced(zone);
   const crossed = zone.shape_type === "polygon" && zone.points.length >= 4 && polygonSelfIntersects(zone.points);
-  const readyRules = rules.filter((rule) => rule.target_type);
+  const expanded = useMemo(() => rules.flatMap(expandRule), [rules]);
 
   const previewInput = useSettled(
-    editing && placed && !crossed && !drawing && readyRules.length && orgId
-      ? JSON.stringify({ organization_id: Number(orgId), ...zonePayload(zone), rules: readyRules.map(rulePayload) })
+    editing && placed && !crossed && !drawing && expanded.length && orgId
+      ? JSON.stringify({ organization_id: Number(orgId), ...zonePayload(zone), rules: expanded.map((item) => item.payload) })
       : null,
     300,
   );
@@ -973,10 +1043,39 @@ export function GeofencesRoute() {
     staleTime: 5_000,
     placeholderData: (previous) => previous,
   });
+  // The server answers per stored rule; each card shows the union of its own,
+  // one entry per radio even when a radio is picked and also in a chosen unit.
+  const previewFor = previewInput;
   const verdictByKey = useMemo(() => {
     const map = new Map();
-    if (!previewQuery.data?.rules) return map;
-    readyRules.forEach((rule, i) => map.set(rule.key, previewQuery.data.rules[i]));
+    const answers = previewQuery.data?.rules;
+    if (!answers) return map;
+    const sent = previewFor ? JSON.parse(previewFor).rules : [];
+    const cardOf = new Map(expanded.map((item) => [JSON.stringify(item.payload), item]));
+    sent.forEach((payload, i) => {
+      const item = cardOf.get(JSON.stringify(payload));
+      if (!item || !answers[i]) return;
+      const entry = map.get(item.cardKey) || { members: new Map(), freshBreach: new Set() };
+      for (const member of answers[i].members) {
+        const key = `${member.asset_type}:${member.asset_id}`;
+        entry.members.set(key, member);
+        if (item.fresh && member.state === "breach") entry.freshBreach.add(key);
+      }
+      map.set(item.cardKey, entry);
+    });
+    for (const [key, entry] of map) {
+      const members = [...entry.members.values()];
+      map.set(key, {
+        members,
+        freshBreach: entry.freshBreach.size,
+        summary: {
+          total: members.length,
+          ok: members.filter((m) => m.state === "ok").length,
+          breach: members.filter((m) => m.state === "breach").length,
+          unknown: members.filter((m) => m.state === "unknown").length,
+        },
+      });
+    }
     return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewQuery.data]);
@@ -1008,9 +1107,7 @@ export function GeofencesRoute() {
 
   // Only new or changed rules are affected by "don't alarm": the rest keep
   // their state, and anyone in breach on them has already alarmed.
-  const breachTotal = rules
-    .filter(isFreshRule)
-    .reduce((sum, rule) => sum + (verdictByKey.get(rule.key)?.summary?.breach || 0), 0);
+  const breachTotal = [...verdictByKey.values()].reduce((sum, verdict) => sum + verdict.freshBreach, 0);
 
   // First load: frame the zones and radios, so the map opens where the work is.
   useEffect(() => {
@@ -1026,8 +1123,19 @@ export function GeofencesRoute() {
 
   const fitTo = useCallback((points, pad = 0.4) => {
     if (!points.length) return;
-    setFitToken({ bounds: L.latLngBounds(points.map((p) => [p.lat, p.lon])).pad(pad), key: Date.now() });
+    const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lon]));
+    // One radio, or a tight cluster: show its neighbourhood rather than rooftops.
+    const small = bounds.getSouthWest().distanceTo(bounds.getNorthEast()) < 600;
+    setFitToken({ bounds: small ? bounds.getCenter().toBounds(1200) : bounds.pad(pad), key: Date.now() });
   }, []);
+
+  // With no zone drawn yet, the map follows whoever has been picked.
+  const highlightedKey = [...highlighted].sort().join(",");
+  useEffect(() => {
+    if (!editing || isPlaced(zone) || !highlightedKey) return;
+    fitTo(highlightedKey.split(",").map((key) => positions.get(key)).filter(Boolean));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightedKey]);
 
   function focusZone(target) {
     if (target.shape_type === "circle") {
@@ -1076,7 +1184,7 @@ export function GeofencesRoute() {
   /** From a radio on the map: a circle round it and a rule already pointing at it. */
   function startFromRadio(radio, trigger) {
     const org = String(membership?.organization_id || organizations[0]?.id || "");
-    const rule = newRule({ target_type: "radio", target_id: radio.id, trigger });
+    const rule = newRule({ targets: [{ target_type: "radio", target_id: radio.id }], trigger });
     openEditor(
       {
         ...EMPTY_ZONE,
@@ -1092,15 +1200,11 @@ export function GeofencesRoute() {
   }
 
   function onRadioAction(radio, action) {
+    // Adds the radio to the rule being worked on, or takes it out again.
     if (action === "watch") {
-      if (rules.some((rule) => rule.target_type === "radio" && rule.target_id === radio.id)) return;
-      const blank = rules.find((rule) => !rule.target_type);
-      if (blank) updateRule(blank.key, { target_type: "radio", target_id: radio.id });
-      else {
-        const rule = newRule({ target_type: "radio", target_id: radio.id });
-        setRules((current) => [...current, rule]);
-        setFocusKey(rule.key);
-      }
+      const card = focusRule || rules[0];
+      if (card) toggleTarget(card.key, "radio", radio.id);
+      else setRules([newRule({ targets: [{ target_type: "radio", target_id: radio.id }] })]);
       return;
     }
     if (canManage) startFromRadio(radio, action);
@@ -1114,13 +1218,18 @@ export function GeofencesRoute() {
   function updateRule(key, patch) {
     setError(null);
     setRules((current) => current.map((rule) => (rule.key === key ? { ...rule, ...patch } : rule)));
-    // Picking who to watch brings them into view when there is no zone yet.
-    if (patch.target_type && !placed) {
-      const points = (index.members.get(`${patch.target_type}:${patch.target_id}`) || [])
-        .map((key) => positions.get(key))
-        .filter(Boolean);
-      if (points.length) fitTo(points);
-    }
+  }
+
+  function toggleTarget(key, type, id) {
+    setError(null);
+    setRules((current) =>
+      current.map((rule) => {
+        if (rule.key !== key) return rule;
+        return hasTarget(rule, type, id)
+          ? { ...rule, targets: rule.targets.filter((t) => !(t.target_type === type && String(t.target_id) === String(id))) }
+          : { ...rule, targets: [...rule.targets, { target_type: type, target_id: String(id) }] };
+      }),
+    );
   }
 
   function changeShape(shape) {
@@ -1145,7 +1254,7 @@ export function GeofencesRoute() {
   function drawAround() {
     const points = [...highlighted].map((key) => positions.get(key)).filter(Boolean);
     if (!points.length) {
-      setError("None of the people these rules watch are reporting a position right now.");
+      setError("None of the chosen radios are reporting a position right now.");
       return;
     }
     if (zone.shape_type === "circle") updateZone(circleAroundAssets(points, AROUND_MARGIN_M));
@@ -1193,13 +1302,13 @@ export function GeofencesRoute() {
     if (!placed) return setError(zone.shape_type === "circle" ? "Draw the circle on the map." : "Finish the shape on the map: at least three corners.");
     if (drawing) return setError("Close the shape: click its first corner, or press Done.");
     if (crossed) return setError("The shape crosses over itself. Drag a corner to untangle it.");
-    if (rules.some((rule) => !rule.target_type)) return setError("Each rule needs someone to watch, or remove it.");
+    if (rules.length > 1 && rules.some((rule) => !rule.targets.length)) return setError("A rule has no radios. Choose some, or remove it.");
     if (!orgId) return setError("Choose an organization.");
     saveMutation.mutate({
       id: zone.id,
       organization_id: Number(orgId),
       ...zonePayload(zone),
-      rules: rules.map(rulePayload),
+      rules: expanded.map((item) => item.payload),
       quiet,
     });
   }
@@ -1254,7 +1363,7 @@ export function GeofencesRoute() {
                 </section>
 
                 <section>
-                  <h2 className="mb-2 text-[10px] font-bold uppercase tracking-wide text-neutral-500">Who it watches</h2>
+                  <h2 className="mb-2 text-[10px] font-bold uppercase tracking-wide text-neutral-500">Radios to watch</h2>
                   <div className="space-y-2">
                     {rules.map((rule) => (
                       <RuleCard
@@ -1264,6 +1373,8 @@ export function GeofencesRoute() {
                         onChange={(patch) => updateRule(rule.key, patch)}
                         onFocus={() => setFocusKey(rule.key)}
                         onRemove={() => setRules((current) => current.filter((item) => item.key !== rule.key))}
+                        onToggle={(type, id) => toggleTarget(rule.key, type, id)}
+                        removable={rules.length > 1}
                         rule={rule}
                         targets={targets}
                         verdict={verdictByKey.get(rule.key)}
@@ -1279,9 +1390,9 @@ export function GeofencesRoute() {
                     }}
                     type="button"
                   >
-                    <Plus size={12} /> Add another rule
+                    <Plus size={12} /> Add radios with a different alarm
                   </button>
-                  <p className="mt-1.5 text-[9px] text-neutral-600">Tip: click a radio on the map to add it.</p>
+                  <p className="mt-1.5 text-[9px] text-neutral-600">Tip: click radios on the map to add or remove them.</p>
                 </section>
 
                 <section>
@@ -1314,7 +1425,7 @@ export function GeofencesRoute() {
                       className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-md bg-white/[0.08] px-3 py-2 text-[10px] font-bold text-neutral-100 hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-40"
                       disabled={!highlighted.size}
                       onClick={drawAround}
-                      title={highlighted.size ? "" : "Choose who it watches first"}
+                      title={highlighted.size ? "" : "Choose radios first"}
                       type="button"
                     >
                       <Users size={12} /> Draw around them
@@ -1384,7 +1495,7 @@ export function GeofencesRoute() {
                     </span>
                   </label>
                 ) : null}
-                {!readyRules.length ? <p className="mb-2 text-[10px] text-neutral-500">No one is watched yet. The zone will be saved without alarms.</p> : null}
+                {!expanded.length ? <p className="mb-2 text-[10px] text-neutral-500">No one is watched yet. The zone will be saved without alarms.</p> : null}
                 <button
                   className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-red-400 px-4 py-2.5 text-xs font-bold text-black transition-opacity hover:opacity-90 active:opacity-80 disabled:opacity-40"
                   disabled={saveMutation.isPending}
@@ -1443,7 +1554,7 @@ export function GeofencesRoute() {
                     index={index}
                     key={item.id}
                     onDelete={() =>
-                      window.confirm(`Delete ${item.name}? Its ${item.rules.length} rule${item.rules.length === 1 ? "" : "s"} stop alarming.`) &&
+                      window.confirm(`Delete ${item.name}? Its alarms stop.`) &&
                       deleteMutation.mutate(item.id)
                     }
                     onEdit={() => startEdit(item)}
@@ -1520,15 +1631,19 @@ function ZoneCard({ zone, index, canManage, onFocus, onEdit, onDelete }) {
       </div>
       {zone.rules.length ? (
         <ul className="mt-2 space-y-1">
-          {zone.rules.map((rule) => (
-            <li className={`flex items-center gap-2 text-[10px] ${rule.active ? "text-neutral-400" : "text-neutral-600 line-through"}`} key={rule.id}>
-              <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: LEVEL_STYLES[rule.level]?.dot }} title={LEVEL_STYLES[rule.level]?.label} />
-              <span className="truncate">
-                <span className="font-bold text-neutral-300">{targetLabel(index, rule)}</span> {TRIGGER_LABEL[rule.trigger]}
-              </span>
-              {Number(rule.in_breach) ? <span className="ml-auto shrink-0 font-bold text-red-300">{rule.in_breach}</span> : null}
-            </li>
-          ))}
+          {groupRules(zone.rules).map((group) => {
+            const rule = group[0];
+            const inBreach = group.reduce((sum, item) => sum + (Number(item.in_breach) || 0), 0);
+            return (
+              <li className={`flex items-center gap-2 text-[10px] ${rule.active ? "text-neutral-400" : "text-neutral-600 line-through"}`} key={rule.id}>
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: LEVEL_STYLES[rule.level]?.dot }} title={LEVEL_STYLES[rule.level]?.label} />
+                <span className="truncate">
+                  <span className="font-bold text-neutral-300">{targetsSummary(index, group, 3)}</span> {TRIGGER_LABEL[rule.trigger]}
+                </span>
+                {inBreach ? <span className="ml-auto shrink-0 font-bold text-red-300">{inBreach}</span> : null}
+              </li>
+            );
+          })}
         </ul>
       ) : (
         <p className="mt-2 text-[10px] text-neutral-600">No rules: watches nobody.</p>

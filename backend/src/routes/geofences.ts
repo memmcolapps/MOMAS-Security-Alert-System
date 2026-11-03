@@ -97,46 +97,49 @@ function validateZone(body: any) {
   };
 }
 
-/** Checks each rule's target belongs to the organization (and the caller's units). */
+async function loadTarget(targetType: string, targetId: string, organizationId: number) {
+  if (targetType === "radio") return db.getDevice(targetId);
+  if (targetType === "drone") return db.getDrone(Number(targetId));
+  if (targetType === "channel") return db.getChannel(Number(targetId));
+  const unit = await db.getOrganizationUnit(organizationId, Number(targetId));
+  return unit ? { ...unit, unit_id: unit.id } : null;
+}
+
+/**
+ * Checks each rule's target belongs to the organization (and the caller's
+ * units). A zone may watch dozens of radios, so the lookups run together.
+ */
 async function validateRules(rules: any[], organizationId: number, units: number[] | null) {
-  const clean: any[] = [];
+  const list = Array.isArray(rules) ? rules : [];
   const seen = new Set<string>();
-  const inScope = (unitId: any) => !units || units.includes(Number(unitId));
-  for (const raw of Array.isArray(rules) ? rules : []) {
-    const targetType = raw?.target_type;
+  for (const raw of list) {
     const targetId = String(raw?.target_id ?? "").trim();
-    if (!TARGET_TYPES.includes(targetType) || !targetId) throw new Error("Each rule needs someone to watch.");
+    if (!TARGET_TYPES.includes(raw?.target_type) || !targetId) throw new Error("Each rule needs a radio to watch.");
     if (!TRIGGERS.includes(raw.trigger)) throw new Error("Each rule must say leave or enter.");
     if (!LEVELS.includes(raw.level)) throw new Error("Each rule needs an alarm level.");
-
-    let target: any = null;
-    if (targetType === "radio") target = await db.getDevice(targetId);
-    if (targetType === "drone") target = await db.getDrone(Number(targetId));
-    if (targetType === "unit") {
-      target = await db.getOrganizationUnit(organizationId, Number(targetId));
-      if (target) target = { ...target, unit_id: target.id };
-    }
-    if (targetType === "channel") target = await db.getChannel(Number(targetId));
-    if (!target || Number(target.organization_id) !== Number(organizationId)) {
-      throw new Error(`That ${targetType} is not part of this organization.`);
-    }
-    if (!inScope(target.unit_id)) throw new Error(`That ${targetType} is outside your unit.`);
-
-    const key = `${targetType}:${targetId}:${raw.trigger}`;
-    if (seen.has(key)) throw new Error("The same rule is listed twice.");
+    const key = `${raw.target_type}:${targetId}:${raw.trigger}`;
+    if (seen.has(key)) throw new Error("The same radio is listed twice for the same direction.");
     seen.add(key);
-    clean.push({
+  }
+
+  const found = await Promise.all(list.map((raw) => loadTarget(raw.target_type, String(raw.target_id).trim(), organizationId)));
+  return list.map((raw, i) => {
+    const target: any = found[i];
+    if (!target || Number(target.organization_id) !== Number(organizationId)) {
+      throw new Error(`That ${raw.target_type} is not part of this organization.`);
+    }
+    if (units && !units.includes(Number(target.unit_id))) throw new Error(`That ${raw.target_type} is outside your unit.`);
+    return {
       id: raw.id ? Number(raw.id) : null,
-      target_type: targetType,
-      target_id: targetId,
+      target_type: raw.target_type,
+      target_id: String(raw.target_id).trim(),
       trigger: raw.trigger,
       level: raw.level,
       buffer_m: Math.min(1000, Math.max(0, Number(raw.buffer_m ?? env.GEOFENCE_DEFAULT_BUFFER_M) || 0)),
       confirmations_required: Math.min(10, Math.max(1, Number(raw.confirmations_required) || env.GEOFENCE_CONFIRMATIONS)),
       active: raw.active !== false,
-    });
-  }
-  return clean;
+    };
+  });
 }
 
 /**
