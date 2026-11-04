@@ -151,6 +151,7 @@ const READ_ONLY_PROVISION_COMMANDS = new Set([
   "provision.inventory",
   "provision.companies",
   "provision.company.forGroup",
+  "provision.licences",
 ]);
 
 export function isReadOnlyProvisionCommand(command: string) {

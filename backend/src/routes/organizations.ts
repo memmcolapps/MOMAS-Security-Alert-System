@@ -233,6 +233,102 @@ router.put("/:id/radio/presence-watcher", requireOps, async (c) => {
   return c.json({ organization: await db.getOrganization(id), channelsChanged: membership?.channelsChanged ?? 0 });
 });
 
+// ── Annual cards ─────────────────────────────────────────────────────────────
+// Licence time on the radio network. One card is one year on one radio or
+// dispatcher, paid from the organization's own card balance. A platform owner
+// can also set any date with no card, which is the discretion the vendor's
+// reseller tier had.
+
+async function licenceCompany(c: any) {
+  const id = Number(c.req.param("id"));
+  const organization = await db.getOrganization(id);
+  if (!organization) return { error: c.json({ error: "That organization could not be found." }, 404) };
+  const companyId = Number(organization.pocstars_company_id);
+  if (!Number.isSafeInteger(companyId) || companyId <= 0) {
+    return { error: c.json({ error: "This organization is not on the radio network yet." }, 409) };
+  }
+  return { id, organization, companyId };
+}
+
+function networkError(c: any, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return c.json({ error: message }, 502);
+}
+
+router.get("/:id/licences", async (c) => {
+  const found = await licenceCompany(c);
+  if (found.error) return found.error;
+  try {
+    return c.json(await provisionOnNetwork("provision.licences", { companyId: found.companyId }));
+  } catch (error) {
+    return networkError(c, error);
+  }
+});
+
+router.post("/:id/licences/recharge", requireOps, async (c) => {
+  const user = currentUser(c);
+  const body = await c.req.json().catch(() => ({}));
+  const uids = Array.isArray(body.uids) ? body.uids.map(Number) : [];
+  const manual = body.until !== undefined && body.until !== null && body.until !== "";
+  if (manual && !isPlatformOwner(user)) {
+    return c.json({ error: "Only a platform owner can set a date without using cards." }, 403);
+  }
+  const found = await licenceCompany(c);
+  if (found.error) return found.error;
+  let result: any;
+  try {
+    result = await provisionOnNetwork("provision.licences.recharge", {
+      companyId: found.companyId,
+      uids,
+      ...(manual ? { until: String(body.until), reason: body.reason || undefined } : { years: Number(body.years) || 1 }),
+      actor: user?.email || user?.name || "MOMAS",
+    });
+  } catch (error) {
+    return networkError(c, error);
+  }
+  await db.createAuditLog({
+    organization_id: found.id,
+    actor_user_id: user?.id,
+    action: manual ? "organization.licences.set_date" : "organization.licences.recharge",
+    target_type: "organization",
+    target_id: found.id,
+    metadata: {
+      pocstars_company_id: found.companyId,
+      uids: result?.accounts?.map((account: any) => account.uid) ?? uids,
+      years: manual ? null : Number(body.years) || 1,
+      until: manual ? String(body.until) : null,
+      reason: manual ? body.reason || null : null,
+      cards_spent: result?.cardsSpent ?? 0,
+    },
+  });
+  return c.json(result);
+});
+
+router.put("/:id/licences/cards", requireOwner, async (c) => {
+  const user = currentUser(c);
+  const body = await c.req.json().catch(() => ({}));
+  const found = await licenceCompany(c);
+  if (found.error) return found.error;
+  let result: any;
+  try {
+    result = await provisionOnNetwork("provision.licences.cards", {
+      companyId: found.companyId,
+      yearCards: Number(body.year_cards),
+    });
+  } catch (error) {
+    return networkError(c, error);
+  }
+  await db.createAuditLog({
+    organization_id: found.id,
+    actor_user_id: user?.id,
+    action: "organization.licences.cards",
+    target_type: "organization",
+    target_id: found.id,
+    metadata: { pocstars_company_id: found.companyId, previous: result?.previous, year_cards: result?.yearCards },
+  });
+  return c.json(result);
+});
+
 // Retry for a company whose radio provisioning failed at creation. Without this
 // the only record of the failure was a warning line that disappeared on the
 // next create, and the company was stuck with no radio forever.

@@ -148,6 +148,28 @@ export function topUpOrganizationSeats(id) {
   return request(`/api/organizations/${id}/radio/seats`, { method: "POST" });
 }
 
+// Annual cards: the organization's card balance and every radio's and
+// dispatcher's licence window, read live from the radio network.
+export function getOrganizationLicences(id) {
+  return request(`/api/organizations/${id}/licences`);
+}
+
+// { uids, years } spends cards; { uids, until, reason } sets the date with no
+// card and is a platform owner's call.
+export function rechargeOrganizationLicences(id, payload) {
+  return request(`/api/organizations/${id}/licences/recharge`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function setOrganizationYearCards(id, yearCards) {
+  return request(`/api/organizations/${id}/licences/cards`, {
+    method: "PUT",
+    body: JSON.stringify({ year_cards: yearCards }),
+  });
+}
+
 export function getOrganizationDeletionImpact(id) {
   return request(`/api/organizations/${id}/deletion-impact`);
 }

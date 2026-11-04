@@ -136,6 +136,8 @@ describe("keeping MOMAS out of a company it has not taken on", () => {
       "provision.radio.retire",
       "provision.seat.renew",
       "provision.seats.add",
+      "provision.licences.recharge",
+      "provision.licences.cards",
       "provision.something.invented.tomorrow",
     ]) {
       expect(refuseDiscoveredWrite(command, discovered)).toMatch(/NISO.*not operated by MOMAS yet/s);
@@ -150,6 +152,7 @@ describe("keeping MOMAS out of a company it has not taken on", () => {
       "provision.seats",
       "provision.companies",
       "provision.company.forGroup",
+      "provision.licences",
     ]) {
       expect(isReadOnlyProvisionCommand(command)).toBe(true);
       expect(refuseDiscoveredWrite(command, discovered)).toBeNull();

@@ -1,4 +1,5 @@
 import mysql from "mysql2/promise";
+import { MAX_CARD_YEARS, cardServiceWindow, day, manualServiceWindow } from "./licences";
 
 // Provisioning writes against the POCSTARS vendor database. This runs only on
 // the POCSTARS host (inside the bridge), so the credentials never leave that
@@ -1352,6 +1353,214 @@ export class PocstarsProvisioning {
     if (!result.affectedRows)
       throw new Error("That dispatcher seat could not be found.");
     return { uid, until };
+  }
+
+  // ── Annual cards ──────────────────────────────────────────────────────────
+  // The vendor sells licence time as cards: one card is one year on one radio
+  // or dispatcher. A company holds its own balance in Corg_YearCard; resellers
+  // hold theirs in tb_AgentOrg and the vendor console still recharges from
+  // those. MOMAS only ever spends the company's own cards.
+
+  // A company's balance, every account's licence window, and recent
+  // recharges, in one round trip's worth of queries.
+  async getLicences(companyId: number) {
+    const [[companies], [accounts], [history]]: any = await Promise.all([
+      this.pool.query(
+        `SELECT Corg_ID AS companyId, Corg_Name AS name,
+                COALESCE(Corg_YearCard, 0) AS yearCards
+           FROM tb_ComOrg WHERE Corg_ID = ? AND IsActive = 1`,
+        [companyId],
+      ),
+      this.pool.query(
+        `SELECT User_ID AS uid, User_Account AS account, User_Name AS name,
+                User_Type AS type, User_Enable AS enabled, User_Banned AS banned,
+                User_ServiceBeginTime AS serviceBeginsAt,
+                User_ServiceEndTime AS serviceEndsAt, YearCardType AS cardState
+           FROM tb_User
+          WHERE User_CompanyID = ? AND IsActive = 1 AND User_Type IN (0, 3)
+            AND User_Account NOT LIKE CONCAT(?, '%')
+          ORDER BY User_Type DESC, User_ServiceEndTime, User_ID`,
+        [companyId, PocstarsProvisioning.RESERVED_ACCOUNT_PREFIX],
+      ),
+      this.pool.query(
+        `SELECT l.ID AS id, l.User_ID AS uid, u.User_Name AS name, u.User_Account AS account,
+                l.CartType AS paidBy, l.CardNum AS cards, l.serviceTime AS serviceWindow,
+                l.Content AS note, l.CreateTime AS createdAt
+           FROM tb_UserLogDeposit l
+           JOIN tb_User u ON u.User_ID = l.User_ID
+          WHERE u.User_CompanyID = ?
+          ORDER BY l.ID DESC
+          LIMIT 50`,
+        [companyId],
+      ),
+    ]);
+    if (!companies.length) throw new Error("That company is not on the radio network.");
+    return {
+      companyId,
+      name: companies[0].name,
+      yearCards: Number(companies[0].yearCards),
+      accounts: accounts.map((row: any) => ({
+        uid: Number(row.uid),
+        account: row.account,
+        name: row.name || row.account,
+        kind: Number(row.type) === 3 ? "dispatcher" : "radio",
+        enabled: Number(row.enabled) === 1 && Number(row.banned || 0) === 0,
+        serviceBeginsAt: row.serviceBeginsAt,
+        serviceEndsAt: row.serviceEndsAt,
+        // -1 never activated, 2 not yet in effect: the vendor treats both as
+        // switched off whatever the expiry date says.
+        activated: ![-1, 2].includes(Number(row.cardState)),
+      })),
+      history: history.map((row: any) => ({
+        id: Number(row.id),
+        uid: Number(row.uid),
+        name: row.name || row.account,
+        // CartType 1 is a reseller's card, 3 the company's own.
+        paidBy: Number(row.paidBy) === 3 ? "company" : "reseller",
+        cards: Number(row.cards || 0),
+        serviceWindow: row.serviceWindow,
+        note: row.note,
+        createdAt: row.createdAt,
+      })),
+    };
+  }
+
+  // Add licence time to accounts of one company. With `years`, it costs one of
+  // the company's cards per account per year and refuses when the balance is
+  // short. With `until`, a platform owner sets the date directly and no card is
+  // spent. Either way each account gets a row in the vendor's own recharge log,
+  // so its console shows the same history.
+  async rechargeLicences({
+    companyId,
+    uids,
+    years,
+    until,
+    actor,
+    reason,
+  }: {
+    companyId: number;
+    uids: number[];
+    years?: number;
+    until?: Date;
+    actor: string;
+    reason?: string;
+  }) {
+    const ids = [...new Set(uids.map(Number))].filter((id) => Number.isSafeInteger(id) && id > 0);
+    if (!ids.length || ids.length > 500) throw new Error("Pick between 1 and 500 accounts.");
+    const byCard = until === undefined;
+    if (byCard && !(Number.isSafeInteger(years) && years! >= 1 && years! <= MAX_CARD_YEARS)) {
+      throw new Error(`Years must be a whole number from 1 to ${MAX_CARD_YEARS}.`);
+    }
+
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      // The vendor console spends the same balance; the row lock keeps the two
+      // from both spending the last card.
+      const [companies]: any = await connection.query(
+        `SELECT Corg_Name AS name, COALESCE(Corg_YearCard, 0) AS yearCards
+           FROM tb_ComOrg WHERE Corg_ID = ? AND IsActive = 1 FOR UPDATE`,
+        [companyId],
+      );
+      if (!companies.length) throw new Error("That company is not on the radio network.");
+      const company = companies[0];
+
+      const [rows]: any = await connection.query(
+        `SELECT User_ID AS uid, User_ServiceBeginTime AS begin, User_ServiceEndTime AS end
+           FROM tb_User
+          WHERE User_ID IN (?) AND User_CompanyID = ? AND IsActive = 1 AND User_Type IN (0, 3)
+            AND User_Account NOT LIKE CONCAT(?, '%')
+          FOR UPDATE`,
+        [ids, companyId, PocstarsProvisioning.RESERVED_ACCOUNT_PREFIX],
+      );
+      if (rows.length !== ids.length) {
+        throw new Error("Some of those accounts are not in this company any more. Reload and try again.");
+      }
+
+      const cost = byCard ? ids.length * years! : 0;
+      if (cost > Number(company.yearCards)) {
+        throw new Error(
+          `This needs ${cost} card${cost === 1 ? "" : "s"} and the company has ${company.yearCards}.`,
+        );
+      }
+
+      const now = new Date();
+      const note = byCard
+        ? `MOMAS: ${years} card${years === 1 ? "" : "s"} each, by ${actor}`
+        : `MOMAS: date set by ${actor}${reason ? ` - ${reason}` : ""}`;
+      const results = [];
+      for (const row of rows) {
+        const current = {
+          begin: row.begin ? new Date(row.begin) : null,
+          end: row.end ? new Date(row.end) : null,
+        };
+        const next = byCard
+          ? cardServiceWindow({ ...current, years: years!, now })
+          : manualServiceWindow({ ...current, until: until!, now });
+        const live = next.end.getTime() > now.getTime();
+        // YearCardType 0 is what the vendor's own renew writes. It is the flag
+        // that turns a "not yet in effect" account on, so only set it when the
+        // account should be working.
+        await connection.query(
+          `UPDATE tb_User
+              SET User_ServiceBeginTime = ?, User_ServiceEndTime = ?,
+                  ${live ? "YearCardType = 0," : ""}
+                  User_ServiceUpDateTime = NOW(), User_UpdateTime = NOW(), Last_Update_Time = NOW()
+            WHERE User_ID = ?`,
+          [next.begin, next.end, row.uid],
+        );
+        await connection.query(
+          `INSERT INTO tb_UserLogDeposit
+             (Aorg_ID, Aorg_Name, UserIP, User_ID, CartType, CardNum, CreateTime, Content, serviceTime, payType)
+           VALUES (?, ?, 'momas', ?, 3, ?, NOW(), ?, ?, 12)`,
+          [companyId, company.name, row.uid, byCard ? years : 0, note.slice(0, 500), `${day(next.begin)}~${day(next.end)}`],
+        );
+        results.push({ uid: Number(row.uid), serviceEndsAt: next.end });
+      }
+
+      if (cost) {
+        await connection.query(
+          "UPDATE tb_ComOrg SET Corg_YearCard = Corg_YearCard - ?, Last_Update_Time = NOW() WHERE Corg_ID = ?",
+          [cost, companyId],
+        );
+      }
+      await connection.commit();
+      return { companyId, cardsSpent: cost, yearCards: Number(company.yearCards) - cost, accounts: results };
+    } catch (error) {
+      await connection.rollback().catch(() => {});
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  // Set a company's card balance outright. The vendor gets cards to a company
+  // through its reseller tier; this is the platform owner doing the same by
+  // hand, so it is a plain set rather than a transfer.
+  async setYearCards({ companyId, yearCards }: { companyId: number; yearCards: number }) {
+    if (!Number.isSafeInteger(yearCards) || yearCards < 0 || yearCards > 100_000) {
+      throw new Error("Enter a card balance from 0 to 100000.");
+    }
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [rows]: any = await connection.query(
+        "SELECT COALESCE(Corg_YearCard, 0) AS yearCards FROM tb_ComOrg WHERE Corg_ID = ? AND IsActive = 1 FOR UPDATE",
+        [companyId],
+      );
+      if (!rows.length) throw new Error("That company is not on the radio network.");
+      await connection.query(
+        "UPDATE tb_ComOrg SET Corg_YearCard = ?, Last_Update_Time = NOW() WHERE Corg_ID = ?",
+        [yearCards, companyId],
+      );
+      await connection.commit();
+      return { companyId, previous: Number(rows[0].yearCards), yearCards };
+    } catch (error) {
+      await connection.rollback().catch(() => {});
+      throw error;
+    } finally {
+      connection.release();
+    }
   }
 
   private async seatIdsForCompany(

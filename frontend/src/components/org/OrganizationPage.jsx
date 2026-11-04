@@ -1,10 +1,11 @@
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { Building2, ChevronRight, ClipboardList, Radio, RadioTower, Shield, UsersRound, Workflow } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Building2, ChevronRight, ClipboardList, CreditCard, Radio, RadioTower, Shield, UsersRound, Workflow } from "lucide-react";
 import { useMemo } from "react";
-import { getMe, getOrgAdmin, listOrgChannels } from "../../lib/api";
+import { getMe, getOrgAdmin, getOrganizationLicences, listOrgChannels } from "../../lib/api";
 import { isPlatformOperator, isPlatformStaff } from "../../lib/platform-roles";
 import { ChannelsTab } from "./ChannelsTab";
+import { LicencesTab } from "./LicencesTab";
 import { ActivityTab, PeopleTab, UnitsTab } from "./OrgSections";
 import { PlatformTab } from "./PlatformTab";
 import { RadiosTab } from "./RadiosTab";
@@ -17,6 +18,7 @@ const MANAGER_ROLES = ["org_owner", "org_admin", "admin"];
 // a Platform tab for the things only the platform decides.
 export function OrganizationPage({ orgId = null, tab = "radios", basePath }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
   const user = meQuery.data?.user;
   const platform = isPlatformStaff(user);
@@ -57,7 +59,10 @@ export function OrganizationPage({ orgId = null, tab = "radios", basePath }) {
     { id: "units", label: "Units", icon: Workflow, count: units.length },
     { id: "people", label: "People", icon: UsersRound, count: users.length },
     { id: "activity", label: "Activity", icon: ClipboardList },
-    ...(platform && orgId ? [{ id: "platform", label: "Platform", icon: Shield }] : []),
+    ...(platform && orgId ? [
+      { id: "licences", label: "Licences", icon: CreditCard },
+      { id: "platform", label: "Platform", icon: Shield },
+    ] : []),
   ];
   const current = tabs.some((entry) => entry.id === tab) ? tab : "radios";
   const loading = orgQuery.isLoading || meQuery.isLoading;
@@ -111,6 +116,13 @@ export function OrganizationPage({ orgId = null, tab = "radios", basePath }) {
               key={entry.id}
               type="button"
               onClick={() => selectTab(entry.id)}
+              // Licences are read live from the radio network, which takes a
+              // moment over the site link; start it on hover.
+              onMouseEnter={entry.id === "licences" ? () => queryClient.prefetchQuery({
+                queryKey: ["org-licences", orgId],
+                queryFn: () => getOrganizationLicences(orgId),
+                staleTime: 30_000,
+              }) : undefined}
               className={`-mb-px inline-flex items-center gap-2 border-b-2 px-3 py-2 text-xs font-bold transition ${
                 active ? "border-ops-red text-neutral-100" : "border-transparent text-neutral-500 hover:text-neutral-200"
               }`}
@@ -129,6 +141,7 @@ export function OrganizationPage({ orgId = null, tab = "radios", basePath }) {
       {current === "units" ? <UnitsTab ctx={ctx} units={units} loading={loading} /> : null}
       {current === "people" ? <PeopleTab ctx={ctx} users={users} units={units} loading={loading} /> : null}
       {current === "activity" ? <ActivityTab audit={audit} loading={loading} /> : null}
+      {current === "licences" ? <LicencesTab orgId={orgId} /> : null}
       {current === "platform" ? <PlatformTab orgId={orgId} devices={devices} /> : null}
     </Shell>
   );

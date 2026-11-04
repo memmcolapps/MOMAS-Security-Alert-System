@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { PocstarsLiveClient } from "../src/pocstars/live-client";
+import { parseDay } from "./licences";
 import { PocstarsProvisioning } from "./provisioning";
 import { SosWatch } from "./sos-watch";
 import { readFileSync } from "node:fs";
@@ -575,6 +576,44 @@ async function handleProvisioning(
           result: await provisioning.renewSeat({
             uid: Number(message.uid),
             until: String(message.until),
+          }),
+        });
+      }
+      case "provision.licences": {
+        return send(ws, {
+          type: "provision.result",
+          requestId,
+          ok: true,
+          result: await provisioning.getLicences(companyId),
+        });
+      }
+      case "provision.licences.recharge": {
+        // `until` means no card is spent; the MOMAS backend only sends it for a
+        // platform owner.
+        const until = message.until === undefined ? undefined : parseDay(message.until);
+        if (until === null) return fail("Pick a valid date.");
+        return send(ws, {
+          type: "provision.result",
+          requestId,
+          ok: true,
+          result: await provisioning.rechargeLicences({
+            companyId,
+            uids: Array.isArray(message.uids) ? message.uids.map(Number) : [],
+            years: until ? undefined : Number(message.years),
+            until,
+            actor: String(message.actor || "MOMAS").slice(0, 120),
+            reason: message.reason ? String(message.reason).slice(0, 200) : undefined,
+          }),
+        });
+      }
+      case "provision.licences.cards": {
+        return send(ws, {
+          type: "provision.result",
+          requestId,
+          ok: true,
+          result: await provisioning.setYearCards({
+            companyId,
+            yearCards: Number(message.yearCards),
           }),
         });
       }
