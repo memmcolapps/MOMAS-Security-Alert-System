@@ -214,7 +214,7 @@ export function DronesRoute() {
   }
 
   return (
-    <main className="device-page bg-ops-bg px-6 pb-8 pt-20 text-neutral-200">
+    <main className="device-page bg-ops-bg px-6 pb-8 pt-[calc(var(--ops-chrome)+2rem)] text-neutral-200">
       <header className="mb-7 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="flex items-center gap-2 text-xl font-bold text-sky-400">

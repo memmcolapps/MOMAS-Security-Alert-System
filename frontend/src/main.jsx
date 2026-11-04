@@ -51,8 +51,8 @@ function RootLayout() {
   const showHeader = !["/login", "/change-password"].includes(router.location.pathname);
   const chromeRef = useRef(null);
 
-  // The app chrome is two stacked fixed bars, and the radio bar's height
-  // changes with its contents and wraps on narrow screens. Anything that has to
+  // The app chrome is the header plus a radio strip that only shows while the
+  // radio is live, and wraps on narrow screens. Anything that has to
   // sit below the chrome - every overlay on the operations map - needs its real
   // height, not a guess. Publishing it as a variable is what stops those
   // overlays sliding underneath it.

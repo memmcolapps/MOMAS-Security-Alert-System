@@ -1,20 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { Headphones, Mic, Phone, Search, Square, UsersRound, Volume2, X, Zap } from "lucide-react";
+import { Check, ChevronDown, Headphones, Mic, Phone, Search, Square, UsersRound, Volume2, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { alertsEventsUrl, getRadioChannels, listDevices } from "../lib/api";
 import { useLiveRadioSession } from "../lib/live-radio-session";
 
-// Persistent radio channel bar under the app header. Pick a channel to listen
-// to from any page and hold to talk on it; start a quick group call; see who is
-// speaking and cut in on them. When an SOS lands in another channel it offers a
-// one-click switch (never automatic).
-export function LiveRadioBar() {
-  const radio = useLiveRadioSession();
-  const [selectedId, setSelectedId] = useState("");
-  const [sosPrompt, setSosPrompt] = useState(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const sosTimerRef = useRef(null);
-
+function useRadioChannels() {
   const channelsQuery = useQuery({
     queryKey: ["radio-channels"],
     queryFn: getRadioChannels,
@@ -26,6 +16,129 @@ export function LiveRadioBar() {
     [channels],
   );
   const channelLabel = (unit) => (showOrgNames ? `${unit.organization_name} · ${unit.name}` : unit.name);
+  return { channels, channelLabel, isLoading: channelsQuery.isLoading };
+}
+
+// Header button that opens the channel list and the group call picker. It
+// takes no room of its own; the strip below the header only shows once
+// something is live.
+export function ListenControl() {
+  const radio = useLiveRadioSession();
+  const { channels, channelLabel, isLoading } = useRadioChannels();
+  const [view, setView] = useState(null);
+  const rootRef = useRef(null);
+
+  useEffect(() => {
+    if (!view) return undefined;
+    const onKey = (event) => {
+      if (event.key === "Escape") setView(null);
+    };
+    const onClick = (event) => {
+      if (!rootRef.current?.contains(event.target)) setView(null);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onClick);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onClick);
+    };
+  }, [view]);
+
+  if (isLoading || !channels.length) return null;
+
+  const listening = radio.mode === "monitor";
+  const inCall = radio.mode === "private";
+  const connecting = radio.callState === "connecting";
+  const locked = connecting || inCall;
+
+  const pick = (unit) => {
+    setView(null);
+    radio.listenToChannel(unit);
+  };
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        onClick={() => setView((current) => (current ? null : "channels"))}
+        aria-expanded={Boolean(view)}
+        className={`inline-flex items-center gap-1.5 rounded border px-2.5 py-1 text-[11px] font-bold transition ${
+          listening || inCall
+            ? "border-ops-green/40 bg-ops-green/10 text-ops-green hover:bg-ops-green/15"
+            : "border-white/10 bg-white/[0.03] text-neutral-300 hover:bg-white/[0.07]"
+        }`}
+      >
+        <Headphones size={13} />
+        <span className="max-w-[140px] truncate">
+          {inCall ? "In call" : listening && radio.channel ? radio.channel.name : "Listen"}
+        </span>
+        <ChevronDown size={12} className="text-neutral-500" />
+      </button>
+
+      {view === "channels" ? (
+        <div className="absolute right-0 top-full mt-2 w-64 overflow-hidden rounded-lg border border-white/10 bg-black/95 shadow-2xl backdrop-blur">
+          <p className="px-3 pb-1 pt-2 text-[9px] font-bold uppercase tracking-wide text-neutral-600">Channels</p>
+          <div className="max-h-72 overflow-y-auto pb-1">
+            {channels.map((unit) => {
+              const current = listening && radio.channel?.id === unit.id;
+              return (
+                <button
+                  key={unit.id}
+                  disabled={locked}
+                  onClick={() => (current ? radio.stopListening() : pick(unit))}
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] disabled:cursor-not-allowed disabled:opacity-40 ${
+                    current ? "bg-ops-green/10 text-ops-green" : "text-neutral-200 hover:bg-white/[0.06]"
+                  }`}
+                >
+                  <span className="min-w-0 flex-1 truncate">{channelLabel(unit)}</span>
+                  {unit.online_count ? (
+                    <span className="shrink-0 text-[10px] text-neutral-500">{unit.online_count} online</span>
+                  ) : null}
+                  {current ? <Check size={12} className="shrink-0" /> : null}
+                </button>
+              );
+            })}
+          </div>
+          <div className="border-t border-white/10 p-1">
+            {listening ? (
+              <button
+                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-[11px] text-red-300 hover:bg-red-500/10"
+                onClick={() => { setView(null); radio.stopListening(); }}
+              >
+                <Square size={11} /> Stop listening
+              </button>
+            ) : null}
+            <button
+              disabled={locked}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-[11px] text-neutral-300 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={() => setView("group")}
+            >
+              <UsersRound size={12} /> Group call…
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {view === "group" ? (
+        <GroupCallPicker
+          onClose={() => setView(null)}
+          onCall={(devices) => {
+            setView(null);
+            radio.callGroup(devices);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+// Strip under the app header while the radio is live: hold to talk, who is
+// speaking, cut in, end. Hidden when idle. When an SOS lands in another channel
+// it appears to offer a one-click switch (never automatic).
+export function LiveRadioBar() {
+  const radio = useLiveRadioSession();
+  const { channels } = useRadioChannels();
+  const [sosPrompt, setSosPrompt] = useState(null);
+  const sosTimerRef = useRef(null);
 
   const channelsRef = useRef(channels);
   channelsRef.current = channels;
@@ -58,73 +171,34 @@ export function LiveRadioBar() {
     };
   }, [hasChannels]);
 
-  if (!channelsQuery.isLoading && !channels.length) return null;
-
   const listening = radio.mode === "monitor";
   const inCall = radio.mode === "private";
   const connecting = radio.callState === "connecting";
   const reconnecting = radio.callState === "reconnecting";
-  const currentValue = listening && radio.channel ? String(radio.channel.id) : selectedId;
   const connected = radio.callState === "connected";
   const canTalk = connected && (listening || inCall) && !radio.micBlocked;
   const talking = radio.pttState === "granted";
   // Someone else holds the channel. Cutting in is the dispatcher's priority.
   const otherTalking = Boolean(radio.speaker) && !talking;
 
-  const pickChannel = (value) => {
-    setSelectedId(value);
-    const unit = channels.find((item) => String(item.id) === value);
-    if (unit) radio.listenToChannel(unit);
-  };
+  if (!listening && !inCall && !connecting && !radio.error && !sosPrompt) return null;
 
   const switchToSos = () => {
     if (!sosPrompt) return;
-    setSelectedId(String(sosPrompt.channel.id));
     radio.listenToChannel(sosPrompt.channel);
     setSosPrompt(null);
   };
 
   return (
-    <div className="relative border-b border-white/10 bg-black/60 backdrop-blur">
+    <div className="border-b border-white/10 bg-black/60 backdrop-blur">
       <div className="flex h-8 items-center gap-3 px-4 text-[11px]">
-        <span className="flex items-center gap-1.5 font-bold uppercase tracking-wide text-neutral-500">
-          <Headphones size={12} className={listening ? "text-ops-green" : ""} /> Channel
-        </span>
-        <select
-          className="h-6 max-w-56 rounded border border-white/10 bg-black/40 px-1.5 text-[11px] text-neutral-200 focus:outline-none"
-          value={currentValue}
-          disabled={connecting || inCall}
-          onChange={(event) => pickChannel(event.target.value)}
-        >
-          <option value="">{inCall ? (radio.callDevice?.group ? "In a group call" : "In a private call") : "Not listening"}</option>
-          {channels.map((unit) => (
-            <option key={unit.id} value={unit.id}>
-              {channelLabel(unit)}{unit.online_count ? ` (${unit.online_count} online)` : ""}
-            </option>
-          ))}
-        </select>
+        {connecting ? <span className="text-neutral-500">Connecting…</span> : null}
 
         {listening ? (
-          <button
-            className="inline-flex items-center gap-1 rounded border border-red-500/25 px-2 py-0.5 text-red-300 hover:bg-red-500/10"
-            onClick={() => { setSelectedId(""); radio.stopListening(); }}
-          >
-            <Square size={10} /> Stop
-          </button>
+          <span className="flex items-center gap-1.5 font-bold text-neutral-300">
+            <Headphones size={12} className="text-ops-green" /> {radio.channel?.name}
+          </span>
         ) : null}
-
-        {!inCall && !connecting ? (
-          <button
-            className="inline-flex items-center gap-1 rounded border border-white/10 px-2 py-0.5 text-neutral-300 hover:border-ops-green/50 hover:text-ops-green"
-            data-group-call-toggle
-            onClick={() => setPickerOpen((open) => !open)}
-            aria-expanded={pickerOpen}
-          >
-            <UsersRound size={11} /> Group call
-          </button>
-        ) : null}
-
-        {connecting ? <span className="text-neutral-500">Connecting…</span> : null}
 
         {canTalk ? (
           <HoldButton
@@ -177,7 +251,7 @@ export function LiveRadioBar() {
             <Volume2 size={12} className="animate-pulse" /> {radio.speaker.name || `Radio ${radio.speaker.uid}`} speaking
           </span>
         ) : listening ? (
-          <span className="text-neutral-600">Listening to {radio.channel?.name} — channel quiet</span>
+          <span className="text-neutral-600">Channel quiet</span>
         ) : null}
 
         {radio.error && radio.busyBy ? (
@@ -186,6 +260,15 @@ export function LiveRadioBar() {
           </span>
         ) : radio.error ? (
           <span className="truncate text-red-300/90">{radio.error}</span>
+        ) : null}
+
+        {listening ? (
+          <button
+            className="inline-flex items-center gap-1 rounded border border-red-500/25 px-2 py-0.5 text-red-300 hover:bg-red-500/10"
+            onClick={radio.stopListening}
+          >
+            <Square size={10} /> Stop
+          </button>
         ) : null}
 
         {sosPrompt ? (
@@ -200,15 +283,6 @@ export function LiveRadioBar() {
           </span>
         ) : null}
       </div>
-      {pickerOpen && !inCall ? (
-        <GroupCallPicker
-          onClose={() => setPickerOpen(false)}
-          onCall={(devices) => {
-            setPickerOpen(false);
-            radio.callGroup(devices);
-          }}
-        />
-      ) : null}
     </div>
   );
 }
@@ -244,29 +318,12 @@ function HoldButton({ onStart, onStop, className, title, children }) {
 // Pick online radios and call them all at once. The radio network builds a
 // temporary group for the call and drops it when the call ends. Radios from
 // different organizations never share a call, the same rule as channels.
+// Escape and outside clicks are handled by ListenControl, which owns it.
 function GroupCallPicker({ onClose, onCall }) {
   const [search, setSearch] = useState("");
   const [picked, setPicked] = useState(() => new Map());
-  const panelRef = useRef(null);
   const devicesQuery = useQuery({ queryKey: ["devices"], queryFn: listDevices, staleTime: 30_000 });
 
-  useEffect(() => {
-    const onKey = (event) => {
-      if (event.key === "Escape") onClose();
-    };
-    const onClick = (event) => {
-      // The bar's own toggle closes it on click; closing here too would
-      // reopen it straight away.
-      if (event.target.closest?.("[data-group-call-toggle]")) return;
-      if (!panelRef.current?.contains(event.target)) onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("mousedown", onClick);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("mousedown", onClick);
-    };
-  }, [onClose]);
 
   const online = useMemo(
     () => (devicesQuery.data?.devices || [])
@@ -293,8 +350,7 @@ function GroupCallPicker({ onClose, onCall }) {
 
   return (
     <div
-      ref={panelRef}
-      className="absolute left-4 top-full mt-1 w-80 overflow-hidden rounded-lg border border-white/10 bg-black/95 shadow-2xl backdrop-blur"
+      className="absolute right-0 top-full mt-2 w-80 overflow-hidden rounded-lg border border-white/10 bg-black/95 shadow-2xl backdrop-blur"
     >
       <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
         <h2 className="text-xs font-bold text-neutral-100">Group call</h2>

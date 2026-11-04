@@ -144,7 +144,7 @@ export function AdminOrganizationsRoute() {
   const loading = orgsQuery.isLoading;
 
   return (
-    <main className="device-page bg-ops-bg px-6 pb-10 pt-20 text-neutral-200">
+    <main className="device-page bg-ops-bg px-6 pb-10 pt-[calc(var(--ops-chrome)+2rem)] text-neutral-200">
       <div className="mx-auto max-w-[1400px]">
         <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <div>

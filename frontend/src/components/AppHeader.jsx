@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { getActiveOrganizationId, getMe, setActiveOrganizationId, setAuthToken } from "../lib/api";
 import { clearOfflineCache } from "../lib/offline-cache";
 import { PLATFORM_ROLE_LABELS, isPlatformOwner, isPlatformStaff } from "../lib/platform-roles";
+import { ListenControl } from "./LiveRadioBar";
 import { LocationStatus } from "./LocationStatus";
 
 export function AppHeader() {
@@ -56,7 +57,7 @@ export function AppHeader() {
   }
 
   return (
-    <header className="border-b border-white/10 bg-black/70 backdrop-blur">
+    <header className="relative z-10 border-b border-white/10 bg-black/70 backdrop-blur">
       <div className="flex h-12 items-center gap-4 px-4 text-neutral-200">
         <Link to="/" className="flex items-center gap-2 text-[12px] font-bold tracking-wide text-ops-red">
           <ShieldAlert size={16} />
@@ -91,6 +92,7 @@ export function AppHeader() {
         </nav>
 
         <div className="ml-auto flex items-center gap-2">
+          <ListenControl />
           <LocationStatus />
         </div>
 
@@ -109,7 +111,7 @@ export function AppHeader() {
           ) : null}
 
           {menuOpen ? (
-            <div className="absolute right-4 mt-2 w-56 rounded-md border border-white/10 bg-black/95 p-2 shadow-xl backdrop-blur">
+            <div className="absolute right-4 top-full mt-1 w-56 rounded-md border border-white/10 bg-black/95 p-2 shadow-xl backdrop-blur">
               <div className="border-b border-white/10 px-2 pb-2 text-[11px] text-neutral-400">
                 <div className="truncate font-bold text-neutral-200">{user?.name || user?.email}</div>
                 <div className="truncate text-neutral-500">{user?.email}</div>

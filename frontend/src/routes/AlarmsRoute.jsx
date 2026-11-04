@@ -561,7 +561,7 @@ export function AlarmsRoute() {
   const position = coordinates(selected);
 
   return (
-    <main className="min-h-screen bg-ops-bg px-4 pb-10 pt-20 text-neutral-200 md:px-6">
+    <main className="min-h-screen bg-ops-bg px-4 pb-10 pt-[calc(var(--ops-chrome)+2rem)] text-neutral-200 md:px-6">
       <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="flex items-center gap-2 text-xl font-bold text-red-400">

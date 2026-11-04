@@ -136,7 +136,7 @@ export function OrganizationPage({ orgId = null, tab = "radios", basePath }) {
 
 function Shell({ children }) {
   return (
-    <main className="device-page bg-ops-bg px-6 pb-10 pt-20 text-neutral-200">
+    <main className="device-page bg-ops-bg px-6 pb-10 pt-[calc(var(--ops-chrome)+2rem)] text-neutral-200">
       <div className="mx-auto max-w-[1400px]">{children}</div>
     </main>
   );
