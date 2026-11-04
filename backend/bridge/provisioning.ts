@@ -135,6 +135,16 @@ export class PocstarsProvisioning {
       return seat as { uid: number; account: string; password: string };
     }
 
+    // An inactive seat means the organization switched its watcher off. Making
+    // a second account with the same name would undo that behind its back.
+    const [switchedOff]: any = await this.pool.query(
+      "SELECT User_ID FROM tb_User WHERE User_CompanyID = ? AND User_Account = ? AND IsActive = 0 LIMIT 1",
+      [companyId, account],
+    );
+    if (switchedOff.length) {
+      throw new Error(`The presence watcher for company ${companyId} is switched off.`);
+    }
+
     const password = this.newSeatPasswordHash();
     const [result]: any = await this.pool.query(
       `INSERT INTO tb_User
@@ -182,9 +192,14 @@ export class PocstarsProvisioning {
   // Takes the company's tk4849 presence seat out of every one of its channels,
   // or puts it back in all of them. Out means it no longer shows in any member
   // list, on handsets or consoles; MOMAS switches it out when an organization
-  // relies on handset heartbeats alone. Rows are deactivated rather than
-  // deleted, the same way a radio leaves a channel, and the timestamp bumps are
-  // what make echat's incremental sync pick the change up.
+  // relies on handset heartbeats alone.
+  //
+  // Deactivating the membership rows alone is not enough: echat drops them from
+  // its membership table but keeps listing the seat in each channel's live
+  // member list (checked 4 Nov 2026). What does clear those lists is the account
+  // itself going inactive, so off deactivates both, and on reactivates both.
+  // Nothing is deleted, and the timestamp bumps are what make echat's
+  // incremental sync pick the change up.
   async setPresenceSeatMembership({
     companyId,
     member,
@@ -196,8 +211,11 @@ export class PocstarsProvisioning {
     const connection = await this.pool.getConnection();
     try {
       await connection.beginTransaction();
+      // An inactive seat is one this switched off, so it is looked up either way.
       const [seats]: any = await connection.query(
-        "SELECT User_ID FROM tb_User WHERE User_CompanyID = ? AND User_Account = ? AND IsActive = 1 LIMIT 1",
+        `SELECT User_ID, IsActive FROM tb_User
+          WHERE User_CompanyID = ? AND User_Account = ?
+          ORDER BY IsActive DESC, User_ID DESC LIMIT 1`,
         [companyId, account],
       );
       // No seat yet: nothing to take out, and the watcher creates it already
@@ -207,6 +225,7 @@ export class PocstarsProvisioning {
         return { seat: null, member, channelsChanged: 0 };
       }
       const uid = Number(seats[0].User_ID);
+      const seatActive = Number(seats[0].IsActive) === 1;
       let channelsChanged = 0;
       if (!member) {
         const [result]: any = await connection.query(
@@ -215,7 +234,21 @@ export class PocstarsProvisioning {
           [uid],
         );
         channelsChanged = Number(result.affectedRows || 0);
+        if (seatActive) {
+          await connection.query(
+            `UPDATE tb_User SET IsActive = 0, User_UpdateTime = NOW(), Last_Update_Time = NOW()
+              WHERE User_ID = ?`,
+            [uid],
+          );
+        }
       } else {
+        if (!seatActive) {
+          await connection.query(
+            `UPDATE tb_User SET IsActive = 1, User_UpdateTime = NOW(), Last_Update_Time = NOW()
+              WHERE User_ID = ?`,
+            [uid],
+          );
+        }
         const [groups]: any = await connection.query(
           "SELECT Cg_ID FROM tb_ChatGroup WHERE Cg_ComID = ? AND IsActive = 1",
           [companyId],
@@ -244,7 +277,9 @@ export class PocstarsProvisioning {
           channelsChanged += 1;
         }
       }
-      if (channelsChanged) await this.touchUsers(connection, [uid]);
+      // The account change above already bumps the seat; touch it only when
+      // the channels moved on their own.
+      if (channelsChanged && seatActive === member) await this.touchUsers(connection, [uid]);
       await connection.commit();
       return { seat: uid, member, channelsChanged };
     } catch (error) {
