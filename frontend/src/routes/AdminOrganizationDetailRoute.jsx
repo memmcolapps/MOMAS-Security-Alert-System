@@ -1,6 +1,20 @@
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Building2, ClipboardList, Globe2, Plus, Radio, RadioTower, Save, Trash2, UserPlus, UsersRound, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Building2,
+  ClipboardList,
+  Globe2,
+  Plus,
+  Radio,
+  RadioTower,
+  Save,
+  Trash2,
+  UserPlus,
+  UsersRound,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   addOrganizationUser,
@@ -19,14 +33,23 @@ import {
   topUpOrganizationSeats,
   updateOrganizationAccess,
 } from "../lib/api";
-import { NIGERIAN_STATES, ORG_ROLES, deviceTypeLabel, orgRoleLabel } from "../lib/domain";
+import {
+  NIGERIAN_STATES,
+  ORG_ROLES,
+  deviceTypeLabel,
+  orgRoleLabel,
+} from "../lib/domain";
 import { isPlatformOperator, isPlatformOwner } from "../lib/platform-roles";
 
 // Support can open this page - reading every tenant is the point of the tier -
 // so each section asks what the viewer may change rather than assuming the
 // answer is "everything". The query is shared with the header by its key.
 function usePlatformTier() {
-  const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
+  const meQuery = useQuery({
+    queryKey: ["me"],
+    queryFn: getMe,
+    staleTime: 60_000,
+  });
   const user = meQuery.data?.user;
   return { canWrite: isPlatformOperator(user), canOwn: isPlatformOwner(user) };
 }
@@ -66,17 +89,31 @@ export function AdminOrganizationDetailRoute() {
 
   const selectTab = (next) => {
     if (next === tab) return;
-    if (dirty && !window.confirm("You have unsaved changes on this tab. Leave without saving?")) return;
+    if (
+      dirty &&
+      !window.confirm(
+        "You have unsaved changes on this tab. Leave without saving?",
+      )
+    )
+      return;
     setDirty(false);
     setTab(next);
   };
 
   if (orgQuery.isLoading) return <Wrapper>Loading...</Wrapper>;
-  if (orgQuery.error) return <Wrapper>Failed to load: {orgQuery.error.message}</Wrapper>;
+  if (orgQuery.error)
+    return <Wrapper>Failed to load: {orgQuery.error.message}</Wrapper>;
   const data = orgQuery.data;
   if (!data?.organization) return <Wrapper>Company not found.</Wrapper>;
 
-  const { organization, devices = [], users = [], units = [], audit = [], channels = [] } = data;
+  const {
+    organization,
+    devices = [],
+    users = [],
+    units = [],
+    audit = [],
+    channels = [],
+  } = data;
 
   return (
     <Wrapper>
@@ -90,13 +127,24 @@ export function AdminOrganizationDetailRoute() {
           ) : null}
         </h1>
         <p className="mt-1 text-[11px] text-neutral-500">
-          {organization.slug} · {devices.length} radio{devices.length === 1 ? "" : "s"} · {channels.length} channel{channels.length === 1 ? "" : "s"} · {users.length} admin{users.length === 1 ? "" : "s"}
+          {organization.slug} · {devices.length} radio
+          {devices.length === 1 ? "" : "s"} · {channels.length} channel
+          {channels.length === 1 ? "" : "s"} · {users.length} admin
+          {users.length === 1 ? "" : "s"}
         </p>
-        {organization.status === "discovered" ? <PromotePanel organization={organization} /> : null}
+        {organization.status === "discovered" ? (
+          <PromotePanel organization={organization} />
+        ) : null}
         {!organization.pocstars_company_id ? (
           <p className="mt-2 inline-flex items-center gap-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[11px] text-amber-200">
-            <AlertTriangle size={12} /> This company is not on the radio network yet.
-            <button className="font-bold underline" onClick={() => selectTab("radio")}>Set it up</button>
+            <AlertTriangle size={12} /> This company is not on the radio network
+            yet.
+            <button
+              className="font-bold underline"
+              onClick={() => selectTab("radio")}
+            >
+              Set it up
+            </button>
           </p>
         ) : null}
       </header>
@@ -110,7 +158,9 @@ export function AdminOrganizationDetailRoute() {
               key={entry.id}
               onClick={() => selectTab(entry.id)}
               className={`inline-flex items-center gap-2 border-b-2 px-3 py-2 text-xs font-bold transition ${
-                active ? "border-ops-red text-ops-red" : "border-transparent text-neutral-500 hover:text-neutral-200"
+                active
+                  ? "border-ops-red text-ops-red"
+                  : "border-transparent text-neutral-500 hover:text-neutral-200"
               }`}
             >
               <Icon size={13} /> {entry.label}
@@ -119,10 +169,29 @@ export function AdminOrganizationDetailRoute() {
         })}
       </div>
 
-      {tab === "overview" ? <OverviewSection organization={organization} units={units} onSaved={refresh} onDirtyChange={setDirty} /> : null}
-      {tab === "users" ? <UsersSection orgId={orgId} users={users} onChanged={refresh} /> : null}
-      {tab === "radio" ? <RadioSection organization={organization} channels={channels} devices={devices} onSaved={refresh} onDirtyChange={setDirty} /> : null}
-      {tab === "devices" ? <DevicesSection orgId={orgId} devices={devices} onChanged={refresh} /> : null}
+      {tab === "overview" ? (
+        <OverviewSection
+          organization={organization}
+          units={units}
+          onSaved={refresh}
+          onDirtyChange={setDirty}
+        />
+      ) : null}
+      {tab === "users" ? (
+        <UsersSection orgId={orgId} users={users} onChanged={refresh} />
+      ) : null}
+      {tab === "radio" ? (
+        <RadioSection
+          organization={organization}
+          channels={channels}
+          devices={devices}
+          onSaved={refresh}
+          onDirtyChange={setDirty}
+        />
+      ) : null}
+      {tab === "devices" ? (
+        <DevicesSection orgId={orgId} devices={devices} onChanged={refresh} />
+      ) : null}
       {tab === "audit" ? <AuditSection audit={audit} /> : null}
     </Wrapper>
   );
@@ -131,7 +200,10 @@ export function AdminOrganizationDetailRoute() {
 function Wrapper({ children }) {
   return (
     <main className="device-page bg-ops-bg px-6 pb-8 pt-20 text-neutral-200">
-      <Link to="/admin/organizations" className="mb-6 inline-flex items-center gap-2 text-xs text-neutral-500 hover:text-neutral-200">
+      <Link
+        to="/admin/organizations"
+        className="mb-6 inline-flex items-center gap-2 text-xs text-neutral-500 hover:text-neutral-200"
+      >
         <ArrowLeft size={14} /> Back to companies
       </Link>
       {children}
@@ -143,12 +215,15 @@ function Wrapper({ children }) {
 // across two tabs called "Access" and "Settings" for four fields.
 function OverviewSection({ organization, units, onSaved, onDirtyChange }) {
   const { canWrite } = usePlatformTier();
-  const initial = useMemo(() => ({
-    name: organization.name,
-    status: organization.status,
-    all_states: Boolean(organization.all_states),
-    states: organization.states || [],
-  }), [organization]);
+  const initial = useMemo(
+    () => ({
+      name: organization.name,
+      status: organization.status,
+      all_states: Boolean(organization.all_states),
+      states: organization.states || [],
+    }),
+    [organization],
+  );
   const [draft, setDraft] = useState(initial);
 
   // States are compared as a set. The API returns them alphabetically, the
@@ -158,7 +233,8 @@ function OverviewSection({ organization, units, onSaved, onDirtyChange }) {
     next.name !== initial.name ||
     next.status !== initial.status ||
     Boolean(next.all_states) !== initial.all_states ||
-    [...(next.states || [])].sort().join("|") !== [...initial.states].sort().join("|");
+    [...(next.states || [])].sort().join("|") !==
+      [...initial.states].sort().join("|");
 
   const edit = (next) => {
     setDraft(next);
@@ -182,21 +258,37 @@ function OverviewSection({ organization, units, onSaved, onDirtyChange }) {
         <h2 className="mb-4 text-[13px] font-bold text-ops-red">Company</h2>
         <div className="grid gap-3 md:grid-cols-2">
           <Field label="Name">
-            <input className="field-input" value={draft.name} onChange={(event) => edit({ ...draft, name: event.target.value })} />
+            <input
+              className="field-input"
+              value={draft.name}
+              onChange={(event) => edit({ ...draft, name: event.target.value })}
+            />
           </Field>
           <Field label="Status">
-            <select className="field-input" value={draft.status} onChange={(event) => edit({ ...draft, status: event.target.value })}>
+            <select
+              className="field-input"
+              value={draft.status}
+              onChange={(event) =>
+                edit({ ...draft, status: event.target.value })
+              }
+            >
               <option value="active">Active</option>
               <option value="suspended">Suspended</option>
             </select>
           </Field>
         </div>
         <p className="text-[11px] text-neutral-500">
-          Suspending keeps everything intact and blocks the company from using the platform.
-          Slug <span className="font-mono text-neutral-400">{organization.slug}</span> is fixed once created.
+          Suspending keeps everything intact and blocks the company from using
+          the platform. Slug{" "}
+          <span className="font-mono text-neutral-400">
+            {organization.slug}
+          </span>{" "}
+          is fixed once created.
         </p>
 
-        <h3 className="mb-1 mt-5 text-[12px] font-bold text-ops-red">Intelligence access</h3>
+        <h3 className="mb-1 mt-5 text-[12px] font-bold text-ops-red">
+          Intelligence access
+        </h3>
         <p className="mb-3 text-[11px] text-neutral-500">
           Which Nigerian states this company sees in the operations console.
         </p>
@@ -225,10 +317,14 @@ function OverviewSection({ organization, units, onSaved, onDirtyChange }) {
         {units.length ? (
           <ul className="mt-3 grid gap-2 md:grid-cols-2">
             {units.map((unit) => (
-              <li className="rounded border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px]" key={unit.id}>
+              <li
+                className="rounded border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px]"
+                key={unit.id}
+              >
                 <span className="font-bold text-neutral-200">{unit.name}</span>
                 <span className="text-neutral-500">
-                  {unit.type ? ` · ${unit.type}` : ""}{unit.state ? ` · ${unit.state}` : ""}
+                  {unit.type ? ` · ${unit.type}` : ""}
+                  {unit.state ? ` · ${unit.state}` : ""}
                 </span>
               </li>
             ))}
@@ -244,7 +340,14 @@ function OverviewSection({ organization, units, onSaved, onDirtyChange }) {
 // Every save on this page reports the same way. Access used to confirm,
 // Settings said nothing at all, so you could not tell a saved edit from a
 // dropped one.
-function SaveRow({ mutation, dirty, onSave, label, allowed = true, deniedNote }) {
+function SaveRow({
+  mutation,
+  dirty,
+  onSave,
+  label,
+  allowed = true,
+  deniedNote,
+}) {
   if (!allowed) {
     return <p className="mt-4 text-[11px] text-neutral-500">{deniedNote}</p>;
   }
@@ -257,21 +360,36 @@ function SaveRow({ mutation, dirty, onSave, label, allowed = true, deniedNote })
       >
         <Save size={13} /> {mutation.isPending ? "Saving…" : label}
       </button>
-      {dirty ? <span className="text-[11px] text-amber-300">Unsaved changes</span> : null}
-      {mutation.error ? <span className="text-xs text-ops-red">{mutation.error.message}</span> : null}
-      {mutation.isSuccess && !dirty ? <span className="text-xs text-ops-green">Saved</span> : null}
+      {dirty ? (
+        <span className="text-[11px] text-amber-300">Unsaved changes</span>
+      ) : null}
+      {mutation.error ? (
+        <span className="text-xs text-ops-red">{mutation.error.message}</span>
+      ) : null}
+      {mutation.isSuccess && !dirty ? (
+        <span className="text-xs text-ops-green">Saved</span>
+      ) : null}
     </div>
   );
 }
 
 // The whole radio story for one company: whether it exists on the network, how
 // many concurrent sessions it may hold, and which channels it owns.
-function RadioSection({ organization, channels, devices, onSaved, onDirtyChange }) {
+function RadioSection({
+  organization,
+  channels,
+  devices,
+  onSaved,
+  onDirtyChange,
+}) {
   const { canWrite, canOwn } = usePlatformTier();
-  const initial = useMemo(() => ({
-    radio_seats: Number(organization.radio_seats ?? 2),
-    platform_radio_seats: Number(organization.platform_radio_seats ?? 1),
-  }), [organization]);
+  const initial = useMemo(
+    () => ({
+      radio_seats: Number(organization.radio_seats ?? 2),
+      platform_radio_seats: Number(organization.platform_radio_seats ?? 1),
+    }),
+    [organization],
+  );
   const [draft, setDraft] = useState(initial);
 
   // A number input hands back a string, and the API hands back a number, so
@@ -294,12 +412,13 @@ function RadioSection({ organization, channels, devices, onSaved, onDirtyChange 
   }, [initial, onDirtyChange]);
 
   const seatsMutation = useMutation({
-    mutationFn: (payload) => updateOrganizationAccess(organization.id, {
-      // Sent as numbers: the backend clamps with Math.max, and "5" would work
-      // there by coercion, but nothing downstream should depend on that.
-      radio_seats: Number(payload.radio_seats),
-      platform_radio_seats: Number(payload.platform_radio_seats),
-    }),
+    mutationFn: (payload) =>
+      updateOrganizationAccess(organization.id, {
+        // Sent as numbers: the backend clamps with Math.max, and "5" would work
+        // there by coercion, but nothing downstream should depend on that.
+        radio_seats: Number(payload.radio_seats),
+        platform_radio_seats: Number(payload.platform_radio_seats),
+      }),
     onSuccess: onSaved,
   });
   const provisionMutation = useMutation({
@@ -324,15 +443,21 @@ function RadioSection({ organization, channels, devices, onSaved, onDirtyChange 
         <h2 className="text-[13px] font-bold text-ops-green">Radio network</h2>
         {organization.pocstars_company_id ? (
           <p className="mt-1 text-[11px] text-neutral-500">
-            Connected as company <span className="font-mono text-neutral-300">{organization.pocstars_company_id}</span>
-            {organization.pocstars_company_name ? ` · ${organization.pocstars_company_name}` : ""}.
-            Its dispatcher seats and channels are its own.
+            Connected as company{" "}
+            <span className="font-mono text-neutral-300">
+              {organization.pocstars_company_id}
+            </span>
+            {organization.pocstars_company_name
+              ? ` · ${organization.pocstars_company_name}`
+              : ""}
+            . Its dispatcher seats and channels are its own.
           </p>
         ) : (
           <>
             <p className="mt-1 max-w-2xl text-[11px] text-amber-200">
-              This company has no company on the radio network, so it cannot hold channels or
-              radios. This usually means the setup failed when the company was created.
+              This company has no company on the radio network, so it cannot
+              hold channels or radios. This usually means the setup failed when
+              the company was created.
             </p>
             <button
               hidden={!canWrite}
@@ -341,10 +466,14 @@ function RadioSection({ organization, channels, devices, onSaved, onDirtyChange 
               onClick={() => provisionMutation.mutate()}
             >
               <RadioTower size={13} />
-              {provisionMutation.isPending ? "Setting up…" : "Set up on the radio network"}
+              {provisionMutation.isPending
+                ? "Setting up…"
+                : "Set up on the radio network"}
             </button>
             {provisionMutation.error ? (
-              <p className="mt-2 text-xs text-ops-red">{provisionMutation.error.message}</p>
+              <p className="mt-2 text-xs text-ops-red">
+                {provisionMutation.error.message}
+              </p>
             ) : null}
           </>
         )}
@@ -353,21 +482,32 @@ function RadioSection({ organization, channels, devices, onSaved, onDirtyChange 
       <div className="glass-panel rounded-lg p-5">
         <h2 className="mb-1 text-[13px] font-bold text-ops-red">Seats</h2>
         <p className="mb-4 text-[11px] text-neutral-500">
-          How many audio sessions can run at once. Platform seats are reserved for us, so our
-          monitoring never consumes theirs. Saving here changes the allowance in MOMAS only; use
-          the button below to create the matching dispatcher seats on the radio network.
+          How many audio sessions can run at once. Platform seats are reserved
+          for us, so our monitoring never consumes theirs. Saving here changes
+          the allowance in MOMAS only; use the button below to create the
+          matching dispatcher seats on the radio network.
         </p>
         <div className="grid gap-3 md:grid-cols-2">
           <Field label="Radio seats (their concurrent audio sessions)">
             <input
-              className="field-input" type="number" min="1" value={draft.radio_seats}
-              onChange={(event) => edit({ ...draft, radio_seats: event.target.value })}
+              className="field-input"
+              type="number"
+              min="1"
+              value={draft.radio_seats}
+              onChange={(event) =>
+                edit({ ...draft, radio_seats: event.target.value })
+              }
             />
           </Field>
           <Field label="Platform seats (reserved for us)">
             <input
-              className="field-input" type="number" min="0" value={draft.platform_radio_seats}
-              onChange={(event) => edit({ ...draft, platform_radio_seats: event.target.value })}
+              className="field-input"
+              type="number"
+              min="0"
+              value={draft.platform_radio_seats}
+              onChange={(event) =>
+                edit({ ...draft, platform_radio_seats: event.target.value })
+              }
             />
           </Field>
         </div>
@@ -390,7 +530,11 @@ function RadioSection({ organization, channels, devices, onSaved, onDirtyChange 
       </div>
 
       {organization.pocstars_company_id ? (
-        <OnlineStatusPanel organization={organization} devices={devices} canWrite={canWrite} />
+        <OnlineStatusPanel
+          organization={organization}
+          devices={devices}
+          canWrite={canWrite}
+        />
       ) : null}
 
       {canWrite && organization.pocstars_company_id ? (
@@ -400,14 +544,18 @@ function RadioSection({ organization, channels, devices, onSaved, onDirtyChange 
             event.preventDefault();
             setChannelWarning("");
             channelMutation.reset();
-            channelMutation.mutate({ organization_id: organization.id, name: channelName.trim() });
+            channelMutation.mutate({
+              organization_id: organization.id,
+              name: channelName.trim(),
+            });
           }}
         >
           <h2 className="mb-1 flex items-center gap-2 text-[13px] font-bold text-ops-red">
             <RadioTower size={15} /> New channel
           </h2>
           <p className="mb-4 text-[11px] text-neutral-500">
-            Created for the whole organization on the radio network. It is live straight away.
+            Created for the whole organization on the radio network. It is live
+            straight away.
           </p>
           <div className="flex flex-wrap items-end gap-3">
             <Field label="Channel name">
@@ -422,33 +570,51 @@ function RadioSection({ organization, channels, devices, onSaved, onDirtyChange 
               className="inline-flex items-center gap-2 rounded bg-ops-red px-4 py-2 text-xs font-bold text-black disabled:opacity-50"
               disabled={channelMutation.isPending || !channelName.trim()}
             >
-              <Plus size={14} /> {channelMutation.isPending ? "Creating…" : "Create channel"}
+              <Plus size={14} />{" "}
+              {channelMutation.isPending ? "Creating…" : "Create channel"}
             </button>
           </div>
-          {channelMutation.error ? <p className="mt-2 text-xs text-ops-red">{channelMutation.error.message}</p> : null}
-          {channelWarning ? <p className="mt-2 text-xs text-amber-300/90">{channelWarning}</p> : null}
-          {channelMutation.isSuccess && !channelWarning ? <p className="mt-2 text-xs text-ops-green">Channel created and live</p> : null}
+          {channelMutation.error ? (
+            <p className="mt-2 text-xs text-ops-red">
+              {channelMutation.error.message}
+            </p>
+          ) : null}
+          {channelWarning ? (
+            <p className="mt-2 text-xs text-amber-300/90">{channelWarning}</p>
+          ) : null}
+          {channelMutation.isSuccess && !channelWarning ? (
+            <p className="mt-2 text-xs text-ops-green">
+              Channel created and live
+            </p>
+          ) : null}
         </form>
       ) : null}
 
       <div className="glass-panel overflow-hidden rounded-lg">
         <div className="border-b border-white/10 px-4 py-3 text-[11px] text-neutral-500">
-          {channels.length} channel{channels.length === 1 ? "" : "s"} · assign and release these on the Companies page
+          {channels.length} channel{channels.length === 1 ? "" : "s"} · assign
+          and release these on the Companies page
         </div>
         <div className="divide-y divide-white/5">
           {channels.map((channel) => (
-            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3" key={channel.id}>
+            <div
+              className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+              key={channel.id}
+            >
               <div className="min-w-0">
                 <h3 className="text-sm text-neutral-100">{channel.name}</h3>
                 <p className="text-[11px] text-neutral-500">
                   {channel.unit_name ? `${channel.unit_name} · ` : ""}
-                  {channel.device_count || 0} radio{channel.device_count === 1 ? "" : "s"}
+                  {channel.device_count || 0} radio
+                  {channel.device_count === 1 ? "" : "s"}
                   {channel.pocstars_group_id
                     ? ` · network group ${channel.pocstars_group_id}`
                     : " · not live on the radio network"}
                 </p>
               </div>
-              <span className="text-[11px] text-neutral-400">{channel.online_count || 0} online</span>
+              <span className="text-[11px] text-neutral-400">
+                {channel.online_count || 0} online
+              </span>
             </div>
           ))}
           {!channels.length ? (
@@ -466,26 +632,38 @@ function AuditSection({ audit }) {
   return (
     <section className="glass-panel overflow-hidden rounded-lg">
       <div className="border-b border-white/10 px-4 py-3 text-[11px] text-neutral-500">
-        {audit.length} audit event{audit.length === 1 ? "" : "s"} · most recent first
+        {audit.length} audit event{audit.length === 1 ? "" : "s"} · most recent
+        first
       </div>
       <div className="divide-y divide-white/5">
         {audit.map((entry) => (
-          <article className="flex flex-wrap items-baseline justify-between gap-3 px-4 py-3" key={entry.id}>
+          <article
+            className="flex flex-wrap items-baseline justify-between gap-3 px-4 py-3"
+            key={entry.id}
+          >
             <div className="min-w-0">
-              <h3 className="font-mono text-[12px] text-neutral-100">{entry.action}</h3>
+              <h3 className="font-mono text-[12px] text-neutral-100">
+                {entry.action}
+              </h3>
               <p className="text-[11px] text-neutral-500">
                 {entry.actor_name || entry.actor_email || "system"}
-                {entry.target_type ? ` · ${entry.target_type}${entry.target_id ? ` ${entry.target_id}` : ""}` : ""}
+                {entry.target_type
+                  ? ` · ${entry.target_type}${entry.target_id ? ` ${entry.target_id}` : ""}`
+                  : ""}
               </p>
             </div>
             <span className="shrink-0 text-[11px] text-neutral-500">
-              {new Date(entry.created_at).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}
+              {new Date(entry.created_at).toLocaleString("en-GB", {
+                dateStyle: "medium",
+                timeStyle: "short",
+              })}
             </span>
           </article>
         ))}
         {!audit.length ? (
           <div className="px-4 py-10 text-center text-[12px] text-neutral-500">
-            <ClipboardList className="mx-auto mb-2" size={26} /> No audit events yet
+            <ClipboardList className="mx-auto mb-2" size={26} /> No audit events
+            yet
           </div>
         ) : null}
       </div>
@@ -514,40 +692,82 @@ function UsersSection({ orgId, users, onChanged }) {
   return (
     <section className="space-y-5">
       {canWrite ? (
-      <form
-        className="glass-panel rounded-lg p-5"
-        onSubmit={(event) => {
-          event.preventDefault();
-          addMutation.mutate(form);
-        }}
-      >
-        <h2 className="mb-4 flex items-center gap-2 text-[13px] font-bold text-ops-red">
-          <UserPlus size={15} /> Invite admin
-        </h2>
-        <div className="grid gap-3 md:grid-cols-2">
-          <Field label="Name">
-            <input className="field-input" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
-          </Field>
-          <Field label="Email">
-            <input className="field-input" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required />
-          </Field>
-          <Field label="Temporary password">
-            <input className="field-input" type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required />
-          </Field>
-          <Field label="Role">
-            <select className="field-input" value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>
-              {ORG_ROLES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
-            </select>
-          </Field>
-        </div>
-        {addMutation.error ? <p className="mt-2 text-xs text-ops-red">{addMutation.error.message}</p> : null}
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <button className="inline-flex items-center gap-2 rounded bg-ops-red px-4 py-2 text-xs font-bold text-black disabled:opacity-50" disabled={addMutation.isPending}>
-            <UserPlus size={14} /> {addMutation.isPending ? "Saving..." : "Add user"}
-          </button>
-          {addMutation.isSuccess ? <span className="text-xs text-ops-green">Added</span> : null}
-        </div>
-      </form>
+        <form
+          className="glass-panel rounded-lg p-5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            addMutation.mutate(form);
+          }}
+        >
+          <h2 className="mb-4 flex items-center gap-2 text-[13px] font-bold text-ops-red">
+            <UserPlus size={15} /> Invite admin
+          </h2>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Name">
+              <input
+                className="field-input"
+                value={form.name}
+                onChange={(event) =>
+                  setForm({ ...form, name: event.target.value })
+                }
+              />
+            </Field>
+            <Field label="Email">
+              <input
+                className="field-input"
+                type="email"
+                value={form.email}
+                onChange={(event) =>
+                  setForm({ ...form, email: event.target.value })
+                }
+                required
+              />
+            </Field>
+            <Field label="Temporary password">
+              <input
+                className="field-input"
+                type="password"
+                value={form.password}
+                onChange={(event) =>
+                  setForm({ ...form, password: event.target.value })
+                }
+                required
+              />
+            </Field>
+            <Field label="Role">
+              <select
+                className="field-input"
+                value={form.role}
+                onChange={(event) =>
+                  setForm({ ...form, role: event.target.value })
+                }
+              >
+                {ORG_ROLES.map(([value, label]) => (
+                  <option value={value} key={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          {addMutation.error ? (
+            <p className="mt-2 text-xs text-ops-red">
+              {addMutation.error.message}
+            </p>
+          ) : null}
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              className="inline-flex items-center gap-2 rounded bg-ops-red px-4 py-2 text-xs font-bold text-black disabled:opacity-50"
+              disabled={addMutation.isPending}
+            >
+              <UserPlus size={14} />{" "}
+              {addMutation.isPending ? "Saving..." : "Add user"}
+            </button>
+            {addMutation.isSuccess ? (
+              <span className="text-xs text-ops-green">Added</span>
+            ) : null}
+          </div>
+        </form>
       ) : null}
 
       <div className="glass-panel overflow-hidden rounded-lg">
@@ -556,16 +776,26 @@ function UsersSection({ orgId, users, onChanged }) {
         </div>
         <div className="divide-y divide-white/5">
           {users.map((user) => (
-            <article className="flex flex-wrap items-center justify-between gap-3 px-4 py-3" key={user.id}>
+            <article
+              className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+              key={user.id}
+            >
               <div className="min-w-0">
-                <h3 className="text-sm text-neutral-100">{user.name || user.email}</h3>
-                <p className="text-[11px] text-neutral-500">{user.email} · {orgRoleLabel(user.role)}</p>
+                <h3 className="text-sm text-neutral-100">
+                  {user.name || user.email}
+                </h3>
+                <p className="text-[11px] text-neutral-500">
+                  {user.email} · {orgRoleLabel(user.role)}
+                </p>
               </div>
               {canWrite ? (
                 <button
                   className="inline-flex items-center gap-1 rounded border border-red-500/20 px-2 py-1 text-[10px] text-red-400/70 hover:border-ops-red hover:text-ops-red"
                   onClick={() => {
-                    if (window.confirm(`Remove ${user.email} from this company?`)) removeMutation.mutate(user.id);
+                    if (
+                      window.confirm(`Remove ${user.email} from this company?`)
+                    )
+                      removeMutation.mutate(user.id);
                   }}
                 >
                   <Trash2 size={11} /> Remove
@@ -574,7 +804,9 @@ function UsersSection({ orgId, users, onChanged }) {
             </article>
           ))}
           {!users.length ? (
-            <div className="px-4 py-10 text-center text-[12px] text-neutral-500">No admins yet</div>
+            <div className="px-4 py-10 text-center text-[12px] text-neutral-500">
+              No admins yet
+            </div>
           ) : null}
         </div>
       </div>
@@ -613,7 +845,8 @@ function DevicesSection({ orgId, devices, onChanged }) {
     <section className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-[11px] text-neutral-500">
-          {devices.length} device{devices.length === 1 ? "" : "s"} assigned to this company.
+          {devices.length} device{devices.length === 1 ? "" : "s"} assigned to
+          this company.
         </p>
         {canWrite ? (
           <div className="flex gap-2">
@@ -636,16 +869,25 @@ function DevicesSection({ orgId, devices, onChanged }) {
 
       {pickerOpen ? (
         <div className="glass-panel rounded-lg p-4">
-          <h3 className="mb-3 text-[12px] font-bold text-ops-green">Unassigned devices</h3>
+          <h3 className="mb-3 text-[12px] font-bold text-ops-green">
+            Unassigned devices
+          </h3>
           {allDevicesQuery.isLoading ? (
             <p className="text-xs text-neutral-500">Loading...</p>
           ) : unassignedDevices.length ? (
             <div className="divide-y divide-white/5">
               {unassignedDevices.map((device) => (
-                <div className="flex items-center justify-between gap-3 py-2" key={device.device_id}>
+                <div
+                  className="flex items-center justify-between gap-3 py-2"
+                  key={device.device_id}
+                >
                   <div className="min-w-0">
-                    <p className="font-mono text-[11px] text-ops-green">{device.device_id}</p>
-                    <p className="text-[11px] text-neutral-500">{device.name || "—"}</p>
+                    <p className="font-mono text-[11px] text-ops-green">
+                      {device.device_id}
+                    </p>
+                    <p className="text-[11px] text-neutral-500">
+                      {device.name || "—"}
+                    </p>
                   </div>
                   <button
                     className="rounded bg-ops-red px-3 py-1 text-[11px] font-bold text-black disabled:opacity-50"
@@ -658,7 +900,9 @@ function DevicesSection({ orgId, devices, onChanged }) {
               ))}
             </div>
           ) : (
-            <p className="text-xs text-neutral-500">No unassigned devices in the registry.</p>
+            <p className="text-xs text-neutral-500">
+              No unassigned devices in the registry.
+            </p>
           )}
         </div>
       ) : null}
@@ -679,13 +923,24 @@ function DevicesSection({ orgId, devices, onChanged }) {
             <tbody>
               {devices.length ? (
                 devices.map((device) => (
-                  <tr className="border-b border-white/5" key={device.device_id}>
-                    <td className="px-4 py-3 font-mono text-[11px] text-ops-green">{device.device_id}</td>
+                  <tr
+                    className="border-b border-white/5"
+                    key={device.device_id}
+                  >
+                    <td className="px-4 py-3 font-mono text-[11px] text-ops-green">
+                      {device.device_id}
+                    </td>
                     <td className="px-4 py-3">{device.name || "—"}</td>
                     <td className="px-4 py-3">{device.operator || "—"}</td>
-                    <td className="px-4 py-3">{device.device_type ? deviceTypeLabel(device.device_type) : "—"}</td>
                     <td className="px-4 py-3">
-                      <span className={`rounded-full border px-2 py-0.5 text-[9px] font-bold ${device.active ? "border-green-500/30 bg-green-500/10 text-ops-green" : "border-white/10 bg-white/5 text-neutral-500"}`}>
+                      {device.device_type
+                        ? deviceTypeLabel(device.device_type)
+                        : "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[9px] font-bold ${device.active ? "border-green-500/30 bg-green-500/10 text-ops-green" : "border-white/10 bg-white/5 text-neutral-500"}`}
+                      >
                         {device.active ? "Active" : "Inactive"}
                       </span>
                     </td>
@@ -694,7 +949,12 @@ function DevicesSection({ orgId, devices, onChanged }) {
                         <button
                           className="inline-flex items-center gap-1 rounded border border-white/10 px-2 py-1 text-[10px] text-neutral-400 hover:border-ops-red hover:text-ops-red"
                           onClick={() => {
-                            if (window.confirm(`Detach ${device.device_id} from this company?`)) detachMutation.mutate(device.device_id);
+                            if (
+                              window.confirm(
+                                `Detach ${device.device_id} from this company?`,
+                              )
+                            )
+                              detachMutation.mutate(device.device_id);
                           }}
                         >
                           Detach
@@ -705,8 +965,12 @@ function DevicesSection({ orgId, devices, onChanged }) {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={6} className="px-4 py-12 text-center text-[12px] text-neutral-500">
-                    <Radio className="mx-auto mb-2" size={26} /> No devices assigned yet
+                  <td
+                    colSpan={6}
+                    className="px-4 py-12 text-center text-[12px] text-neutral-500"
+                  >
+                    <Radio className="mx-auto mb-2" size={26} /> No devices
+                    assigned yet
                   </td>
                 </tr>
               )}
@@ -717,7 +981,6 @@ function DevicesSection({ orgId, devices, onChanged }) {
     </section>
   );
 }
-
 
 // Deletion is the only irreversible act on this page, so it is staged: open the
 // panel, read what actually goes, then type the name. Suspending is offered
@@ -761,9 +1024,9 @@ function DangerZone({ organization }) {
             <AlertTriangle size={14} /> Delete this company
           </h3>
           <p className="mt-1 max-w-2xl text-[11px] text-neutral-500">
-            Removes the workspace and everything filed under it. Its radios return to the
-            unallocated pool. To stop a company using the platform without losing its data,
-            set its status to Suspended above instead.
+            Removes the workspace and everything filed under it. Its radios
+            return to the unallocated pool. To stop a company using the platform
+            without losing its data, set its status to Suspended above instead.
           </p>
         </div>
         <button
@@ -781,28 +1044,74 @@ function DangerZone({ organization }) {
       {open ? (
         <div className="mt-4 border-t border-red-500/20 pt-4">
           {impactQuery.isLoading ? (
-            <p className="text-[11px] text-neutral-500">Checking what this would remove…</p>
+            <p className="text-[11px] text-neutral-500">
+              Checking what this would remove…
+            </p>
           ) : impactQuery.error ? (
-            <p className="text-[11px] text-ops-red">{impactQuery.error.message}</p>
+            <p className="text-[11px] text-ops-red">
+              {impactQuery.error.message}
+            </p>
           ) : counts ? (
             <>
-              <p className="text-[11px] font-bold text-neutral-300">Deleting {organization.name} will:</p>
+              <p className="text-[11px] font-bold text-neutral-300">
+                Deleting {organization.name} will:
+              </p>
               <ul className="mt-2 space-y-1 text-[11px] text-neutral-400">
-                <ImpactLine count={counts.radios} one="radio returns" many="radios return" tail="to the unallocated pool" />
-                <ImpactLine count={counts.claimed_groups} one="radio channel is released" many="radio channels are released" tail="back to the network registry" />
-                <ImpactLine count={counts.members} one="admin loses access" many="admins lose access" />
-                <ImpactLine count={counts.accounts_deleted} one="login is deleted" many="logins are deleted" tail="(they belong to no other company)" />
-                <ImpactLine count={counts.units} one="unit is deleted" many="units are deleted" />
-                <ImpactLine count={counts.channels} one="channel record is deleted" many="channel records are deleted" />
-                <ImpactLine count={counts.geofences} one="geofence is deleted" many="geofences are deleted" />
-                <ImpactLine count={counts.alerts} one="alert is deleted" many="alerts are deleted" />
-                <ImpactLine count={counts.audit_entries} one="audit entry is deleted" many="audit entries are deleted" />
+                <ImpactLine
+                  count={counts.radios}
+                  one="radio returns"
+                  many="radios return"
+                  tail="to the unallocated pool"
+                />
+                <ImpactLine
+                  count={counts.claimed_groups}
+                  one="radio channel is released"
+                  many="radio channels are released"
+                  tail="back to the network registry"
+                />
+                <ImpactLine
+                  count={counts.members}
+                  one="admin loses access"
+                  many="admins lose access"
+                />
+                <ImpactLine
+                  count={counts.accounts_deleted}
+                  one="login is deleted"
+                  many="logins are deleted"
+                  tail="(they belong to no other company)"
+                />
+                <ImpactLine
+                  count={counts.units}
+                  one="unit is deleted"
+                  many="units are deleted"
+                />
+                <ImpactLine
+                  count={counts.channels}
+                  one="channel record is deleted"
+                  many="channel records are deleted"
+                />
+                <ImpactLine
+                  count={counts.geofences}
+                  one="geofence is deleted"
+                  many="geofences are deleted"
+                />
+                <ImpactLine
+                  count={counts.alerts}
+                  one="alert is deleted"
+                  many="alerts are deleted"
+                />
+                <ImpactLine
+                  count={counts.audit_entries}
+                  one="audit entry is deleted"
+                  many="audit entries are deleted"
+                />
               </ul>
               {radio?.company_id ? (
                 <p className="mt-3 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
-                  Radio network company {radio.company_id} is left in place — the network is shared
-                  with other operators and keeps its recordings. Retire it on the network itself if
-                  it is no longer needed.
+                  Radio network company {radio.company_id} is left in place —
+                  the network is shared with other operators and keeps its
+                  recordings. Retire it on the network itself if it is no longer
+                  needed.
                   {radio.shared_with?.length
                     ? ` It is also claimed by ${radio.shared_with.map((org) => org.name).join(", ")}.`
                     : ""}
@@ -813,7 +1122,11 @@ function DangerZone({ organization }) {
 
           <label className="mt-4 flex flex-col gap-1">
             <span className="text-[10px] uppercase tracking-wide text-neutral-500">
-              Type <span className="font-bold text-neutral-300">{organization.name}</span> to confirm
+              Type{" "}
+              <span className="font-bold text-neutral-300">
+                {organization.name}
+              </span>{" "}
+              to confirm
             </span>
             <input
               className="field-input"
@@ -825,16 +1138,22 @@ function DangerZone({ organization }) {
           </label>
 
           {deleteMutation.error ? (
-            <p className="mt-2 text-[11px] text-ops-red">{deleteMutation.error.message}</p>
+            <p className="mt-2 text-[11px] text-ops-red">
+              {deleteMutation.error.message}
+            </p>
           ) : null}
 
           <button
             className="mt-3 inline-flex items-center gap-2 rounded bg-ops-red px-4 py-2 text-xs font-bold text-black disabled:opacity-40"
-            disabled={!matches || deleteMutation.isPending || impactQuery.isLoading}
+            disabled={
+              !matches || deleteMutation.isPending || impactQuery.isLoading
+            }
             onClick={() => deleteMutation.mutate()}
           >
             <Trash2 size={13} />
-            {deleteMutation.isPending ? "Deleting…" : `Permanently delete ${organization.name}`}
+            {deleteMutation.isPending
+              ? "Deleting…"
+              : `Permanently delete ${organization.name}`}
           </button>
         </div>
       ) : null}
@@ -848,7 +1167,8 @@ function ImpactLine({ count, one, many, tail }) {
     <li className="flex gap-2">
       <span className="text-neutral-600">•</span>
       <span>
-        <span className="font-bold text-neutral-200">{count}</span> {count === 1 ? one : many}
+        <span className="font-bold text-neutral-200">{count}</span>{" "}
+        {count === 1 ? one : many}
         {tail ? ` ${tail}` : ""}
       </span>
     </li>
@@ -858,7 +1178,9 @@ function ImpactLine({ count, one, many, tail }) {
 function Field({ label, children }) {
   return (
     <label className="mb-3 flex flex-col gap-1">
-      <span className="text-[10px] uppercase tracking-wide text-neutral-500">{label}</span>
+      <span className="text-[10px] uppercase tracking-wide text-neutral-500">
+        {label}
+      </span>
       {children}
     </label>
   );
@@ -867,20 +1189,35 @@ function Field({ label, children }) {
 function StatePicker({ value, onChange }) {
   const states = value.states || [];
   const toggleState = (state) => {
-    const next = states.includes(state) ? states.filter((item) => item !== state) : [...states, state];
+    const next = states.includes(state)
+      ? states.filter((item) => item !== state)
+      : [...states, state];
     onChange({ ...value, states: next, all_states: false });
   };
   return (
     <div>
       <label className="mb-3 flex items-center gap-2 text-xs text-neutral-300">
-        <input type="checkbox" checked={Boolean(value.all_states)} onChange={(event) => onChange({ ...value, all_states: event.target.checked })} />
+        <input
+          type="checkbox"
+          checked={Boolean(value.all_states)}
+          onChange={(event) =>
+            onChange({ ...value, all_states: event.target.checked })
+          }
+        />
         All states
       </label>
       {!value.all_states ? (
         <div className="grid max-h-52 grid-cols-2 gap-2 overflow-y-auto rounded border border-white/10 bg-white/[0.03] p-3 md:grid-cols-3">
           {NIGERIAN_STATES.map((state) => (
-            <label className="flex items-center gap-2 text-[11px] text-neutral-400" key={state}>
-              <input type="checkbox" checked={states.includes(state)} onChange={() => toggleState(state)} />
+            <label
+              className="flex items-center gap-2 text-[11px] text-neutral-400"
+              key={state}
+            >
+              <input
+                type="checkbox"
+                checked={states.includes(state)}
+                onChange={() => toggleState(state)}
+              />
               {state}
             </label>
           ))}
@@ -902,18 +1239,23 @@ function PromotePanel({ organization }) {
   const { canOwn } = usePlatformTier();
   const queryClient = useQueryClient();
   const vendorSeats = Math.max(1, Number(organization.radio_seats) || 1);
-  const [tenantSeats, setTenantSeats] = useState(String(Math.max(2, vendorSeats)));
+  const [tenantSeats, setTenantSeats] = useState(
+    String(Math.max(2, vendorSeats)),
+  );
   const [platformSeats, setPlatformSeats] = useState("1");
   const [result, setResult] = useState(null);
 
   const promoteMutation = useMutation({
-    mutationFn: () => promoteOrganization(organization.id, {
-      radio_seats: Number(tenantSeats),
-      platform_radio_seats: Number(platformSeats),
-    }),
+    mutationFn: () =>
+      promoteOrganization(organization.id, {
+        radio_seats: Number(tenantSeats),
+        platform_radio_seats: Number(platformSeats),
+      }),
     onSuccess: (response) => {
       setResult(response || null);
-      queryClient.invalidateQueries({ queryKey: ["organization", String(organization.id)] });
+      queryClient.invalidateQueries({
+        queryKey: ["organization", String(organization.id)],
+      });
       queryClient.invalidateQueries({ queryKey: ["organizations"] });
     },
   });
@@ -924,16 +1266,19 @@ function PromotePanel({ organization }) {
         <RadioTower size={14} /> Discovered on the radio network
       </h2>
       <p className="mt-1 max-w-3xl text-[11px] leading-relaxed text-neutral-400">
-        The sync found this company on the shared radio network and imported its radios so you can see
-        them. MOMAS does not operate it: nobody can be given a login here, its channels cannot be
-        changed, and its dispatcher consoles cannot be used. Promoting it says MOMAS runs this company
-        from now on.
+        The sync found this company on the shared radio network and imported its
+        radios so you can see them. MOMAS does not operate it: nobody can be
+        given a login here, its channels cannot be changed, and its dispatcher
+        consoles cannot be used. Promoting it says MOMAS runs this company from
+        now on.
       </p>
       <p className="mt-2 max-w-3xl text-[11px] leading-relaxed text-neutral-500">
-        The radio network gave it <strong className="text-neutral-300">{vendorSeats}</strong>{" "}
-        dispatcher seat{vendorSeats === 1 ? "" : "s"}. A seat is taken for the whole of a private call,
-        so a control room on one seat is deaf to its own channel while calling. Any extra seats you ask
-        for here are created on the radio network as part of promoting.
+        The radio network gave it{" "}
+        <strong className="text-neutral-300">{vendorSeats}</strong> dispatcher
+        seat{vendorSeats === 1 ? "" : "s"}. A seat is taken for the whole of a
+        private call, so a control room on one seat is deaf to its own channel
+        while calling. Any extra seats you ask for here are created on the radio
+        network as part of promoting.
       </p>
 
       {canOwn ? (
@@ -941,13 +1286,19 @@ function PromotePanel({ organization }) {
           <div className="mt-3 grid max-w-lg gap-3 sm:grid-cols-2">
             <Field label="Control room seats">
               <input
-                className="field-input" type="number" min="1" value={tenantSeats}
+                className="field-input"
+                type="number"
+                min="1"
+                value={tenantSeats}
                 onChange={(event) => setTenantSeats(event.target.value)}
               />
             </Field>
             <Field label="Platform seats">
               <input
-                className="field-input" type="number" min="0" value={platformSeats}
+                className="field-input"
+                type="number"
+                min="0"
+                value={platformSeats}
                 onChange={(event) => setPlatformSeats(event.target.value)}
               />
             </Field>
@@ -955,18 +1306,27 @@ function PromotePanel({ organization }) {
           <button
             className="mt-3 inline-flex items-center gap-2 rounded-md bg-sky-400/90 px-4 py-2 text-xs font-bold text-black hover:opacity-85 disabled:opacity-50"
             disabled={promoteMutation.isPending}
-            onClick={() => { setResult(null); promoteMutation.mutate(); }}
+            onClick={() => {
+              setResult(null);
+              promoteMutation.mutate();
+            }}
           >
             <RadioTower size={14} />
-            {promoteMutation.isPending ? "Promoting…" : `Promote ${organization.name}`}
+            {promoteMutation.isPending
+              ? "Promoting…"
+              : `Promote ${organization.name}`}
           </button>
         </>
       ) : (
-        <p className="mt-3 text-[11px] text-neutral-500">Only a platform owner can promote a company.</p>
+        <p className="mt-3 text-[11px] text-neutral-500">
+          Only a platform owner can promote a company.
+        </p>
       )}
 
       {promoteMutation.error ? (
-        <p className="mt-2 text-[11px] text-ops-red">{promoteMutation.error.message}</p>
+        <p className="mt-2 text-[11px] text-ops-red">
+          {promoteMutation.error.message}
+        </p>
       ) : null}
       {result?.warning ? (
         // The status change succeeded and the seat provisioning did not. Saying
@@ -978,7 +1338,8 @@ function PromotePanel({ organization }) {
       ) : null}
       {result && !result.warning ? (
         <p className="mt-2 text-[11px] text-ops-green">
-          Promoted.{result.seats?.seats?.length
+          Promoted.
+          {result.seats?.seats?.length
             ? ` ${result.seats.seats.length} dispatcher seat${result.seats.seats.length === 1 ? "" : "s"} added on the radio network.`
             : " The radio network already had enough dispatcher seats."}
         </p>
@@ -999,9 +1360,16 @@ function OnlineStatusPanel({ organization, devices, canWrite }) {
   const discovered = organization.status === "discovered";
   // Online right now only because the watcher sees them: these are the radios
   // that switching it off would show as offline.
-  const watcherOnly = (devices || []).filter((device) =>
-    device.pocstars_managed && device.active && device.pocstars_online
-    && !(device.heartbeat_at && Date.now() - Date.parse(device.heartbeat_at) < 75_000)).length;
+  const watcherOnly = (devices || []).filter(
+    (device) =>
+      device.pocstars_managed &&
+      device.active &&
+      device.pocstars_online &&
+      !(
+        device.heartbeat_at &&
+        Date.now() - Date.parse(device.heartbeat_at) < 75_000
+      ),
+  ).length;
 
   // The switch moves at once; the server catches up, and a refusal puts it back.
   const mutation = useMutation({
@@ -1009,10 +1377,17 @@ function OnlineStatusPanel({ organization, devices, canWrite }) {
     onMutate: async (next) => {
       await queryClient.cancelQueries({ queryKey: key });
       const previous = queryClient.getQueryData(key);
-      queryClient.setQueryData(key, (data) => data && {
-        ...data,
-        organization: { ...data.organization, presence_watcher_enabled: next },
-      });
+      queryClient.setQueryData(
+        key,
+        (data) =>
+          data && {
+            ...data,
+            organization: {
+              ...data.organization,
+              presence_watcher_enabled: next,
+            },
+          },
+      );
       return { previous };
     },
     onError: (_error, _next, context) => {
@@ -1027,9 +1402,10 @@ function OnlineStatusPanel({ organization, devices, canWrite }) {
         <div className="min-w-0">
           <h2 className="text-[13px] font-bold text-ops-red">Online status</h2>
           <p className="mt-1 max-w-2xl text-[11px] text-neutral-500">
-            Radios report their battery and signal about every 15 seconds, and that is enough to
-            show them online. The watcher adds the radios that never send these reports. It appears
-            as a member called tk4849 in every one of this company&apos;s channels.
+            Radios report their battery and signal about every 15 seconds, and
+            that is enough to show them online. The watcher adds the radios that
+            never send these reports. It appears as a member called tk4849 in
+            every one of this company&apos;s channels.
           </p>
         </div>
         <button
@@ -1059,11 +1435,13 @@ function OnlineStatusPanel({ organization, devices, canWrite }) {
       </p>
       {!discovered && enabled && watcherOnly ? (
         <p className="mt-1 text-[11px] text-amber-300/90">
-          {watcherOnly} online radio{watcherOnly === 1 ? " is" : "s are"} not sending reports and would
-          show offline with the watcher off.
+          {watcherOnly} online radio{watcherOnly === 1 ? " is" : "s are"} not
+          sending reports and would show offline with the watcher off.
         </p>
       ) : null}
-      {mutation.error ? <p className="mt-2 text-xs text-ops-red">{mutation.error.message}</p> : null}
+      {mutation.error ? (
+        <p className="mt-2 text-xs text-ops-red">{mutation.error.message}</p>
+      ) : null}
     </div>
   );
 }
@@ -1074,11 +1452,15 @@ function SeatTopUpButton({ organization }) {
   const mutation = useMutation({
     mutationFn: () => topUpOrganizationSeats(organization.id),
     onSuccess: (response) => {
-      setMessage(response?.warning
-        || (response?.seats?.seats?.length
-          ? `${response.seats.seats.length} seat(s) added on the radio network.`
-          : "The radio network already has enough dispatcher seats."));
-      queryClient.invalidateQueries({ queryKey: ["organization", String(organization.id)] });
+      setMessage(
+        response?.warning ||
+          (response?.seats?.seats?.length
+            ? `${response.seats.seats.length} seat(s) added on the radio network.`
+            : "The radio network already has enough dispatcher seats."),
+      );
+      queryClient.invalidateQueries({
+        queryKey: ["organization", String(organization.id)],
+      });
     },
   });
   return (
@@ -1086,12 +1468,21 @@ function SeatTopUpButton({ organization }) {
       <button
         className="rounded-md border border-white/15 px-3 py-1.5 text-[11px] font-bold text-neutral-200 hover:bg-white/5 disabled:opacity-50"
         disabled={mutation.isPending}
-        onClick={() => { setMessage(""); mutation.mutate(); }}
+        onClick={() => {
+          setMessage("");
+          mutation.mutate();
+        }}
       >
         {mutation.isPending ? "Checking…" : "Match seats on the radio network"}
       </button>
-      {message ? <p className="mt-1 text-[11px] text-neutral-400">{message}</p> : null}
-      {mutation.error ? <p className="mt-1 text-[11px] text-ops-red">{mutation.error.message}</p> : null}
+      {message ? (
+        <p className="mt-1 text-[11px] text-neutral-400">{message}</p>
+      ) : null}
+      {mutation.error ? (
+        <p className="mt-1 text-[11px] text-ops-red">
+          {mutation.error.message}
+        </p>
+      ) : null}
     </div>
   );
 }
