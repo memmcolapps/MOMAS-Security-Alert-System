@@ -1404,8 +1404,9 @@ function OnlineStatusPanel({ organization, devices, canWrite }) {
           <p className="mt-1 max-w-2xl text-[11px] text-neutral-500">
             Radios report their battery and signal about every 15 seconds, and
             that is enough to show them online. The watcher adds the radios that
-            never send these reports. It appears as a member called tk4849 in
-            every one of this company&apos;s channels.
+            never send these reports. While on, it is a member called tk4849 in
+            every one of this company&apos;s channels; turning it off removes it
+            from all of them.
           </p>
         </div>
         <button
@@ -1431,7 +1432,7 @@ function OnlineStatusPanel({ organization, devices, canWrite }) {
           ? "Not operated by MOMAS yet, so no watcher runs here. Online status comes from radio reports."
           : enabled
             ? "Watcher on: a radio is online when it reports or the watcher sees it."
-            : "Watcher off: a radio is online only while it is reporting."}
+            : "Watcher off: tk4849 is in none of the channels, and a radio is online only while it is reporting."}
       </p>
       {!discovered && enabled && watcherOnly ? (
         <p className="mt-1 text-[11px] text-amber-300/90">

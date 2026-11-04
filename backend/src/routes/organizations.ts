@@ -182,8 +182,11 @@ router.post("/:id/radio/seats", requireOps, async (c) => {
   }
 });
 
-// Turns the company's tk4849 presence watcher on or off. Off signs it out
-// straight away and leaves the radios' online status to handset heartbeats.
+// Turns the company's tk4849 presence watcher on or off. Off takes tk4849 out
+// of every one of the company's channels and signs it out, leaving the radios'
+// online status to handset heartbeats; on puts it back in all of them and signs
+// it in again. The radio network is changed first, so a failure there leaves
+// the switch where it was rather than half done.
 router.put("/:id/radio/presence-watcher", requireOps, async (c) => {
   const id = Number(c.req.param("id"));
   const user = (c as any).get("user");
@@ -191,16 +194,33 @@ router.put("/:id/radio/presence-watcher", requireOps, async (c) => {
   if (typeof body.enabled !== "boolean") {
     return c.json({ error: "Say whether the watcher should be on or off." }, 400);
   }
-  const organization = await db.setPresenceWatcherEnabled(id, body.enabled);
-  if (!organization) return c.json({ error: "That organization could not be found." }, 404);
-  const companyId = Number(organization.pocstars_company_id);
-  if (Number.isSafeInteger(companyId) && companyId > 0) {
-    if (body.enabled) {
-      // Only an organization MOMAS operates gets a watcher at all.
-      if ((await db.listOperatedCompanyIds()).includes(companyId)) startPresenceWatcher(companyId);
-    } else {
-      await stopPresenceWatcher(companyId);
+  const existing = await db.getOrganization(id);
+  if (!existing) return c.json({ error: "That organization could not be found." }, 404);
+  const companyId = Number(existing.pocstars_company_id);
+  const onNetwork = Number.isSafeInteger(companyId) && companyId > 0;
+  // A discovered organization never has a watcher, so there is nothing to move.
+  const operated = onNetwork && (await db.listOperatedCompanyIds({ includeWatcherOff: true })).includes(companyId);
+
+  let membership: any = null;
+  if (operated) {
+    try {
+      membership = await provisionOnNetwork("provision.presence.membership", {
+        companyId,
+        member: body.enabled,
+      });
+    } catch (error) {
+      return c.json({
+        error: error instanceof Error
+          ? `The radio network could not be updated: ${error.message}`
+          : "The radio network could not be updated.",
+      }, 502);
     }
+  }
+
+  const organization = await db.setPresenceWatcherEnabled(id, body.enabled);
+  if (operated) {
+    if (body.enabled) startPresenceWatcher(companyId);
+    else await stopPresenceWatcher(companyId);
   }
   await db.createAuditLog({
     organization_id: id,
@@ -208,9 +228,9 @@ router.put("/:id/radio/presence-watcher", requireOps, async (c) => {
     action: body.enabled ? "organization.radio.presence_watcher.on" : "organization.radio.presence_watcher.off",
     target_type: "organization",
     target_id: id,
-    metadata: { pocstars_company_id: organization.pocstars_company_id },
+    metadata: { pocstars_company_id: organization?.pocstars_company_id, channels_changed: membership?.channelsChanged ?? 0 },
   });
-  return c.json({ organization: await db.getOrganization(id) });
+  return c.json({ organization: await db.getOrganization(id), channelsChanged: membership?.channelsChanged ?? 0 });
 });
 
 // Retry for a company whose radio provisioning failed at creation. Without this

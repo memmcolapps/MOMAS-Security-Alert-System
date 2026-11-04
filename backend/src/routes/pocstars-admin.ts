@@ -266,6 +266,8 @@ router.post("/channels", requireOps, async (c) => {
       const created: any = await provisionOnNetwork("provision.channel.create", {
         companyId,
         name: channel.name,
+        // tk4849 stays out of new channels while its watcher is off.
+        includePresenceSeat: organization.presence_watcher_enabled !== false,
       });
       const groupId = Number(created?.groupId || 0);
       if (groupId) Object.assign(channel, await db.markChannelProvisioned(channel.id, groupId));

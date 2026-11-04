@@ -511,7 +511,24 @@ async function handleProvisioning(
           type: "provision.result",
           requestId,
           ok: true,
-          result: await provisioning.createChannel({ companyId, name }),
+          result: await provisioning.createChannel({
+            companyId,
+            name,
+            includePresenceSeat: message.includePresenceSeat !== false,
+          }),
+        });
+      }
+      case "provision.presence.membership": {
+        if (!Number.isSafeInteger(companyId) || companyId <= 0)
+          return fail("A company is required.");
+        return send(ws, {
+          type: "provision.result",
+          requestId,
+          ok: true,
+          result: await provisioning.setPresenceSeatMembership({
+            companyId,
+            member: message.member === true,
+          }),
         });
       }
       case "provision.channel.rename": {

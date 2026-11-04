@@ -3131,13 +3131,16 @@ async function listOrganizationCompanyIds() {
 // shared install; we can see it, and that is all. Anything that writes into a
 // company - a dispatcher seat above all - has to ask this rather than
 // listOrganizationCompanyIds, which answers with the whole install.
-async function listOperatedCompanyIds() {
+// The companies whose tk4849 watcher should run. includeWatcherOff widens it to
+// every company MOMAS operates, whether or not the watcher is switched on.
+async function listOperatedCompanyIds({ includeWatcherOff = false } = {}) {
   const { rows } = await pool.query(
     `SELECT DISTINCT pocstars_company_id AS company_id
        FROM organizations
       WHERE pocstars_company_id ~ '^[0-9]+$'
         AND status IS DISTINCT FROM 'discovered'
-        AND presence_watcher_enabled`,
+        AND (presence_watcher_enabled OR $1)`,
+    [includeWatcherOff],
   );
   return rows.map((row: any) => Number(row.company_id));
 }
@@ -3367,6 +3370,14 @@ async function sweepStaleHeartbeats() {
       RETURNING device_id`,
   );
   return rows.map((row: any) => String(row.device_id));
+}
+
+async function presenceWatcherEnabled(organizationId: number) {
+  const { rows } = await pool.query(
+    "SELECT presence_watcher_enabled FROM organizations WHERE id = $1",
+    [organizationId],
+  );
+  return rows[0]?.presence_watcher_enabled !== false;
 }
 
 // Switching the watcher off hands the organization's radios to heartbeats at
@@ -5486,6 +5497,7 @@ export {
   applyHeartbeats,
   sweepStaleHeartbeats,
   setPresenceWatcherEnabled,
+  presenceWatcherEnabled,
   listMonitorableChannels,
   listChannels,
   getChannel,

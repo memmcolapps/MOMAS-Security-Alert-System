@@ -179,6 +179,82 @@ export class PocstarsProvisioning {
     return { uid, account, password };
   }
 
+  // Takes the company's tk4849 presence seat out of every one of its channels,
+  // or puts it back in all of them. Out means it no longer shows in any member
+  // list, on handsets or consoles; MOMAS switches it out when an organization
+  // relies on handset heartbeats alone. Rows are deactivated rather than
+  // deleted, the same way a radio leaves a channel, and the timestamp bumps are
+  // what make echat's incremental sync pick the change up.
+  async setPresenceSeatMembership({
+    companyId,
+    member,
+  }: {
+    companyId: number;
+    member: boolean;
+  }) {
+    const account = `${PocstarsProvisioning.RESERVED_ACCOUNT_PREFIX}presence@${companyId}`;
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [seats]: any = await connection.query(
+        "SELECT User_ID FROM tb_User WHERE User_CompanyID = ? AND User_Account = ? AND IsActive = 1 LIMIT 1",
+        [companyId, account],
+      );
+      // No seat yet: nothing to take out, and the watcher creates it already
+      // in every channel the first time it starts.
+      if (!seats.length) {
+        await connection.commit();
+        return { seat: null, member, channelsChanged: 0 };
+      }
+      const uid = Number(seats[0].User_ID);
+      let channelsChanged = 0;
+      if (!member) {
+        const [result]: any = await connection.query(
+          `UPDATE tb_UserOfGroup SET IsActive = 0, Last_Update_Time = NOW()
+            WHERE UOG_UserId = ? AND IsActive = 1`,
+          [uid],
+        );
+        channelsChanged = Number(result.affectedRows || 0);
+      } else {
+        const [groups]: any = await connection.query(
+          "SELECT Cg_ID FROM tb_ChatGroup WHERE Cg_ComID = ? AND IsActive = 1",
+          [companyId],
+        );
+        const [rows]: any = await connection.query(
+          "SELECT UOG_ID, UOG_Cgid, IsActive FROM tb_UserOfGroup WHERE UOG_UserId = ?",
+          [uid],
+        );
+        const byGroup = new Map<number, any>(rows.map((row: any) => [Number(row.UOG_Cgid), row]));
+        for (const group of groups) {
+          const row = byGroup.get(Number(group.Cg_ID));
+          if (row && Number(row.IsActive) === 1) continue;
+          if (row) {
+            await connection.query(
+              "UPDATE tb_UserOfGroup SET IsActive = 1, Last_Update_Time = NOW() WHERE UOG_ID = ?",
+              [row.UOG_ID],
+            );
+          } else {
+            await connection.query(
+              `INSERT INTO tb_UserOfGroup
+                 (UOG_Cgid, UOG_UserId, UOG_Priority, createTime, IsActive, Creation_Time, Last_Update_Time, isDefault)
+               VALUES (?, ?, 0, NOW(), 1, NOW(), NOW(), 0)`,
+              [group.Cg_ID, uid],
+            );
+          }
+          channelsChanged += 1;
+        }
+      }
+      if (channelsChanged) await this.touchUsers(connection, [uid]);
+      await connection.commit();
+      return { seat: uid, member, channelsChanged };
+    } catch (error) {
+      await connection.rollback().catch(() => {});
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
   // Create a company on the radio network plus its dispatcher seats, mirroring
   // the shape of an existing working company. The seat passwords are generated
   // and never leave this method: echat authenticates with the stored hash
@@ -959,9 +1035,13 @@ export class PocstarsProvisioning {
   async createChannel({
     companyId,
     name,
+    includePresenceSeat = true,
   }: {
     companyId: number;
     name: string;
+    // False while the organization's tk4849 watcher is switched off, so a new
+    // channel does not bring it back into a member list.
+    includePresenceSeat?: boolean;
   }) {
     const connection = await this.pool.getConnection();
     try {
@@ -995,7 +1075,11 @@ export class PocstarsProvisioning {
       if (!groupId)
         throw new Error("The radio network did not return a channel id.");
 
-      const seats = await this.seatIdsForCompany(connection, companyId);
+      const seats = await this.seatIdsForCompany(
+        connection,
+        companyId,
+        includePresenceSeat ? null : `${PocstarsProvisioning.RESERVED_ACCOUNT_PREFIX}presence@${companyId}`,
+      );
       for (const seatId of seats) {
         await connection.query(
           `INSERT INTO tb_UserOfGroup
@@ -1238,11 +1322,13 @@ export class PocstarsProvisioning {
   private async seatIdsForCompany(
     connection: mysql.PoolConnection,
     companyId: number,
+    excludeAccount: string | null = null,
   ) {
     const [rows]: any = await connection.query(
       `SELECT User_ID FROM tb_User
-        WHERE User_CompanyID = ? AND User_Type = 3 AND User_Enable = 1 AND IsActive = 1`,
-      [companyId],
+        WHERE User_CompanyID = ? AND User_Type = 3 AND User_Enable = 1 AND IsActive = 1
+          AND User_Account <> ?`,
+      [companyId, excludeAccount ?? ""],
     );
     return rows.map((row: any) => Number(row.User_ID));
   }
