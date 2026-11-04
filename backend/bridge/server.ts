@@ -5,6 +5,7 @@ import { PocstarsProvisioning } from "./provisioning";
 import { SosWatch } from "./sos-watch";
 import { readFileSync } from "node:fs";
 import { PositionWatch, mongoPositionStore } from "./position-watch";
+import { HeartbeatWatch } from "./heartbeat-watch";
 
 type BridgeSession = {
   client: PocstarsLiveClient | null;
@@ -23,6 +24,8 @@ type BridgeSession = {
   sosUnsubscribe: (() => void) | null;
   // Nor does position watching: it reads the vendor's GPS history store.
   positionsUnsubscribe: (() => void) | null;
+  // Nor heartbeats: they are read from the vendor terminal service's log.
+  heartbeatsUnsubscribe: (() => void) | null;
 };
 
 const host = process.env.BRIDGE_HOST || "127.0.0.1";
@@ -41,6 +44,7 @@ const sosPollMs = Number(process.env.BRIDGE_SOS_POLL_MS || 1000);
 const MISSED_SOS_WINDOW_MS = 24 * 60 * 60 * 1000;
 const maxPttSeconds = Number(process.env.POCSTARS_PTT_MAX_SECONDS || 60);
 const positionsPollMs = Number(process.env.BRIDGE_POSITIONS_POLL_MS || 2000);
+const terminalLogDir = process.env.BRIDGE_TERMINAL_LOG_DIR || "/opt/pocStar/terminal/logs";
 
 // The location service's own MongoDB login, read from its config unless set
 // explicitly, so a credential change on the vendor side needs no bridge edit.
@@ -214,6 +218,9 @@ async function watchPositions(ws: ServerWebSocket<BridgeSession>, sinceMs?: numb
   );
 }
 
+// One log reader for every subscriber, started on first use.
+const heartbeatWatch = new HeartbeatWatch({ dir: terminalLogDir });
+
 function watchSos(ws: ServerWebSocket<BridgeSession>, targetUid: string) {
   if (ws.data.sosUnsubscribe) return;
   let watch = sosWatches.get(targetUid);
@@ -243,6 +250,8 @@ async function closeSession(ws: ServerWebSocket<BridgeSession>) {
   ws.data.sosUnsubscribe = null;
   ws.data.positionsUnsubscribe?.();
   ws.data.positionsUnsubscribe = null;
+  ws.data.heartbeatsUnsubscribe?.();
+  ws.data.heartbeatsUnsubscribe = null;
   if (ws.data.closing) return;
   ws.data.closing = true;
   if (ws.data.pttTimer) clearTimeout(ws.data.pttTimer);
@@ -605,8 +614,10 @@ const server = Bun.serve<BridgeSession>({
             ws.data.seatUid === null &&
             !ws.data.presenceWatch &&
             !ws.data.sosUnsubscribe &&
-            !ws.data.positionsUnsubscribe,
+            !ws.data.positionsUnsubscribe &&
+            !ws.data.heartbeatsUnsubscribe,
         ).length,
+        heartbeats: heartbeatWatch.status(),
         positions: positionWatch
           ? {
               subscribers: positionWatch.subscriberCount,
@@ -665,6 +676,7 @@ const server = Bun.serve<BridgeSession>({
         presenceWatch: false,
         sosUnsubscribe: null,
         positionsUnsubscribe: null,
+        heartbeatsUnsubscribe: null,
       },
     });
     return upgraded
@@ -742,6 +754,16 @@ const server = Bun.serve<BridgeSession>({
           // and a missing location store is no reason to drop anything else.
           send(ws, { type: "positions.unavailable", message: positionWatchError });
         }
+        return;
+      }
+
+      if (message.type === "heartbeats.watch") {
+        if (!ws.data.heartbeatsUnsubscribe) {
+          ws.data.heartbeatsUnsubscribe = heartbeatWatch.subscribe((beats) =>
+            send(ws, { type: "heartbeats", beats }),
+          );
+        }
+        send(ws, { type: "heartbeats.watching" });
         return;
       }
 

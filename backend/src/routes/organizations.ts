@@ -7,7 +7,12 @@ import {
   queryPocstarsInventory,
   refreshPresenceOverVoice,
 } from "../pocstars/live-gateway";
-import { presenceWatcherStatus, startPresenceWatcher } from "../pocstars/presence-watcher";
+import {
+  presenceWatcherStatus,
+  startPresenceWatcher,
+  stopPresenceWatcher,
+  syncPresenceWatchers,
+} from "../pocstars/presence-watcher";
 
 const router = new Hono();
 
@@ -175,6 +180,37 @@ router.post("/:id/radio/seats", requireOps, async (c) => {
     const next = clientError(error);
     return c.json(next.body, next.status);
   }
+});
+
+// Turns the company's tk4849 presence watcher on or off. Off signs it out
+// straight away and leaves the radios' online status to handset heartbeats.
+router.put("/:id/radio/presence-watcher", requireOps, async (c) => {
+  const id = Number(c.req.param("id"));
+  const user = (c as any).get("user");
+  const body = await c.req.json().catch(() => ({}));
+  if (typeof body.enabled !== "boolean") {
+    return c.json({ error: "Say whether the watcher should be on or off." }, 400);
+  }
+  const organization = await db.setPresenceWatcherEnabled(id, body.enabled);
+  if (!organization) return c.json({ error: "That organization could not be found." }, 404);
+  const companyId = Number(organization.pocstars_company_id);
+  if (Number.isSafeInteger(companyId) && companyId > 0) {
+    if (body.enabled) {
+      // Only an organization MOMAS operates gets a watcher at all.
+      if ((await db.listOperatedCompanyIds()).includes(companyId)) startPresenceWatcher(companyId);
+    } else {
+      await stopPresenceWatcher(companyId);
+    }
+  }
+  await db.createAuditLog({
+    organization_id: id,
+    actor_user_id: user?.id,
+    action: body.enabled ? "organization.radio.presence_watcher.on" : "organization.radio.presence_watcher.off",
+    target_type: "organization",
+    target_id: id,
+    metadata: { pocstars_company_id: organization.pocstars_company_id },
+  });
+  return c.json({ organization: await db.getOrganization(id) });
 });
 
 // Retry for a company whose radio provisioning failed at creation. Without this
@@ -399,9 +435,7 @@ setInterval(() => {
       // IMPORTED_PLATFORM_SEATS refuses to do at import time. That set was two
       // organizations when this was written and is the whole shared install now
       // that companies are discovered automatically.
-      for (const companyId of await db.listOperatedCompanyIds()) {
-        startPresenceWatcher(companyId);
-      }
+      await syncPresenceWatchers(await db.listOperatedCompanyIds());
     } catch (error) {
       // Live calls take priority. The next five-minute cycle retries safely,
       // but a sync that keeps failing has to show in the log, not only as a

@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Crosshair, GripHorizontal, History, MapPin, Mic, Phone, PhoneOff, Radio, Send, Volume2, X } from "lucide-react";
+import { BatteryFull, BatteryLow, BatteryMedium, Crosshair, GripHorizontal, History, MapPin, Mic, Phone, PhoneOff, Radio, Send, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { reverseGeocode, sendRadioMessage } from "../lib/api";
 import { useLiveRadioSession } from "../lib/live-radio-session";
@@ -38,6 +38,37 @@ function coordsOf(location) {
 export function radioChannelLabel(device) {
   if ((device.channels || []).length) return device.channels.map((channel) => channel.name).join(", ");
   return "No channel";
+}
+
+// Battery and signal from the handset's own status report, sent about every 15
+// seconds while it is on the network. Hidden for a radio that has never sent one.
+function HandsetStatus({ device }) {
+  const battery = device.battery_level;
+  const signal = device.signal_level;
+  if (!device.heartbeat_at || (battery == null && signal == null)) return null;
+  const BatteryIcon = battery == null || battery > 60 ? BatteryFull : battery > 20 ? BatteryMedium : BatteryLow;
+  const bars = Math.max(0, Math.min(5, Number(signal) || 0));
+  return (
+    <div className="mt-2 flex items-center gap-3 text-[10px] text-neutral-400">
+      {battery != null ? (
+        <span className={`inline-flex items-center gap-1 ${battery <= 20 ? "text-ops-red" : ""}`}>
+          <BatteryIcon size={13} /> {battery}%
+        </span>
+      ) : null}
+      {signal != null ? (
+        <span className="inline-flex items-end gap-0.5" aria-label={`Signal ${bars} of 5`} title={`Signal ${bars} of 5`}>
+          {[1, 2, 3, 4, 5].map((level) => (
+            <span
+              key={level}
+              className={`w-[3px] rounded-sm ${level <= bars ? "bg-neutral-300" : "bg-white/15"}`}
+              style={{ height: 3 + level * 2 }}
+            />
+          ))}
+        </span>
+      ) : null}
+      <span className="ml-auto text-neutral-600">reported {relativeAge(device.heartbeat_at)}</span>
+    </div>
+  );
 }
 
 /**
@@ -114,6 +145,8 @@ export function RadioConsole({ device, location, onShowOnMap, tracking = false, 
                   : "never seen online"}
             </span>
           </div>
+
+          <HandsetStatus device={device} />
 
           <div className="mt-3 border-t border-white/5 pt-3">
             {coords ? (

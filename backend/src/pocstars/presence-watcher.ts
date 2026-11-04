@@ -73,6 +73,31 @@ export function startPresenceWatcher(companyId: number) {
   queueConnect(watcher, 0);
 }
 
+// Signs the company's tk4849 out and stops trying, when an organization turns
+// its watcher off. Its radios' online status then comes from heartbeats alone.
+export async function stopPresenceWatcher(companyId: number) {
+  const watcher = watchers.get(companyId);
+  if (!watcher) return;
+  watchers.delete(companyId);
+  watcher.stopped = true;
+  if (watcher.timer) clearTimeout(watcher.timer);
+  watcher.timer = null;
+  const client = watcher.client;
+  watcher.client = null;
+  await client?.close().catch(() => {});
+  console.log(`[Radio] presence watcher for company ${companyId} switched off`);
+}
+
+// Brings the running watchers in line with the companies that should have one:
+// starts the missing, and stops any whose organization switched it off.
+export async function syncPresenceWatchers(companyIds: number[]) {
+  const wanted = new Set(companyIds);
+  for (const companyId of [...watchers.keys()]) {
+    if (!wanted.has(companyId)) await stopPresenceWatcher(companyId);
+  }
+  for (const companyId of wanted) startPresenceWatcher(companyId);
+}
+
 export async function stopPresenceWatchers() {
   for (const watcher of watchers.values()) {
     watcher.stopped = true;

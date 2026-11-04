@@ -554,6 +554,27 @@ async function init() {
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS pocstars_managed BOOLEAN NOT NULL DEFAULT false;
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS pocstars_online BOOLEAN;
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS pocstars_last_seen_at TIMESTAMPTZ;
+      -- Online has two sources now. pocstars_watcher_online is what the tk4849
+      -- presence watcher last said (NULL when it is not watching the radio);
+      -- heartbeat_at is the handset's own status report, about every 15 s.
+      -- pocstars_online stays the combined answer every screen reads. The
+      -- watcher's view starts as today's answer, once, when the column appears.
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+           WHERE table_name = 'devices' AND column_name = 'pocstars_watcher_online'
+        ) THEN
+          ALTER TABLE devices ADD COLUMN pocstars_watcher_online BOOLEAN;
+          UPDATE devices SET pocstars_watcher_online = pocstars_online WHERE pocstars_managed;
+        END IF;
+      END $$;
+      ALTER TABLE devices ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ;
+      ALTER TABLE devices ADD COLUMN IF NOT EXISTS battery_level SMALLINT;
+      ALTER TABLE devices ADD COLUMN IF NOT EXISTS signal_level SMALLINT;
+      -- Off: the company's tk4849 watcher is not signed in, and its radios'
+      -- online status comes from heartbeats alone.
+      ALTER TABLE organizations ADD COLUMN IF NOT EXISTS presence_watcher_enabled BOOLEAN NOT NULL DEFAULT true;
       ALTER TABLE devices ADD COLUMN IF NOT EXISTS pocstars_source_dispatcher_uid TEXT;
       ALTER TABLE pocstars_groups ADD COLUMN IF NOT EXISTS company_id TEXT;
       -- One talk group is one channel. Claiming used to be a deliberate act
@@ -3115,7 +3136,8 @@ async function listOperatedCompanyIds() {
     `SELECT DISTINCT pocstars_company_id AS company_id
        FROM organizations
       WHERE pocstars_company_id ~ '^[0-9]+$'
-        AND status IS DISTINCT FROM 'discovered'`,
+        AND status IS DISTINCT FROM 'discovered'
+        AND presence_watcher_enabled`,
   );
   return rows.map((row: any) => Number(row.company_id));
 }
@@ -3223,63 +3245,151 @@ async function listRegistryGroupIds() {
 // radios are ignored rather than created: the five-minute inventory sync owns
 // which devices exist, and a handset that appears here but not there is one
 // belonging to another tenant of this shared install.
-async function applyPocstarsPresence(entries: Array<{ uid: number; online: boolean }>) {
-  let devicesUpdated = 0;
+// A handset reports its status about every 15 s, with gaps of up to a minute
+// seen on the live network. Past this without a report, the heartbeat no longer
+// counts as online.
+const HEARTBEAT_FRESH_SQL = "INTERVAL '75 seconds'";
+
+// What the tk4849 watcher saw, folded into the combined online answer: a radio
+// is online when the watcher says so or its heartbeat is fresh. Radios of an
+// organization that has switched the watcher off are left to heartbeats alone.
+// One statement for the whole batch, however many radios it carries.
+async function applyWatcherPresence(
+  entries: Array<{ uid: number | string; online: boolean }>,
+  queryable: { query: typeof pool.query } = pool,
+) {
+  const latest = new Map<string, boolean>();
   for (const entry of entries) {
-    const radioId = String(entry.uid);
-    if (!/^\d+$/.test(radioId)) continue;
-    const result = await pool.query(
-      `UPDATE devices
-          SET pocstars_online = $2,
-              pocstars_last_seen_at = CASE WHEN $2 THEN NOW() ELSE pocstars_last_seen_at END
-        WHERE device_id = $1 AND pocstars_managed = true
-          AND pocstars_online IS DISTINCT FROM $2`,
-      [radioId, entry.online],
-    );
-    devicesUpdated += result.rowCount || 0;
+    const id = String(entry.uid);
+    if (/^\d+$/.test(id)) latest.set(id, Boolean(entry.online));
   }
-  return devicesUpdated;
+  if (!latest.size) return 0;
+  const result = await queryable.query(
+    `WITH v AS (
+       SELECT * FROM unnest($1::text[], $2::boolean[]) AS v(id, online)
+     ), next AS (
+       SELECT d.device_id, v.online,
+              v.online OR COALESCE(d.heartbeat_at > NOW() - ${HEARTBEAT_FRESH_SQL}, false) AS combined
+         FROM devices d
+         JOIN v ON v.id = d.device_id
+         LEFT JOIN organizations o ON o.id = d.organization_id
+        WHERE d.pocstars_managed
+          AND COALESCE(o.presence_watcher_enabled, true)
+     )
+     UPDATE devices d
+        SET pocstars_watcher_online = next.online,
+            pocstars_online = next.combined,
+            pocstars_last_seen_at = CASE WHEN next.online THEN NOW() ELSE d.pocstars_last_seen_at END
+       FROM next
+      WHERE d.device_id = next.device_id
+        AND (d.pocstars_watcher_online IS DISTINCT FROM next.online
+             OR d.pocstars_online IS DISTINCT FROM next.combined)`,
+    [[...latest.keys()], [...latest.values()]],
+  );
+  return result.rowCount || 0;
+}
+
+async function applyPocstarsPresence(entries: Array<{ uid: number; online: boolean }>) {
+  return applyWatcherPresence(entries);
 }
 
 async function refreshPocstarsPresence(inventory: any) {
   if (!Array.isArray(inventory?.radios)) {
     throw new Error("The radio network returned an invalid presence snapshot.");
   }
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    let devicesUpdated = 0;
-    let online = 0;
-    for (const radio of inventory.radios) {
-      const radioId = String(radio.id || "");
-      if (!/^\d+$/.test(radioId)) continue;
-      // Other dispatcher consoles appear in group membership but are not
-      // devices, exactly as in the full sync.
-      if (Number(radio.role) === 3) continue;
-      const isOnline = Boolean(radio.online);
-      if (isOnline) online += 1;
-      const result = await client.query(
-        `UPDATE devices
-            SET pocstars_online = $2,
-                pocstars_last_seen_at = CASE WHEN $2 THEN NOW() ELSE pocstars_last_seen_at END
-          WHERE device_id = $1 AND pocstars_managed = true`,
-        [radioId, isOnline],
-      );
-      devicesUpdated += result.rowCount || 0;
-    }
-    await client.query("COMMIT");
-    return {
-      radiosSeen: inventory.radios.length,
-      devicesUpdated,
-      online,
-      observedAt: inventory.observedAt || new Date().toISOString(),
-    };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
+  // Other dispatcher consoles appear in group membership but are not devices,
+  // exactly as in the full sync.
+  const entries = inventory.radios
+    .filter((radio: any) => /^\d+$/.test(String(radio.id || "")) && Number(radio.role) !== 3)
+    .map((radio: any) => ({ uid: String(radio.id), online: Boolean(radio.online) }));
+  const devicesUpdated = await applyWatcherPresence(entries);
+  return {
+    radiosSeen: inventory.radios.length,
+    devicesUpdated,
+    online: entries.filter((entry: any) => entry.online).length,
+    observedAt: inventory.observedAt || new Date().toISOString(),
+  };
+}
+
+// Handset heartbeats from the bridge. A recent one makes the radio online
+// whatever the watcher says; an old one (from the bridge's catch-up read) only
+// records battery and signal. Older reports never overwrite newer ones.
+async function applyHeartbeats(beats: Array<{ uid: string; battery: number | null; signal: number | null; at: number }>) {
+  const latest = new Map<string, { at: number; battery: number | null; signal: number | null }>();
+  for (const beat of beats) {
+    const id = String(beat.uid);
+    if (!/^\d+$/.test(id) || !Number.isFinite(beat.at)) continue;
+    const known = latest.get(id);
+    if (!known || beat.at > known.at) latest.set(id, beat);
   }
+  if (!latest.size) return { updated: 0, cameOnline: [] as string[] };
+  const ids = [...latest.keys()];
+  const values = [...latest.values()];
+  const { rows } = await pool.query(
+    `WITH v AS (
+       SELECT id, to_timestamp(at / 1000.0) AS at, battery, signal
+         FROM unnest($1::text[], $2::float8[], $3::int[], $4::int[]) AS v(id, at, battery, signal)
+     ), before AS (
+       SELECT d.device_id, d.pocstars_online AS was_online
+         FROM devices d JOIN v ON v.id = d.device_id
+        WHERE d.pocstars_managed
+     )
+     UPDATE devices d
+        SET heartbeat_at = v.at,
+            battery_level = v.battery,
+            signal_level = v.signal,
+            pocstars_online = CASE WHEN v.at > NOW() - ${HEARTBEAT_FRESH_SQL} THEN true ELSE d.pocstars_online END,
+            pocstars_last_seen_at = GREATEST(d.pocstars_last_seen_at, v.at)
+       FROM v, before
+      WHERE d.device_id = v.id AND before.device_id = d.device_id
+        AND (d.heartbeat_at IS NULL OR d.heartbeat_at < v.at)
+      RETURNING d.device_id, before.was_online, d.pocstars_online`,
+    [ids, values.map((v) => v.at), values.map((v) => v.battery), values.map((v) => v.signal)],
+  );
+  return {
+    updated: rows.length,
+    cameOnline: rows.filter((row: any) => row.pocstars_online && !row.was_online).map((row: any) => String(row.device_id)),
+  };
+}
+
+// The other half of heartbeat presence: a radio that has stopped reporting, and
+// that the watcher does not vouch for, goes offline. Radios that have never sent
+// a heartbeat are left to the watcher entirely.
+async function sweepStaleHeartbeats() {
+  const { rows } = await pool.query(
+    `UPDATE devices
+        SET pocstars_online = false
+      WHERE pocstars_managed
+        AND pocstars_online
+        AND NOT COALESCE(pocstars_watcher_online, false)
+        AND heartbeat_at IS NOT NULL
+        AND heartbeat_at < NOW() - ${HEARTBEAT_FRESH_SQL}
+      RETURNING device_id`,
+  );
+  return rows.map((row: any) => String(row.device_id));
+}
+
+// Switching the watcher off hands the organization's radios to heartbeats at
+// once: whatever the watcher last said is dropped, so a radio it alone kept
+// online does not stay online forever.
+async function setPresenceWatcherEnabled(organizationId: number, enabled: boolean) {
+  const { rows } = await pool.query(
+    `UPDATE organizations SET presence_watcher_enabled = $2, updated_at = NOW()
+      WHERE id = $1
+      RETURNING id, name, pocstars_company_id, presence_watcher_enabled`,
+    [organizationId, enabled],
+  );
+  if (!rows[0]) return null;
+  if (!enabled) {
+    await pool.query(
+      `UPDATE devices
+          SET pocstars_watcher_online = NULL,
+              pocstars_online = COALESCE(heartbeat_at > NOW() - ${HEARTBEAT_FRESH_SQL}, false)
+        WHERE organization_id = $1 AND pocstars_managed`,
+      [organizationId],
+    );
+  }
+  return rows[0];
 }
 
 async function getPocstarsDispatcherName(dispatcherUid: string) {
@@ -5373,6 +5483,9 @@ export {
   getPocstarsDispatcherName,
   refreshPocstarsPresence,
   applyPocstarsPresence,
+  applyHeartbeats,
+  sweepStaleHeartbeats,
+  setPresenceWatcherEnabled,
   listMonitorableChannels,
   listChannels,
   getChannel,

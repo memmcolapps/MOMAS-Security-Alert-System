@@ -33,6 +33,7 @@ import { invalidateAuthCache, requireAuth } from "./auth";
 import { liveRadioWebSocket } from "./pocstars/live-gateway";
 import { sosPushStatus } from "./pocstars/sos-push";
 import { positionPushStatus } from "./pocstars/position-push";
+import { heartbeatPushStatus, startHeartbeatPush } from "./pocstars/heartbeat-push";
 import { checkClassifierModels, getClassifierHealth } from "./classifier";
 
 const app = new Hono();
@@ -142,6 +143,7 @@ app.get("/api/health", async (c) => {
     osint,
     sos_push: sosPushStatus(),
     position_push: positionPushStatus(),
+    heartbeat_push: heartbeatPushStatus(),
   });
 });
 
@@ -221,6 +223,7 @@ try {
   void startGeofenceMonitor();
   startMavlinkListener();
   void startRadioPositionRecorder();
+  startHeartbeatPush();
 
   const classifierStatus = await checkClassifierModels();
   if (classifierStatus.model_available === false) {

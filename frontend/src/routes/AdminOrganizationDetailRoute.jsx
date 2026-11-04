@@ -15,6 +15,7 @@ import {
   promoteOrganization,
   provisionOrganizationRadio,
   removeOrganizationUser,
+  setOrganizationPresenceWatcher,
   topUpOrganizationSeats,
   updateOrganizationAccess,
 } from "../lib/api";
@@ -120,7 +121,7 @@ export function AdminOrganizationDetailRoute() {
 
       {tab === "overview" ? <OverviewSection organization={organization} units={units} onSaved={refresh} onDirtyChange={setDirty} /> : null}
       {tab === "users" ? <UsersSection orgId={orgId} users={users} onChanged={refresh} /> : null}
-      {tab === "radio" ? <RadioSection organization={organization} channels={channels} onSaved={refresh} onDirtyChange={setDirty} /> : null}
+      {tab === "radio" ? <RadioSection organization={organization} channels={channels} devices={devices} onSaved={refresh} onDirtyChange={setDirty} /> : null}
       {tab === "devices" ? <DevicesSection orgId={orgId} devices={devices} onChanged={refresh} /> : null}
       {tab === "audit" ? <AuditSection audit={audit} /> : null}
     </Wrapper>
@@ -265,7 +266,7 @@ function SaveRow({ mutation, dirty, onSave, label, allowed = true, deniedNote })
 
 // The whole radio story for one company: whether it exists on the network, how
 // many concurrent sessions it may hold, and which channels it owns.
-function RadioSection({ organization, channels, onSaved, onDirtyChange }) {
+function RadioSection({ organization, channels, devices, onSaved, onDirtyChange }) {
   const { canWrite, canOwn } = usePlatformTier();
   const initial = useMemo(() => ({
     radio_seats: Number(organization.radio_seats ?? 2),
@@ -387,6 +388,10 @@ function RadioSection({ organization, channels, onSaved, onDirtyChange }) {
           <SeatTopUpButton organization={organization} />
         ) : null}
       </div>
+
+      {organization.pocstars_company_id ? (
+        <OnlineStatusPanel organization={organization} devices={devices} canWrite={canWrite} />
+      ) : null}
 
       {canWrite && organization.pocstars_company_id ? (
         <form
@@ -984,6 +989,85 @@ function PromotePanel({ organization }) {
 
 // Retry or top-up after the allowance was raised. Idempotent on the server, so
 // pressing it when nothing is missing is harmless.
+// Where this company's online dots come from. Radios report their own status
+// about every 15 seconds; the tk4849 watcher also covers radios that never send
+// those reports, at the price of a stranger in every channel's member list.
+function OnlineStatusPanel({ organization, devices, canWrite }) {
+  const queryClient = useQueryClient();
+  const key = ["organization", Number(organization.id)];
+  const enabled = organization.presence_watcher_enabled !== false;
+  const discovered = organization.status === "discovered";
+  // Online right now only because the watcher sees them: these are the radios
+  // that switching it off would show as offline.
+  const watcherOnly = (devices || []).filter((device) =>
+    device.pocstars_managed && device.active && device.pocstars_online
+    && !(device.heartbeat_at && Date.now() - Date.parse(device.heartbeat_at) < 75_000)).length;
+
+  // The switch moves at once; the server catches up, and a refusal puts it back.
+  const mutation = useMutation({
+    mutationFn: (next) => setOrganizationPresenceWatcher(organization.id, next),
+    onMutate: async (next) => {
+      await queryClient.cancelQueries({ queryKey: key });
+      const previous = queryClient.getQueryData(key);
+      queryClient.setQueryData(key, (data) => data && {
+        ...data,
+        organization: { ...data.organization, presence_watcher_enabled: next },
+      });
+      return { previous };
+    },
+    onError: (_error, _next, context) => {
+      if (context?.previous) queryClient.setQueryData(key, context.previous);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: key }),
+  });
+
+  return (
+    <div className="glass-panel rounded-lg p-5">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="text-[13px] font-bold text-ops-red">Online status</h2>
+          <p className="mt-1 max-w-2xl text-[11px] text-neutral-500">
+            Radios report their battery and signal about every 15 seconds, and that is enough to
+            show them online. The watcher adds the radios that never send these reports. It appears
+            as a member called tk4849 in every one of this company&apos;s channels.
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Watcher"
+          disabled={!canWrite || mutation.isPending}
+          onClick={() => mutation.mutate(!enabled)}
+          className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+            enabled ? "bg-ops-green" : "bg-white/15"
+          }`}
+        >
+          <span
+            className={`absolute left-0 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+              enabled ? "translate-x-[22px]" : "translate-x-0.5"
+            }`}
+          />
+        </button>
+      </div>
+      <p className="mt-3 text-[11px] text-neutral-400">
+        {discovered
+          ? "Not operated by MOMAS yet, so no watcher runs here. Online status comes from radio reports."
+          : enabled
+            ? "Watcher on: a radio is online when it reports or the watcher sees it."
+            : "Watcher off: a radio is online only while it is reporting."}
+      </p>
+      {!discovered && enabled && watcherOnly ? (
+        <p className="mt-1 text-[11px] text-amber-300/90">
+          {watcherOnly} online radio{watcherOnly === 1 ? " is" : "s are"} not sending reports and would
+          show offline with the watcher off.
+        </p>
+      ) : null}
+      {mutation.error ? <p className="mt-2 text-xs text-ops-red">{mutation.error.message}</p> : null}
+    </div>
+  );
+}
+
 function SeatTopUpButton({ organization }) {
   const queryClient = useQueryClient();
   const [message, setMessage] = useState("");

@@ -135,6 +135,15 @@ export function promoteOrganization(id, payload) {
 // Bring the radio network's dispatcher seats up to the allowance. Idempotent,
 // so it is both the retry when promotion's own attempt failed and the way to
 // apply a raised allowance.
+// Off signs the company's tk4849 watcher out; its radios' online status then
+// comes from their own heartbeats alone.
+export function setOrganizationPresenceWatcher(id, enabled) {
+  return request(`/api/organizations/${id}/radio/presence-watcher`, {
+    method: "PUT",
+    body: JSON.stringify({ enabled }),
+  });
+}
+
 export function topUpOrganizationSeats(id) {
   return request(`/api/organizations/${id}/radio/seats`, { method: "POST" });
 }

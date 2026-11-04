@@ -139,6 +139,15 @@ export class PocstarsBridgeClient extends EventEmitter {
     }
   }
 
+  // Handset heartbeats (battery, signal) as the bridge reads them from the
+  // vendor terminal service's log. They arrive as "heartbeats" events.
+  async watchHeartbeats() {
+    await this.request(
+      { type: "heartbeats.watch" },
+      (message) => message.type === "heartbeats.watching",
+    );
+  }
+
   async queryInventory() {
     return this.request(
       { type: "inventory.query" },
@@ -274,6 +283,8 @@ export class PocstarsBridgeClient extends EventEmitter {
       this.emit("sos", Array.isArray(message.rows) ? message.rows : []);
     } else if (message.type === "positions") {
       this.emit("positions", Array.isArray(message.points) ? message.points : []);
+    } else if (message.type === "heartbeats") {
+      this.emit("heartbeats", Array.isArray(message.beats) ? message.beats : []);
     }
   }
 
