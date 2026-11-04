@@ -52,7 +52,7 @@ export function LocationStatus() {
   return (
     <div className="relative" ref={boxRef}>
       <button
-        className="inline-flex items-center gap-1.5 rounded border border-white/10 px-2 py-1.5 text-[10px] font-bold hover:border-white/25"
+        className="inline-flex items-center gap-1.5 whitespace-nowrap rounded border border-white/10 px-2 py-1.5 text-[10px] font-bold hover:border-white/25"
         onClick={() => setOpen((value) => !value)}
       >
         <span className={`h-1.5 w-1.5 rounded-full ${state.dot}`} />

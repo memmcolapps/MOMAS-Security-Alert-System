@@ -59,18 +59,18 @@ export function AppHeader() {
   return (
     <header className="relative z-10 border-b border-white/10 bg-black/70 backdrop-blur">
       <div className="flex h-12 items-center gap-4 px-4 text-neutral-200">
-        <Link to="/" className="flex items-center gap-2 text-[12px] font-bold tracking-wide text-ops-red">
+        <Link to="/" className="flex shrink-0 items-center gap-2 whitespace-nowrap text-[12px] font-bold tracking-wide text-ops-red">
           <ShieldAlert size={16} />
           <span>EPAIL <span className="text-neutral-400">Intelligence</span></span>
         </Link>
 
         {org ? (
-          <span className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-0.5 text-[10px] font-bold text-neutral-300 sm:inline-flex">
+          <span className="hidden shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-0.5 text-[10px] font-bold text-neutral-300 2xl:inline-flex">
             <span className="h-1.5 w-1.5 rounded-full bg-ops-green" />
             {org.name}
           </span>
         ) : isAdmin ? (
-          <span className="hidden items-center gap-2 rounded-full border border-ops-red/40 bg-red-500/10 px-2.5 py-0.5 text-[10px] font-bold text-ops-red sm:inline-flex">
+          <span className="hidden shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-ops-red/40 bg-red-500/10 px-2.5 py-0.5 text-[10px] font-bold text-ops-red 2xl:inline-flex">
             {roleLabel}
           </span>
         ) : null}
@@ -91,7 +91,7 @@ export function AppHeader() {
           ) : null}
         </nav>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap">
           <ListenControl />
           <LocationStatus />
         </div>
@@ -100,7 +100,7 @@ export function AppHeader() {
           {user ? (
             <button
               onClick={() => setMenuOpen((value) => !value)}
-              className="inline-flex items-center gap-2 rounded border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] hover:bg-white/[0.07]"
+              className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] hover:bg-white/[0.07]"
             >
               <span className="grid h-5 w-5 place-items-center rounded-full bg-ops-red text-[10px] font-bold text-black">
                 {avatarLetter}
@@ -196,7 +196,7 @@ function NavItem({ to, icon: Icon, label, active }) {
   return (
     <Link
       to={to}
-      className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 transition ${
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1 transition ${
         active ? "bg-white/10 text-ops-red" : "text-neutral-400 hover:bg-white/5 hover:text-neutral-100"
       }`}
     >
