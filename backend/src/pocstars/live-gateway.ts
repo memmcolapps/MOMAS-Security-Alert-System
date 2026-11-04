@@ -5,6 +5,7 @@ import { env } from "../config";
 import * as db from "../db";
 import { PocstarsBridgeClient } from "./bridge-client";
 import { type CompanySnapshot, shapeDatabaseInventory } from "./inventory-snapshot";
+import { pickGroupTargets } from "./group-call";
 import {
   DISCOVERED_STATUS,
   isReadOnlyProvisionCommand,
@@ -126,6 +127,17 @@ function attachSpeakerEvents(session: ActiveSession) {
     void speakerName(session, state?.uid).then((name) => {
       send(ws, { type: "speaker", ...state, name });
     });
+  });
+}
+
+function attachMicEvents(session: ActiveSession) {
+  const { ws, client } = session;
+  client.on("mic", (state: any) => {
+    session.microphoneGranted = Boolean(state.speaking);
+    send(ws, { type: "ptt.state", state: state.speaking ? "granted" : "idle", reason: state.reason });
+  });
+  client.on("error", (error: Error) => {
+    if (!session.closed) send(ws, { type: "error", code: voiceErrorCode(error), message: error.message });
   });
 }
 
@@ -465,6 +477,10 @@ async function resolveCallTarget(user: any, deviceId: string) {
   };
 }
 
+async function resolveGroupTargets(user: any, deviceIds: unknown[]) {
+  return pickGroupTargets(await db.listDevices(operatorScope(user)), deviceIds);
+}
+
 async function audit(session: ActiveSession, action: string, metadata: Record<string, unknown> = {}) {
   await db.createAuditLog({
     organization_id: session.device.organization_id || null,
@@ -538,13 +554,7 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
   };
   liveSessions.add(session);
   attachSpeakerEvents(session);
-  client.on("mic", (state: any) => {
-    session.microphoneGranted = Boolean(state.speaking);
-    send(ws, { type: "ptt.state", state: state.speaking ? "granted" : "idle", reason: state.reason });
-  });
-  client.on("error", (error: Error) => {
-    if (!session.closed) send(ws, { type: "error", code: voiceErrorCode(error), message: error.message });
-  });
+  attachMicEvents(session);
 
   try {
     send(ws, { type: "call.state", state: "connecting", deviceId });
@@ -562,6 +572,75 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
       type: "error",
       code: "pocstars_call_failed",
       message: error instanceof Error ? error.message : "The call could not be started.",
+    });
+    await cleanup(session, "connect_failed");
+  }
+}
+
+async function startGroupCall(ws: WSContext, user: any, deviceIds: unknown) {
+  if (!liveRadioConfigured()) {
+    send(ws, {
+      type: "error",
+      code: "live_radio_not_configured",
+      message: "Live radio is not configured on this MOMAS server.",
+    });
+    return;
+  }
+  const target = await resolveGroupTargets(user, Array.isArray(deviceIds) ? deviceIds : []);
+  if (!target.ok) {
+    send(ws, { type: "error", code: target.code, message: target.message });
+    return;
+  }
+  const { devices } = target;
+  const organizationId = devices[0].organization_id ? Number(devices[0].organization_id) : null;
+  const slot = await claimSeatSlot(user, organizationId);
+  if (!slot.ok) {
+    send(ws, { type: "error", code: "radio_console_busy", message: slot.message, busyBy: slot.busyBy });
+    return;
+  }
+  const companyId = organizationId ? await db.getOrganizationCompanyId(organizationId) : null;
+
+  const client = createLiveClient();
+  const session: ActiveSession = {
+    ws,
+    client,
+    device: {
+      device_id: `group:${devices.map((device) => device.device_id).join(",")}`,
+      organization_id: organizationId,
+    },
+    user,
+    organizationId,
+    isPlatformOperator: slot.isPlatform,
+    mode: "private",
+    divisionName: `group call with ${devices.length} radio${devices.length === 1 ? "" : "s"}`,
+    speakerNames: new Map(),
+    pttHeld: false,
+    microphoneGranted: false,
+    pttTimer: null,
+    closed: false,
+  };
+  liveSessions.add(session);
+  attachSpeakerEvents(session);
+  attachMicEvents(session);
+
+  try {
+    send(ws, { type: "call.state", state: "connecting" });
+    await client.connect();
+    const group = await client.startGroupCall(devices.map((device) => Number(device.device_id)), companyId);
+    await audit(session, "radio.group.start", {
+      pocstars_group_id: group.gid,
+      device_ids: devices.map((device) => String(device.device_id)),
+    });
+    send(ws, {
+      type: "call.state",
+      state: "connected",
+      group: { id: group.gid, name: group.name },
+    });
+  } catch (error) {
+    send(ws, {
+      type: "error",
+      code: "pocstars_call_failed",
+      message: error instanceof Error ? error.message : "The group call could not be started.",
     });
     await cleanup(session, "connect_failed");
   }
@@ -637,9 +716,7 @@ async function startMonitor(ws: WSContext, user: any, message: any) {
   };
   liveSessions.add(session);
   attachSpeakerEvents(session);
-  client.on("error", (error: Error) => {
-    if (!session.closed) send(ws, { type: "error", code: voiceErrorCode(error), message: error.message });
-  });
+  attachMicEvents(session);
 
   try {
     send(ws, {
@@ -669,12 +746,12 @@ async function startMonitor(ws: WSContext, user: any, message: any) {
   }
 }
 
-async function beginPtt(session: ActiveSession) {
+async function beginPtt(session: ActiveSession, takeover = false) {
   if (session.microphoneGranted) return;
   session.pttHeld = true;
   send(session.ws, { type: "ptt.state", state: "requesting" });
   try {
-    await session.client.requestMic();
+    await session.client.requestMic({ takeover });
     if (!session.pttHeld) {
       await session.client.releaseMic();
       return;
@@ -688,7 +765,9 @@ async function beginPtt(session: ActiveSession) {
         message: "Push-to-talk stopped at the safety time limit.",
       });
     }, env.POCSTARS_PTT_MAX_SECONDS * 1000);
-    await audit(session, "radio.live.ptt.start");
+    await audit(session, takeover ? "radio.live.ptt.takeover" : "radio.live.ptt.start", {
+      mode: session.mode,
+    });
   } catch (error) {
     session.microphoneGranted = false;
     send(session.ws, {
@@ -724,7 +803,7 @@ export function liveRadioWebSocket(c: Context): WSEvents {
     },
     onMessage: async (event, ws) => {
       if (typeof event.data !== "string") {
-        if (session?.mode === "private" && session.microphoneGranted) {
+        if (session && session.microphoneGranted) {
           const bytes = event.data instanceof ArrayBuffer
             ? new Uint8Array(event.data)
             : new Uint8Array((event.data as any).buffer);
@@ -749,13 +828,17 @@ export function liveRadioWebSocket(c: Context): WSEvents {
         if (session) return;
         await startCall(ws, user, String(message.deviceId || ""));
         session = [...liveSessions].find((entry) => entry.ws === ws) || null;
+      } else if (message.type === "group.start") {
+        if (session) return;
+        await startGroupCall(ws, user, message.deviceIds);
+        session = [...liveSessions].find((entry) => entry.ws === ws) || null;
       } else if (message.type === "monitor.start") {
         if (session) return;
         await startMonitor(ws, user, message);
         session = [...liveSessions].find((entry) => entry.ws === ws) || null;
-      } else if (message.type === "ptt.start" && session?.mode === "private" && !session.closed) {
-        await beginPtt(session);
-      } else if (message.type === "ptt.stop" && session?.mode === "private" && !session.closed) {
+      } else if ((message.type === "ptt.start" || message.type === "ptt.takeover") && session && !session.closed) {
+        await beginPtt(session, message.type === "ptt.takeover");
+      } else if (message.type === "ptt.stop" && session && !session.closed) {
         await endPtt(session);
       } else if (message.type === "call.end" && session) {
         await cleanup(session);

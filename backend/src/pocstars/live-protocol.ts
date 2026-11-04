@@ -66,6 +66,44 @@ const root = Root.fromJSON({
             },
             SingleCall: { fields: { uid: { type: "uint32", id: 1 } } },
             SingleCallAck: { fields: { result: { type: "int32", id: 1 } } },
+            // Field numbers below are from the vendor schema in
+            // vendor-schema.json, and each was proven live on 4 Nov 2026.
+            JoinGroup: {
+              fields: {
+                gid: { type: "uint32", id: 1 },
+                uid: { type: "uint32", id: 2 },
+              },
+            },
+            JoinGroupAck: {
+              fields: {
+                result: { type: "int32", id: 1 },
+                gid: { type: "uint32", id: 2 },
+                ip: { type: "uint32", id: 3 },
+                port: { type: "uint32", id: 4 },
+                payload: { type: "uint32", id: 5 },
+                token: { type: "uint32", id: 6 },
+                group: { type: "ptt.Group", id: 7 },
+              },
+            },
+            Call: {
+              fields: {
+                uids: { rule: "repeated", type: "uint32", id: 1 },
+                type: { type: "uint32", id: 2 },
+              },
+            },
+            CallAck: {
+              fields: {
+                result: { type: "int32", id: 1 },
+                uids: { rule: "repeated", type: "uint32", id: 2 },
+              },
+            },
+            TakeMic: { fields: { uids: { rule: "repeated", type: "uint32", id: 1 } } },
+            TakeMicAck: {
+              fields: {
+                result: { type: "int32", id: 1 },
+                uids: { rule: "repeated", type: "uint32", id: 2 },
+              },
+            },
             QueryGroup: {
               fields: {
                 detail: { type: "int32", id: 1 },

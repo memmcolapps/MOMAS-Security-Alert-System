@@ -127,6 +127,7 @@ export function LiveRadioProvider({ children }) {
         socket.send(JSON.stringify({ type: "ptt.stop" }));
         socket.send(JSON.stringify({ type: "call.end" }));
       } else if (modeRef.current === "monitor") {
+        socket.send(JSON.stringify({ type: "ptt.stop" }));
         socket.send(JSON.stringify({ type: "monitor.end" }));
       }
     }
@@ -163,7 +164,9 @@ export function LiveRadioProvider({ children }) {
     retry.attempt += 1;
   }, [cancelReconnect, clearRetryTimer, resetVisibleState]);
 
-  const start = useCallback(async ({ nextMode, nextChannel, nextDevice, retry = false }) => {
+  // nextDevices makes a private call a quick group call: the radio network
+  // builds a temporary group around them and pulls them all straight in.
+  const start = useCallback(async ({ nextMode, nextChannel, nextDevice, nextDevices, retry = false }) => {
     if (startingRef.current) return;
     startingRef.current = true;
     if (retry) clearRetryTimer();
@@ -236,7 +239,9 @@ export function LiveRadioProvider({ children }) {
           socket.send(JSON.stringify(
             nextMode === "monitor"
               ? { type: "monitor.start", channelId: nextChannel.id }
-              : { type: "call.start", deviceId: nextDevice.device_id },
+              : nextDevices
+                ? { type: "group.start", deviceIds: nextDevices.map((device) => device.device_id) }
+                : { type: "call.start", deviceId: nextDevice.device_id },
           ));
         }
         if (message.type === "call.state" || message.type === "monitor.state") {
@@ -351,15 +356,47 @@ export function LiveRadioProvider({ children }) {
     void start({ nextMode: "private", nextDevice: device });
   }, [start]);
 
+  const callGroup = useCallback((devices) => {
+    const picked = (devices || []).filter((device) => device?.device_id);
+    if (!picked.length) return;
+    if (wantedChannelRef.current) resumeChannelRef.current = wantedChannelRef.current;
+    void start({
+      nextMode: "private",
+      nextDevice: {
+        device_id: `group:${picked.map((device) => device.device_id).join(",")}`,
+        name: picked.length === 1 ? picked[0].name : `${picked.length} radios`,
+        group: picked,
+      },
+      nextDevices: picked,
+    });
+  }, [start]);
+
   const endCall = useCallback(() => {
     teardown();
   }, [teardown]);
 
-  const startPtt = useCallback(() => {
-    if (modeRef.current !== "private" || socketRef.current?.readyState !== window.WebSocket.OPEN) return;
+  // A channel is opened listen-only, so the microphone is only asked for the
+  // first time the operator talks on it. takeover cuts off whoever is talking.
+  const sendPtt = useCallback(async (type) => {
+    const mode = modeRef.current;
+    if (!mode || socketRef.current?.readyState !== window.WebSocket.OPEN) return;
     heldRef.current = true;
-    socketRef.current.send(JSON.stringify({ type: "ptt.start" }));
+    if (mode === "monitor") {
+      try {
+        await audioRef.current?.prepare({ microphone: true });
+      } catch (reason) {
+        heldRef.current = false;
+        setMicBlocked(reason instanceof Error ? reason.message : "The microphone could not be opened.");
+        return;
+      }
+      // Released while the browser was still asking for the microphone.
+      if (!heldRef.current) return;
+    }
+    socketRef.current?.send(JSON.stringify({ type }));
   }, []);
+
+  const startPtt = useCallback(() => void sendPtt("ptt.start"), [sendPtt]);
+  const cutIn = useCallback(() => void sendPtt("ptt.takeover"), [sendPtt]);
 
   const stopPtt = useCallback(() => {
     heldRef.current = false;
@@ -384,12 +421,14 @@ export function LiveRadioProvider({ children }) {
     listenToChannel,
     stopListening,
     callRadio,
+    callGroup,
     endCall,
     startPtt,
     stopPtt,
+    cutIn,
   }), [
     mode, callState, pttState, speaker, configured, error, busyBy, micBlocked, condition, channel, callDevice,
-    listenToChannel, stopListening, callRadio, endCall, startPtt, stopPtt,
+    listenToChannel, stopListening, callRadio, callGroup, endCall, startPtt, stopPtt, cutIn,
   ]);
 
   return <LiveRadioContext.Provider value={value}>{children}</LiveRadioContext.Provider>;

@@ -924,6 +924,58 @@ const server = Bun.serve<BridgeSession>({
           });
           await closeSession(ws);
         }
+      } else if (message.type === "group.start") {
+        if (ws.data.client) return;
+        const uids = Array.isArray(message.deviceIds)
+          ? [...new Set<number>(message.deviceIds.map(Number))].filter(
+              (uid) => Number.isSafeInteger(uid) && uid > 0,
+            )
+          : [];
+        if (!uids.length || uids.length > 50) {
+          send(ws, {
+            type: "error",
+            code: "invalid_radio_uid",
+            message: "Pick between 1 and 50 radios for a group call.",
+          });
+          return;
+        }
+        let client: PocstarsLiveClient;
+        try {
+          client = await openLeasedClient(
+            ws,
+            message.companyId ? Number(message.companyId) : null,
+          );
+        } catch (error) {
+          send(ws, {
+            type: "error",
+            code: "radio_console_busy",
+            message:
+              error instanceof Error
+                ? error.message
+                : "No radio console is free.",
+          });
+          return;
+        }
+        // A group call talks exactly like a private call.
+        ws.data.mode = "private";
+        try {
+          send(ws, { type: "call.state", state: "connecting" });
+          await client.connect();
+          const group = await client.startGroupCall(uids);
+          send(ws, {
+            type: "call.state",
+            state: "connected",
+            group: { id: group.gid, name: group.name },
+          });
+        } catch (error) {
+          send(ws, {
+            type: "error",
+            code: "pocstars_call_failed",
+            message:
+              error instanceof Error ? error.message : "The group call failed.",
+          });
+          await closeSession(ws);
+        }
       } else if (message.type === "monitor.start") {
         if (ws.data.client) return;
         const groupId = Number(message.groupId);
@@ -974,12 +1026,15 @@ const server = Bun.serve<BridgeSession>({
           await closeSession(ws);
         }
       } else if (
-        message.type === "ptt.start" &&
+        (message.type === "ptt.start" || message.type === "ptt.takeover") &&
         ws.data.client &&
-        ws.data.mode === "private"
+        ws.data.mode
       ) {
         try {
           send(ws, { type: "ptt.state", state: "requesting" });
+          // A watched channel only listens until the console joins it.
+          if (ws.data.mode === "monitor") await ws.data.client.joinWatchedGroup();
+          if (message.type === "ptt.takeover") await ws.data.client.takeMic();
           await ws.data.client.requestMic();
           if (ws.data.pttTimer) clearTimeout(ws.data.pttTimer);
           ws.data.pttTimer = setTimeout(() => {
@@ -1004,7 +1059,7 @@ const server = Bun.serve<BridgeSession>({
       } else if (
         message.type === "ptt.stop" &&
         ws.data.client &&
-        ws.data.mode === "private"
+        ws.data.mode
       ) {
         if (ws.data.pttTimer) clearTimeout(ws.data.pttTimer);
         ws.data.pttTimer = null;

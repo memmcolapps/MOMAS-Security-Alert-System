@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, ClipboardList, Plus, Radio, RadioTower, Save, Trash2, UserPlus, UsersRound, X } from "lucide-react";
+import { Building2, ClipboardList, Headphones, Plus, Radio, RadioTower, Save, Square, Trash2, UserPlus, UsersRound, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   addOrgAdminUser,
@@ -17,6 +17,7 @@ import {
   updateOrgChannel,
   updateOrgUnit,
 } from "../lib/api";
+import { useLiveRadioSession } from "../lib/live-radio-session";
 import { isPlatformOperator } from "../lib/platform-roles";
 import { NIGERIAN_STATES, ORG_ROLES, deviceTypeLabel, orgRoleLabel } from "../lib/domain";
 
@@ -260,33 +261,36 @@ function ChannelsSection({ devices, units, canManage }) {
                   </p>
                 ) : null}
               </div>
-              {canManage ? (
-                <div className="flex gap-2">
-                  <button
-                    className="rounded border border-white/10 px-2 py-1 text-[10px] text-neutral-300 hover:border-ops-green hover:text-ops-green"
-                    onClick={() => setOpenChannelId(openChannelId === channel.id ? null : channel.id)}
-                  >
-                    {openChannelId === channel.id ? "Close" : "Radios"}
-                  </button>
-                  <button
-                    className="rounded border border-white/10 px-2 py-1 text-[10px] text-neutral-300 hover:border-ops-green hover:text-ops-green"
-                    onClick={() => {
-                      const name = window.prompt("Rename channel", channel.name);
-                      if (name?.trim()) renameMutation.mutate({ id: channel.id, name: name.trim() });
-                    }}
-                  >
-                    Rename
-                  </button>
-                  <button
-                    className="inline-flex items-center gap-1 rounded border border-red-500/20 px-2 py-1 text-[10px] text-red-400/70 hover:border-ops-red hover:text-ops-red"
-                    onClick={() => {
-                      if (window.confirm(`Remove ${channel.name}?`)) removeMutation.mutate(channel.id);
-                    }}
-                  >
-                    <Trash2 size={11} /> Remove
-                  </button>
-                </div>
-              ) : null}
+              <div className="flex gap-2">
+                {channel.active && channel.provision_state !== "pending" ? <ListenButton channel={channel} /> : null}
+                {canManage ? (
+                  <>
+                    <button
+                      className="rounded border border-white/10 px-2 py-1 text-[10px] text-neutral-300 hover:border-ops-green hover:text-ops-green"
+                      onClick={() => setOpenChannelId(openChannelId === channel.id ? null : channel.id)}
+                    >
+                      {openChannelId === channel.id ? "Close" : "Radios"}
+                    </button>
+                    <button
+                      className="rounded border border-white/10 px-2 py-1 text-[10px] text-neutral-300 hover:border-ops-green hover:text-ops-green"
+                      onClick={() => {
+                        const name = window.prompt("Rename channel", channel.name);
+                        if (name?.trim()) renameMutation.mutate({ id: channel.id, name: name.trim() });
+                      }}
+                    >
+                      Rename
+                    </button>
+                    <button
+                      className="inline-flex items-center gap-1 rounded border border-red-500/20 px-2 py-1 text-[10px] text-red-400/70 hover:border-ops-red hover:text-ops-red"
+                      onClick={() => {
+                        if (window.confirm(`Remove ${channel.name}?`)) removeMutation.mutate(channel.id);
+                      }}
+                    >
+                      <Trash2 size={11} /> Remove
+                    </button>
+                  </>
+                ) : null}
+              </div>
             </div>
             {openChannelId === channel.id ? (
               <ChannelMembers channel={channel} devices={devices} onChanged={refresh} />
@@ -300,6 +304,33 @@ function ChannelsSection({ devices, units, canManage }) {
         ) : null}
       </List>
     </section>
+  );
+}
+
+// Opens the channel in the radio bar, which is where talking and cutting in
+// happen, so it keeps playing while the operator moves to another page.
+function ListenButton({ channel }) {
+  const radio = useLiveRadioSession();
+  const current = radio.mode === "monitor" && String(radio.channel?.id) === String(channel.id);
+  if (current) {
+    return (
+      <button
+        className="inline-flex items-center gap-1 rounded border border-red-500/25 px-2 py-1 text-[10px] text-red-300 hover:bg-red-500/10"
+        onClick={radio.stopListening}
+      >
+        <Square size={10} /> Stop listening
+      </button>
+    );
+  }
+  return (
+    <button
+      className="inline-flex items-center gap-1 rounded bg-ops-green px-2 py-1 text-[10px] font-bold text-black hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40"
+      disabled={radio.mode === "private" || radio.callState === "connecting"}
+      title={radio.mode === "private" ? "End the call first" : "Listen, and hold to talk, from the radio bar"}
+      onClick={() => radio.listenToChannel({ id: channel.id, name: channel.name })}
+    >
+      <Headphones size={11} /> Listen
+    </button>
   );
 }
 

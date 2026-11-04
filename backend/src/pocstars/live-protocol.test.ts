@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import protobuf from "protobufjs";
+import vendorSchema from "./vendor-schema.json";
 import {
+  encodeMessage,
   packControlFrame,
   packRtp,
   splitAmrFrames,
@@ -8,6 +11,25 @@ import {
 } from "./live-protocol";
 
 describe("POCSTARS live protocol", () => {
+  // The group commands were written by hand from the schema pulled out of the
+  // vendor's own server. A wrong field number is silently ignored on the wire.
+  test("group commands match the vendor schema", () => {
+    const vendor = protobuf.Root.fromJSON(vendorSchema as any);
+    const samples: Record<string, Record<string, unknown>> = {
+      "ptt.rr.JoinGroup": { gid: 11, uid: 40 },
+      "ptt.rr.JoinGroupAck": { result: 0, gid: 11, ip: 1, port: 30001, payload: 101, token: 7 },
+      "ptt.rr.Call": { uids: [583, 584], type: 0 },
+      "ptt.rr.CallAck": { result: 0, uids: [583] },
+      "ptt.rr.TakeMic": { uids: [583] },
+      "ptt.rr.TakeMicAck": { result: 0, uids: [583] },
+    };
+    for (const [name, value] of Object.entries(samples)) {
+      const type = vendor.lookupType(name);
+      const decoded = type.toObject(type.decode(encodeMessage(name, value)), { defaults: true });
+      expect(decoded).toMatchObject(value);
+    }
+  });
+
   test("round-trips a framed protobuf control message", () => {
     const packet = packControlFrame("ptt.rr.SingleCall", { uid: 583 });
     expect(packet.readUInt32BE(0)).toBe(packet.length - 4);

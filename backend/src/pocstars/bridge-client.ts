@@ -70,6 +70,19 @@ export class PocstarsBridgeClient extends EventEmitter {
     return this.group;
   }
 
+  async startGroupCall(targetUids: number[], companyId?: number | null) {
+    const response = await this.request(
+      { type: "group.start", deviceIds: targetUids, companyId: companyId ?? null },
+      (message) => message.type === "call.state" && message.state === "connected",
+    );
+    this.group = {
+      gid: Number(response.group?.id || 0),
+      name: String(response.group?.name || "Group call"),
+    };
+    this.mode = "private";
+    return this.group;
+  }
+
   async startWatchGroup(groupId: number, companyId?: number | null) {
     const response = await this.request(
       { type: "monitor.start", groupId, companyId: companyId ?? null },
@@ -133,9 +146,10 @@ export class PocstarsBridgeClient extends EventEmitter {
     ).then((message) => message.inventory);
   }
 
-  async requestMic() {
+  // takeover cuts off whoever is talking first: dispatcher priority.
+  async requestMic({ takeover = false } = {}) {
     await this.request(
-      { type: "ptt.start" },
+      { type: takeover ? "ptt.takeover" : "ptt.start" },
       (message) => message.type === "ptt.state" && message.state === "granted",
     );
     this.speaking = true;

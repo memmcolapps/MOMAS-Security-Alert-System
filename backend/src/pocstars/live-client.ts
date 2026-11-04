@@ -66,6 +66,11 @@ export class PocstarsLiveClient extends EventEmitter {
   private heartbeatSequence = 0;
   private speechId = "0";
   private watching = false;
+  // Set once a watched channel has been joined so the console can talk on it.
+  // A joined permanent channel is left by signing out, never by LeaveGroup:
+  // the seat's membership of the channel has to survive the session.
+  private joined = false;
+  private speakerUid = 0;
 
   uid = 0;
   name = "";
@@ -216,6 +221,7 @@ export class PocstarsLiveClient extends EventEmitter {
 
   async startSingleCall(targetUid: number) {
     this.watching = false;
+    this.joined = false;
     const generation = this.groupGeneration;
     const ack = await this.request("ptt.rr.SingleCall", { uid: targetUid }, "ptt.rr.SingleCallAck");
     if (Number(ack.result) !== 0) throw new Error(`The private call was rejected (${ack.result}).`);
@@ -258,6 +264,57 @@ export class PocstarsLiveClient extends EventEmitter {
     if (!this.group) throw new Error("No channel audio was provided.");
     this.watching = true;
     return this.group;
+  }
+
+  // A quick group call. The server builds a temporary group around these
+  // radios and this console, and pulls everyone straight in without ringing.
+  // The group disappears when the console leaves it.
+  async startGroupCall(targetUids: number[]) {
+    const uids = [...new Set(targetUids)].filter((uid) => Number.isSafeInteger(uid) && uid > 0);
+    if (!uids.length) throw new Error("Pick at least one radio for the group call.");
+    this.watching = false;
+    this.joined = false;
+    const generation = this.groupGeneration;
+    const ack = await this.request("ptt.rr.Call", { uids, type: 0 }, "ptt.rr.CallAck");
+    if (Number(ack.result) !== 0) throw new Error(`The group call was rejected (${ack.result}).`);
+    if (this.groupGeneration === generation) {
+      await this.waitFor("group", 10_000);
+    }
+    if (!this.group) throw new Error("No audio channel was assigned.");
+    return this.group;
+  }
+
+  // Watching only listens: the server refuses the microphone to a console that
+  // has not joined. So the first press of talk on a watched channel joins it.
+  async joinWatchedGroup() {
+    if (!this.group) throw new Error("No channel is open.");
+    if (this.joined || !this.watching) return this.group;
+    const gid = this.group.gid;
+    const ack = await this.request("ptt.rr.JoinGroup", { gid, uid: this.uid }, "ptt.rr.JoinGroupAck");
+    if (Number(ack.result) !== 0) {
+      throw new Error(`This console cannot talk on the channel (${ack.result}).`);
+    }
+    const port = Number(ack.port || ack.group?.port || 0);
+    const ip = Number(ack.ip || ack.group?.ip || 0);
+    if (port && port !== this.group.port) {
+      this.setGroup({
+        ...this.group,
+        host: this.options.audioHost || usableIp(ip, this.options.host),
+        port,
+      });
+    }
+    this.watching = false;
+    this.joined = true;
+    return this.group;
+  }
+
+  // Dispatcher priority: cuts off whoever holds the microphone so this console
+  // can take it. The caller asks for the microphone straight after.
+  async takeMic() {
+    const uids = this.speakerUid && this.speakerUid !== this.uid ? [this.speakerUid] : [];
+    if (!uids.length) return;
+    const ack = await this.request("ptt.rr.TakeMic", { uids }, "ptt.rr.TakeMicAck");
+    if (Number(ack.result) !== 0) throw new Error(`The talker could not be cut off (${ack.result}).`);
   }
 
   async requestMic() {
@@ -305,7 +362,7 @@ export class PocstarsLiveClient extends EventEmitter {
     await this.releaseMic().catch(() => {});
     const group = this.group;
     this.stopAudio();
-    if (group && this.control && !this.control.destroyed) {
+    if (group && this.control && !this.control.destroyed && !this.joined) {
       if (this.watching) {
         this.control.write(packControlFrame("ptt.rr.ByeGroup", { gid: group.gid, uid: this.uid }));
       } else {
@@ -313,6 +370,8 @@ export class PocstarsLiveClient extends EventEmitter {
       }
     }
     this.watching = false;
+    this.joined = false;
+    this.speakerUid = 0;
     this.group = null;
   }
 
@@ -405,8 +464,10 @@ export class PocstarsLiveClient extends EventEmitter {
       return;
     }
     if (name === "ptt.push.MemberGetMic") {
+      this.speakerUid = Number(value.uid) || 0;
       this.emit("speaker", { uid: Number(value.uid), speaking: true });
     } else if (name === "ptt.push.MemberLostMic") {
+      if (Number(value.uid) === this.speakerUid) this.speakerUid = 0;
       this.emit("speaker", { uid: Number(value.uid), speaking: false });
     } else if (name === "ptt.push.LostMic") {
       this.speaking = false;
