@@ -1,0 +1,3147 @@
+{
+ "nested": {
+  "ptt": {
+   "nested": {
+    "SocketAddress": {
+     "fields": {
+      "type": {
+       "type": "ptt.SocketAddress.Type",
+       "id": 1
+      },
+      "ip": {
+       "type": "bytes",
+       "id": 2
+      },
+      "port": {
+       "type": "int32",
+       "id": 3
+      }
+     },
+     "nested": {
+      "Type": {
+       "values": {
+        "IPV4": 1,
+        "IPV6": 2
+       }
+      }
+     }
+    },
+    "EncryptKey": {
+     "fields": {
+      "method": {
+       "type": "string",
+       "id": 1
+      },
+      "key": {
+       "type": "bytes",
+       "id": 2
+      }
+     }
+    },
+    "AgentInfo": {
+     "fields": {
+      "id": {
+       "type": "int32",
+       "id": 1
+      },
+      "name": {
+       "type": "string",
+       "id": 2
+      },
+      "prefix": {
+       "type": "string",
+       "id": 3
+      }
+     }
+    },
+    "CompanyInfo": {
+     "fields": {
+      "id": {
+       "type": "int32",
+       "id": 1
+      },
+      "name": {
+       "type": "string",
+       "id": 2
+      },
+      "agent": {
+       "type": "ptt.AgentInfo",
+       "id": 100
+      }
+     }
+    },
+    "UserInfo": {
+     "fields": {
+      "uid": {
+       "type": "uint32",
+       "id": 1
+      },
+      "name": {
+       "type": "string",
+       "id": 2
+      },
+      "role": {
+       "type": "int32",
+       "id": 3
+      },
+      "online": {
+       "type": "bool",
+       "id": 4
+      },
+      "audioEnabled": {
+       "type": "bool",
+       "id": 5
+      },
+      "locationOn": {
+       "type": "bool",
+       "id": 6
+      },
+      "company": {
+       "type": "ptt.CompanyInfo",
+       "id": 100
+      }
+     }
+    },
+    "User": {
+     "fields": {
+      "uid": {
+       "type": "uint32",
+       "id": 1
+      },
+      "timestamp": {
+       "type": "uint32",
+       "id": 2
+      },
+      "name": {
+       "type": "string",
+       "id": 3
+      },
+      "online": {
+       "type": "bool",
+       "id": 4
+      },
+      "audioEnabled": {
+       "type": "bool",
+       "id": 5
+      },
+      "sleep": {
+       "type": "bool",
+       "id": 6
+      },
+      "dnd": {
+       "type": "bool",
+       "id": 7
+      },
+      "role": {
+       "type": "int32",
+       "id": 8
+      },
+      "department": {
+       "type": "uint32",
+       "id": 9
+      },
+      "locationOn": {
+       "type": "bool",
+       "id": 10
+      },
+      "locationPeriod": {
+       "type": "uint32",
+       "id": 11
+      },
+      "encryptEnabled": {
+       "type": "bool",
+       "id": 12
+      },
+      "sortWeight": {
+       "type": "int32",
+       "id": 13
+      }
+     }
+    },
+    "Member": {
+     "fields": {
+      "user": {
+       "type": "ptt.User",
+       "id": 1
+      },
+      "ingroup": {
+       "type": "bool",
+       "id": 2
+      },
+      "prior": {
+       "type": "int32",
+       "id": 3
+      },
+      "audioEnabled": {
+       "type": "bool",
+       "id": 4
+      }
+     }
+    },
+    "ChatUser": {
+     "fields": {
+      "uid": {
+       "type": "uint32",
+       "id": 1
+      },
+      "expectPayload": {
+       "type": "uint32",
+       "id": 2
+      },
+      "acceptPayloads": {
+       "type": "uint32",
+       "id": 3,
+       "rule": "repeated"
+      },
+      "role": {
+       "type": "int32",
+       "id": 4
+      },
+      "priority": {
+       "type": "int32",
+       "id": 5
+      },
+      "audioEnabled": {
+       "type": "bool",
+       "id": 6
+      }
+     }
+    },
+    "Group": {
+     "fields": {
+      "gid": {
+       "type": "uint32",
+       "id": 1
+      },
+      "timestamp": {
+       "type": "uint32",
+       "id": 2
+      },
+      "name": {
+       "type": "string",
+       "id": 3
+      },
+      "type": {
+       "type": "ptt.Group.GroupType",
+       "id": 4
+      },
+      "prior": {
+       "type": "int32",
+       "id": 5
+      },
+      "ip": {
+       "type": "uint32",
+       "id": 6
+      },
+      "port": {
+       "type": "uint32",
+       "id": 7
+      },
+      "creator": {
+       "type": "uint32",
+       "id": 8
+      },
+      "address": {
+       "type": "ptt.SocketAddress",
+       "id": 10
+      },
+      "encrypt": {
+       "type": "ptt.EncryptKey",
+       "id": 11
+      },
+      "sortWeight": {
+       "type": "int32",
+       "id": 12
+      }
+     },
+     "nested": {
+      "GroupType": {
+       "values": {
+        "BUILTIN": 0,
+        "STATIC": 1,
+        "TEMP": 2,
+        "RESERVE_1": 3,
+        "AREA": 4,
+        "ADVANCED": 5,
+        "MERGED": 6
+       }
+      }
+     }
+    },
+    "GroupMembers": {
+     "fields": {
+      "gid": {
+       "type": "uint32",
+       "id": 1
+      },
+      "ingroups": {
+       "type": "uint32",
+       "id": 2,
+       "rule": "repeated"
+      },
+      "outgroups": {
+       "type": "uint32",
+       "id": 3,
+       "rule": "repeated"
+      },
+      "members": {
+       "type": "ptt.User",
+       "id": 4,
+       "rule": "repeated"
+      }
+     }
+    },
+    "GroupMembers2": {
+     "fields": {
+      "gid": {
+       "type": "uint32",
+       "id": 1
+      },
+      "members": {
+       "type": "ptt.Member",
+       "id": 2,
+       "rule": "repeated"
+      },
+      "total": {
+       "type": "uint32",
+       "id": 3
+      },
+      "pageNum": {
+       "type": "uint32",
+       "id": 4
+      },
+      "page": {
+       "type": "uint32",
+       "id": 5
+      }
+     }
+    },
+    "Department": {
+     "fields": {
+      "did": {
+       "type": "uint32",
+       "id": 1
+      },
+      "timestamp": {
+       "type": "uint32",
+       "id": 2
+      },
+      "name": {
+       "type": "string",
+       "id": 3
+      },
+      "subDepartments": {
+       "type": "ptt.Department",
+       "id": 4,
+       "rule": "repeated"
+      },
+      "chatGroups": {
+       "type": "ptt.Group",
+       "id": 5,
+       "rule": "repeated"
+      },
+      "super": {
+       "type": "uint32",
+       "id": 6
+      }
+     }
+    },
+    "DepartmentMembers": {
+     "fields": {
+      "did": {
+       "type": "uint32",
+       "id": 1
+      },
+      "members": {
+       "type": "ptt.User",
+       "id": 2,
+       "rule": "repeated"
+      }
+     }
+    },
+    "Coordinate": {
+     "fields": {
+      "longitude": {
+       "type": "double",
+       "id": 1
+      },
+      "latitude": {
+       "type": "double",
+       "id": 2
+      },
+      "altitude": {
+       "type": "double",
+       "id": 3
+      }
+     }
+    },
+    "Location": {
+     "fields": {
+      "coordinate": {
+       "type": "ptt.Coordinate",
+       "id": 1
+      },
+      "type": {
+       "type": "ptt.Location.Type",
+       "id": 2
+      },
+      "address": {
+       "type": "string",
+       "id": 3
+      },
+      "datetime": {
+       "type": "ptt.DateTime",
+       "id": 4
+      },
+      "speed": {
+       "type": "double",
+       "id": 5
+      },
+      "dirang": {
+       "type": "double",
+       "id": 6
+      },
+      "satellites": {
+       "type": "int32",
+       "id": 7
+      },
+      "resend": {
+       "type": "bool",
+       "id": 8
+      },
+      "devicesn": {
+       "type": "string",
+       "id": 9
+      },
+      "source": {
+       "type": "int32",
+       "id": 10
+      },
+      "accuracy": {
+       "type": "double",
+       "id": 11
+      },
+      "exception": {
+       "type": "uint32",
+       "id": 12
+      }
+     },
+     "nested": {
+      "Type": {
+       "values": {
+        "WGS84": 1,
+        "GCJ02": 2,
+        "XA80": 3,
+        "BG54": 4,
+        "BD09": 5
+       }
+      },
+      "Exception": {
+       "values": {
+        "OK": 0,
+        "NO_BACKGROUND_PERMISSION": 1,
+        "NO_COARSE_PERMISSION": 2,
+        "NO_FINE_PERMISSION": 4,
+        "NO_GPS_PROVIDER": 8,
+        "NO_NETWORK_PROVIDER": 16,
+        "NO_WIFI": 32,
+        "INVALID": 32768
+       }
+      }
+     }
+    },
+    "Configure": {
+     "fields": {
+      "defaultGroup": {
+       "type": "uint32",
+       "id": 1
+      },
+      "locationReportPeriod": {
+       "type": "uint32",
+       "id": 2
+      },
+      "audioEnabled": {
+       "type": "bool",
+       "id": 3
+      },
+      "switchLocation": {
+       "type": "bool",
+       "id": 4
+      },
+      "toneQuality": {
+       "type": "int32",
+       "id": 5
+      },
+      "smsCenter": {
+       "type": "string",
+       "id": 6,
+       "rule": "repeated"
+      },
+      "locationMode": {
+       "type": "int32",
+       "id": 7
+      },
+      "defaultWatchgroup": {
+       "type": "ptt.Group",
+       "id": 8,
+       "rule": "repeated"
+      },
+      "defaultGroupInfo": {
+       "type": "ptt.Group",
+       "id": 9
+      },
+      "multigroupEnabled": {
+       "type": "bool",
+       "id": 10
+      },
+      "extMemberStatusEnabled": {
+       "type": "bool",
+       "id": 11
+      },
+      "networkType": {
+       "type": "int32",
+       "id": 12
+      },
+      "satellitesMin": {
+       "type": "int32",
+       "id": 13
+      },
+      "allowcall": {
+       "type": "bool",
+       "id": 14
+      },
+      "allowcalled": {
+       "type": "bool",
+       "id": 15
+      },
+      "encryptEnabled": {
+       "type": "bool",
+       "id": 16
+      },
+      "encryptKey": {
+       "type": "ptt.EncryptKey",
+       "id": 17
+      }
+     }
+    },
+    "MediaFile": {
+     "fields": {
+      "mime": {
+       "type": "uint32",
+       "id": 1
+      },
+      "name": {
+       "type": "string",
+       "id": 2
+      },
+      "data": {
+       "type": "bytes",
+       "id": 3
+      }
+     }
+    },
+    "Worksheet": {
+     "fields": {
+      "phone": {
+       "type": "string",
+       "id": 1
+      },
+      "currentAddress": {
+       "type": "string",
+       "id": 2
+      },
+      "createTime": {
+       "type": "string",
+       "id": 3
+      },
+      "mediaFile": {
+       "type": "ptt.MediaFile",
+       "id": 4
+      }
+     }
+    },
+    "DateTime": {
+     "fields": {
+      "year": {
+       "type": "uint32",
+       "id": 1
+      },
+      "month": {
+       "type": "uint32",
+       "id": 2
+      },
+      "day": {
+       "type": "uint32",
+       "id": 3
+      },
+      "hour": {
+       "type": "uint32",
+       "id": 4
+      },
+      "minute": {
+       "type": "uint32",
+       "id": 5
+      },
+      "second": {
+       "type": "uint32",
+       "id": 6
+      },
+      "millisecond": {
+       "type": "uint32",
+       "id": 7
+      }
+     }
+    },
+    "SystemInfo": {
+     "fields": {
+      "os": {
+       "type": "string",
+       "id": 1
+      },
+      "esn": {
+       "type": "string",
+       "id": 2
+      },
+      "meid": {
+       "type": "string",
+       "id": 3
+      },
+      "imei": {
+       "type": "string",
+       "id": 4
+      },
+      "context": {
+       "type": "string",
+       "id": 5
+      },
+      "serialNumber": {
+       "type": "string",
+       "id": 6
+      }
+     }
+    },
+    "MobileCardInfo": {
+     "fields": {
+      "operator": {
+       "type": "string",
+       "id": 1
+      },
+      "imsi": {
+       "type": "string",
+       "id": 2
+      },
+      "mobileno": {
+       "type": "string",
+       "id": 3
+      },
+      "iccid": {
+       "type": "string",
+       "id": 4
+      }
+     }
+    },
+    "Server": {
+     "fields": {
+      "ip": {
+       "type": "uint32",
+       "id": 1
+      },
+      "port": {
+       "type": "uint32",
+       "id": 2
+      },
+      "name": {
+       "type": "string",
+       "id": 3
+      },
+      "address": {
+       "type": "ptt.SocketAddress",
+       "id": 4
+      }
+     }
+    },
+    "Version": {
+     "fields": {
+      "major": {
+       "type": "int32",
+       "id": 1
+      },
+      "minor": {
+       "type": "int32",
+       "id": 2
+      },
+      "patch": {
+       "type": "int32",
+       "id": 3
+      }
+     }
+    },
+    "net": {
+     "nested": {
+      "HeartBeat": {
+       "fields": {
+        "timestamp": {
+         "type": "uint32",
+         "id": 1
+        },
+        "gid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "uid": {
+         "type": "uint32",
+         "id": 3
+        },
+        "seq": {
+         "type": "uint32",
+         "id": 4
+        }
+       }
+      },
+      "Ping": {
+       "fields": {
+        "timestamp": {
+         "type": "uint32",
+         "id": 1
+        },
+        "gid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "uid": {
+         "type": "uint32",
+         "id": 3
+        },
+        "seq": {
+         "type": "uint32",
+         "id": 4
+        }
+       }
+      },
+      "Pong": {
+       "fields": {
+        "timestamp": {
+         "type": "uint32",
+         "id": 1
+        },
+        "gid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "uid": {
+         "type": "uint32",
+         "id": 3
+        },
+        "seq": {
+         "type": "uint32",
+         "id": 4
+        },
+        "tsRes": {
+         "type": "uint32",
+         "id": 5
+        }
+       }
+      }
+     }
+    },
+    "rr": {
+     "nested": {
+      "Login": {
+       "fields": {
+        "account": {
+         "type": "string",
+         "id": 1
+        },
+        "password": {
+         "type": "string",
+         "id": 2
+        },
+        "roles": {
+         "type": "uint32",
+         "id": 3
+        },
+        "version": {
+         "type": "int32",
+         "id": 4
+        },
+        "platform": {
+         "type": "string",
+         "id": 5
+        },
+        "device": {
+         "type": "string",
+         "id": 6
+        },
+        "expectPayload": {
+         "type": "uint32",
+         "id": 7
+        },
+        "acceptPayloads": {
+         "type": "uint32",
+         "id": 8,
+         "rule": "repeated"
+        },
+        "system": {
+         "type": "ptt.SystemInfo",
+         "id": 9
+        },
+        "card": {
+         "type": "ptt.MobileCardInfo",
+         "id": 10
+        },
+        "productId": {
+         "type": "string",
+         "id": 11
+        },
+        "version2": {
+         "type": "string",
+         "id": 12
+        },
+        "bottomversion": {
+         "type": "string",
+         "id": 13
+        },
+        "supportInviting": {
+         "type": "bool",
+         "id": 14
+        },
+        "authMethod": {
+         "type": "int32",
+         "id": 100
+        },
+        "authData1": {
+         "type": "bytes",
+         "id": 101
+        },
+        "authData2": {
+         "type": "bytes",
+         "id": 102
+        }
+       }
+      },
+      "LoginAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "self": {
+         "type": "ptt.User",
+         "id": 2
+        },
+        "conf": {
+         "type": "ptt.Configure",
+         "id": 3
+        },
+        "what": {
+         "type": "string",
+         "id": 4
+        },
+        "expiredSeconds": {
+         "type": "uint32",
+         "id": 5
+        },
+        "version": {
+         "type": "ptt.Version",
+         "id": 6
+        }
+       }
+      },
+      "Logout": {
+       "fields": {}
+      },
+      "LogoutAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        }
+       }
+      },
+      "QueryGroup": {
+       "fields": {
+        "detail": {
+         "type": "ptt.rr.QueryGroup.DetailLevel",
+         "id": 1
+        },
+        "timestamp": {
+         "type": "uint32",
+         "id": 2
+        },
+        "includeBuiltin": {
+         "type": "bool",
+         "id": 3
+        },
+        "includeStatic": {
+         "type": "bool",
+         "id": 4
+        },
+        "includeTemp": {
+         "type": "bool",
+         "id": 5
+        },
+        "includeCreated": {
+         "type": "bool",
+         "id": 6
+        }
+       },
+       "nested": {
+        "DetailLevel": {
+         "values": {
+          "ONLY_ID": 0,
+          "GROUP_INFO": 1
+         }
+        }
+       }
+      },
+      "QueryGroupAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "groups": {
+         "type": "ptt.Group",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "QueryEnterpriseGroup": {
+       "fields": {
+        "rangeOption": {
+         "type": "ptt.rr.QueryEnterpriseGroup.RangeOption",
+         "id": 1
+        },
+        "includeBuiltin": {
+         "type": "bool",
+         "id": 2
+        },
+        "includeStatic": {
+         "type": "bool",
+         "id": 3
+        }
+       },
+       "nested": {
+        "RangeOption": {
+         "values": {
+          "COMPANY_AS_ROOT": 0,
+          "DEPARTMENT_AS_ROOT": 1,
+          "PARALLEL_DEPARTMENTS": 3
+         }
+        }
+       }
+      },
+      "QueryEnterpriseGroupAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "groups": {
+         "type": "ptt.Group",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "QueryMembers": {
+       "fields": {
+        "gids": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        },
+        "detail": {
+         "type": "ptt.rr.QueryMembers.DetailLevel",
+         "id": 2
+        },
+        "version2": {
+         "type": "bool",
+         "id": 3
+        },
+        "allowPage": {
+         "type": "bool",
+         "id": 4
+        }
+       },
+       "nested": {
+        "DetailLevel": {
+         "values": {
+          "ONLY_ID": 0,
+          "USER_INFO": 1
+         }
+        }
+       }
+      },
+      "QueryMembersAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "members": {
+         "type": "ptt.GroupMembers",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "QueryMembersAck2": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "members": {
+         "type": "ptt.GroupMembers2",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "QueryContacts": {
+       "fields": {
+        "detail": {
+         "type": "ptt.rr.QueryContacts.DetailLevel",
+         "id": 1
+        },
+        "timestamp": {
+         "type": "uint32",
+         "id": 2
+        },
+        "onlyOnline": {
+         "type": "bool",
+         "id": 3
+        }
+       },
+       "nested": {
+        "DetailLevel": {
+         "values": {
+          "ONLY_ID": 0,
+          "INFOS": 1
+         }
+        }
+       }
+      },
+      "QueryContactsAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "users": {
+         "type": "ptt.User",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "QueryUsers": {
+       "fields": {
+        "uids": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        },
+        "onlyOnline": {
+         "type": "bool",
+         "id": 2
+        },
+        "department": {
+         "type": "uint32",
+         "id": 3
+        }
+       }
+      },
+      "QueryUsersAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "onlyOnline": {
+         "type": "bool",
+         "id": 2
+        },
+        "department": {
+         "type": "uint32",
+         "id": 3
+        },
+        "users": {
+         "type": "ptt.User",
+         "id": 4,
+         "rule": "repeated"
+        }
+       }
+      },
+      "QueryDepartments": {
+       "fields": {
+        "queryOption": {
+         "type": "ptt.rr.QueryDepartments.QueryOption",
+         "id": 1
+        },
+        "departIds": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        },
+        "queryGroupOption": {
+         "type": "ptt.rr.QueryDepartments.QueryGroupOption",
+         "id": 3
+        }
+       },
+       "nested": {
+        "QueryOption": {
+         "values": {
+          "SELF_SUBS": 0,
+          "ONLY_SUBS": 1,
+          "EXPLICIT": 2,
+          "PARALLEL": 3
+         }
+        },
+        "QueryGroupOption": {
+         "values": {
+          "ONLY_BUILTIN": 0,
+          "ONLY_STATIC": 1,
+          "BUILTIN_AND_STATIC": 2
+         }
+        }
+       }
+      },
+      "QueryDepartmentsAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "departments": {
+         "type": "ptt.Department",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "QueryDepartmentMembers": {
+       "fields": {
+        "dids": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        },
+        "onlyOnline": {
+         "type": "bool",
+         "id": 2
+        }
+       }
+      },
+      "QueryDepartmentMembersAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "members": {
+         "type": "ptt.DepartmentMembers",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "QueryDepartmentTree": {
+       "fields": {
+        "did": {
+         "type": "uint32",
+         "id": 1
+        }
+       }
+      },
+      "QueryDepartmentTreeAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "department": {
+         "type": "ptt.Department",
+         "id": 2
+        }
+       }
+      },
+      "JoinGroup": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "uid": {
+         "type": "uint32",
+         "id": 2
+        }
+       }
+      },
+      "JoinGroupAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "gid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "ip": {
+         "type": "uint32",
+         "id": 3
+        },
+        "port": {
+         "type": "uint32",
+         "id": 4
+        },
+        "payload": {
+         "type": "uint32",
+         "id": 5
+        },
+        "token": {
+         "type": "uint32",
+         "id": 6
+        },
+        "group": {
+         "type": "ptt.Group",
+         "id": 7
+        }
+       }
+      },
+      "WatchGroup": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "uid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "expectPt": {
+         "type": "uint32",
+         "id": 3
+        },
+        "acceptPt": {
+         "type": "uint32",
+         "id": 4,
+         "rule": "repeated"
+        },
+        "store": {
+         "type": "bool",
+         "id": 5
+        }
+       }
+      },
+      "WatchGroupAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "gid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "group": {
+         "type": "ptt.Group",
+         "id": 3
+        }
+       }
+      },
+      "ByeGroup": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "uid": {
+         "type": "uint32",
+         "id": 2
+        }
+       }
+      },
+      "IgnoreTalk": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "uid": {
+         "type": "uint32",
+         "id": 2
+        }
+       }
+      },
+      "ContinueTalk": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "uid": {
+         "type": "uint32",
+         "id": 2
+        }
+       }
+      },
+      "Dnd": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "uid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "dnd": {
+         "type": "bool",
+         "id": 3
+        }
+       }
+      },
+      "LeaveGroup": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        }
+       }
+      },
+      "LeaveGroupAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "gid": {
+         "type": "uint32",
+         "id": 2
+        }
+       }
+      },
+      "RequestMic": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "uid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "payload": {
+         "type": "uint32",
+         "id": 3
+        },
+        "sessionId": {
+         "type": "string",
+         "id": 4
+        },
+        "timestamp": {
+         "type": "uint32",
+         "id": 5
+        }
+       }
+      },
+      "RequestMicAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "gid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "reason": {
+         "type": "int32",
+         "id": 3
+        },
+        "speechId": {
+         "type": "uint64",
+         "id": 4
+        }
+       }
+      },
+      "ReleaseMic": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "uid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "timestamp": {
+         "type": "uint32",
+         "id": 3
+        },
+        "speechId": {
+         "type": "uint64",
+         "id": 4
+        }
+       }
+      },
+      "ReleaseMicAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "gid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "speechId": {
+         "type": "uint64",
+         "id": 3
+        }
+       }
+      },
+      "Call": {
+       "fields": {
+        "uids": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        },
+        "type": {
+         "type": "uint32",
+         "id": 2
+        }
+       }
+      },
+      "CallAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "uids": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "SingleCall": {
+       "fields": {
+        "uid": {
+         "type": "uint32",
+         "id": 1
+        }
+       }
+      },
+      "SingleCallAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        }
+       }
+      },
+      "QuickDial": {
+       "fields": {
+        "nums": {
+         "type": "string",
+         "id": 1
+        }
+       }
+      },
+      "QuickDialAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "userinfo": {
+         "type": "ptt.UserInfo",
+         "id": 2
+        },
+        "duplicate": {
+         "type": "ptt.UserInfo",
+         "id": 3,
+         "rule": "repeated"
+        }
+       }
+      },
+      "ChangeName": {
+       "fields": {
+        "name": {
+         "type": "string",
+         "id": 1
+        }
+       }
+      },
+      "ChangeNameAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "name": {
+         "type": "string",
+         "id": 2
+        }
+       }
+      },
+      "ChangePassword": {
+       "fields": {
+        "oldPwdMd5": {
+         "type": "string",
+         "id": 1
+        },
+        "newPwdMd5": {
+         "type": "string",
+         "id": 2
+        }
+       }
+      },
+      "ChangePasswordAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "password": {
+         "type": "string",
+         "id": 2
+        }
+       }
+      },
+      "MakeContacts": {
+       "fields": {
+        "text": {
+         "type": "string",
+         "id": 1
+        },
+        "accounts": {
+         "type": "string",
+         "id": 2,
+         "rule": "repeated"
+        },
+        "uids": {
+         "type": "uint32",
+         "id": 3,
+         "rule": "repeated"
+        }
+       }
+      },
+      "MakeContactsAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        }
+       }
+      },
+      "MakeContactsResponse": {
+       "fields": {
+        "acceptUids": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        },
+        "refusedUids": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "MakeContactsResponseAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "newContactsUids": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "RemoveContacts": {
+       "fields": {
+        "uids": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        }
+       }
+      },
+      "RemoveContactsAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "rmUids": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "ReportLocation": {
+       "fields": {
+        "timestamp": {
+         "type": "uint32",
+         "id": 1
+        },
+        "coordinate": {
+         "type": "ptt.Coordinate",
+         "id": 2
+        },
+        "address": {
+         "type": "string",
+         "id": 3
+        },
+        "datetime": {
+         "type": "ptt.DateTime",
+         "id": 4
+        },
+        "locations": {
+         "type": "ptt.Location",
+         "id": 5,
+         "rule": "repeated"
+        }
+       }
+      },
+      "ReportLocationAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        }
+       }
+      },
+      "Kick": {
+       "fields": {
+        "uid": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        }
+       }
+      },
+      "KickAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "kickedUids": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "CreateGroup": {
+       "fields": {
+        "name": {
+         "type": "string",
+         "id": 1
+        }
+       }
+      },
+      "CreateGroupAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "group": {
+         "type": "ptt.Group",
+         "id": 2
+        }
+       }
+      },
+      "DeleteGroup": {
+       "fields": {
+        "gids": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        }
+       }
+      },
+      "DeleteGroupAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "deletedGids": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "ModifyGroup": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "newName": {
+         "type": "string",
+         "id": 2
+        }
+       }
+      },
+      "ModifyGroupAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "gid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "newName": {
+         "type": "string",
+         "id": 3
+        }
+       }
+      },
+      "EmpowerMembership": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "uids": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "EmpowerMembershipAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "gid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "uids": {
+         "type": "uint32",
+         "id": 3,
+         "rule": "repeated"
+        }
+       }
+      },
+      "DepriveMembership": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "uids": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "DepriveMembershipAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "gid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "uids": {
+         "type": "uint32",
+         "id": 3,
+         "rule": "repeated"
+        }
+       }
+      },
+      "Dispatch": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "uids": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "DispatchAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "gid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "dispatchedUids": {
+         "type": "uint32",
+         "id": 3,
+         "rule": "repeated"
+        }
+       }
+      },
+      "ConfigureUser": {
+       "fields": {
+        "uids": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        },
+        "accountEnabled": {
+         "type": "bool",
+         "id": 2
+        },
+        "audioEnabled": {
+         "type": "bool",
+         "id": 3
+        },
+        "switchLocation": {
+         "type": "bool",
+         "id": 4
+        },
+        "locationReportPeriod": {
+         "type": "uint32",
+         "id": 5
+        },
+        "encryptEnabled": {
+         "type": "bool",
+         "id": 6
+        }
+       }
+      },
+      "ConfigureUserAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "accountEnabled": {
+         "type": "bool",
+         "id": 2
+        },
+        "audioEnabled": {
+         "type": "bool",
+         "id": 3
+        },
+        "uids": {
+         "type": "uint32",
+         "id": 4,
+         "rule": "repeated"
+        },
+        "switchLocation": {
+         "type": "bool",
+         "id": 5
+        },
+        "locationReportPeriod": {
+         "type": "uint32",
+         "id": 6
+        },
+        "encryptEnabled": {
+         "type": "bool",
+         "id": 7
+        }
+       }
+      },
+      "TakeMic": {
+       "fields": {
+        "uids": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        }
+       }
+      },
+      "TakeMicAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "uids": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "SynchDatabase": {
+       "fields": {}
+      },
+      "SynchDatabaseAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        }
+       }
+      },
+      "PostWorksheet": {
+       "fields": {
+        "worksheets": {
+         "type": "ptt.Worksheet",
+         "id": 1,
+         "rule": "repeated"
+        },
+        "uids": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "PostWorksheetAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "postCount": {
+         "type": "int32",
+         "id": 2
+        }
+       }
+      },
+      "QueryServer": {
+       "fields": {
+        "version": {
+         "type": "string",
+         "id": 1
+        },
+        "account": {
+         "type": "string",
+         "id": 2
+        },
+        "system": {
+         "type": "ptt.SystemInfo",
+         "id": 3
+        },
+        "card": {
+         "type": "ptt.MobileCardInfo",
+         "id": 4
+        },
+        "accountModel": {
+         "type": "int32",
+         "id": 5
+        },
+        "type": {
+         "type": "ptt.rr.QueryServer.Type",
+         "id": 6
+        }
+       },
+       "nested": {
+        "Type": {
+         "values": {
+          "T_GD83": 1,
+          "T_MC8332": 2,
+          "T_BREW": 3,
+          "T_ANDROID": 4,
+          "T_LINUX_4G": 5
+         }
+        }
+       }
+      },
+      "QueryServerAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "servers": {
+         "type": "ptt.Server",
+         "id": 2,
+         "rule": "repeated"
+        },
+        "userModel": {
+         "type": "int32",
+         "id": 3
+        },
+        "what": {
+         "type": "string",
+         "id": 4
+        },
+        "loginAccount": {
+         "type": "string",
+         "id": 5
+        },
+        "mmsServer": {
+         "type": "ptt.Server",
+         "id": 6
+        },
+        "serverName": {
+         "type": "string",
+         "id": 7
+        }
+       }
+      },
+      "RequestConfigure": {
+       "fields": {
+        "version": {
+         "type": "string",
+         "id": 1
+        },
+        "account": {
+         "type": "string",
+         "id": 2
+        },
+        "system": {
+         "type": "ptt.SystemInfo",
+         "id": 3
+        },
+        "card": {
+         "type": "ptt.MobileCardInfo",
+         "id": 4
+        }
+       }
+      },
+      "RequestConfigureAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "conf": {
+         "type": "ptt.Configure",
+         "id": 2
+        }
+       }
+      },
+      "RequestActivate": {
+       "fields": {
+        "version": {
+         "type": "string",
+         "id": 1
+        },
+        "system": {
+         "type": "ptt.SystemInfo",
+         "id": 2
+        },
+        "card": {
+         "type": "ptt.MobileCardInfo",
+         "id": 3
+        }
+       }
+      },
+      "RequestActivateAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "account": {
+         "type": "string",
+         "id": 2
+        },
+        "password": {
+         "type": "string",
+         "id": 3
+        },
+        "conf": {
+         "type": "ptt.Configure",
+         "id": 4
+        }
+       }
+      },
+      "CustomBroadcast": {
+       "fields": {
+        "method": {
+         "type": "ptt.rr.CustomBroadcast.TARGET_METHOD",
+         "id": 1
+        },
+        "ids": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        },
+        "msgName": {
+         "type": "string",
+         "id": 3
+        },
+        "msg": {
+         "type": "bytes",
+         "id": 4
+        }
+       },
+       "nested": {
+        "TARGET_METHOD": {
+         "values": {
+          "EXPLICIT": 0,
+          "COMPANY": 1,
+          "GROUP_COMPANY": 2,
+          "ALL_DISPATCHERS": 3
+         }
+        }
+       }
+      },
+      "CustomBroadcastAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "postCount": {
+         "type": "uint32",
+         "id": 2
+        },
+        "postIds": {
+         "type": "uint32",
+         "id": 3,
+         "rule": "repeated"
+        }
+       }
+      },
+      "ChangeUserRoles": {
+       "fields": {
+        "uids": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        },
+        "roles": {
+         "type": "uint32",
+         "id": 2
+        }
+       }
+      },
+      "ChangeUserRolesAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "roles": {
+         "type": "uint32",
+         "id": 2
+        },
+        "uids": {
+         "type": "uint32",
+         "id": 3,
+         "rule": "repeated"
+        }
+       }
+      },
+      "GetWatchGroup": {
+       "fields": {}
+      },
+      "GetWatchGroupAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "gids": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "AddWatchGroup": {
+       "fields": {
+        "gids": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        }
+       }
+      },
+      "AddWatchGroupAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "addGids": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        },
+        "gids": {
+         "type": "uint32",
+         "id": 3,
+         "rule": "repeated"
+        }
+       }
+      },
+      "RemoveWatchGroup": {
+       "fields": {
+        "gids": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        }
+       }
+      },
+      "RemoveWatchGroupAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "rmGids": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        },
+        "gids": {
+         "type": "uint32",
+         "id": 3,
+         "rule": "repeated"
+        }
+       }
+      },
+      "WatchGroupEx": {
+       "fields": {
+        "gids": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        },
+        "uid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "expectPt": {
+         "type": "uint32",
+         "id": 3
+        },
+        "acceptPt": {
+         "type": "uint32",
+         "id": 4,
+         "rule": "repeated"
+        },
+        "store": {
+         "type": "bool",
+         "id": 5
+        }
+       }
+      },
+      "WatchGroupExAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "groups": {
+         "type": "ptt.Group",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "Invite": {
+       "fields": {
+        "invitees": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        },
+        "withAudio": {
+         "type": "bool",
+         "id": 2
+        },
+        "withVideo": {
+         "type": "bool",
+         "id": 3
+        },
+        "msg": {
+         "type": "string",
+         "id": 4
+        },
+        "isRealtime": {
+         "type": "bool",
+         "id": 5
+        }
+       }
+      },
+      "InviteAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        },
+        "inviteId": {
+         "type": "uint64",
+         "id": 2
+        },
+        "invited": {
+         "type": "uint32",
+         "id": 3,
+         "rule": "repeated"
+        },
+        "isRealtime": {
+         "type": "bool",
+         "id": 4
+        }
+       }
+      },
+      "ResponseInvite": {
+       "fields": {
+        "inviteId": {
+         "type": "uint64",
+         "id": 1
+        },
+        "inviter": {
+         "type": "uint32",
+         "id": 2
+        },
+        "accept": {
+         "type": "bool",
+         "id": 3
+        }
+       }
+      },
+      "ResponseInviteAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        }
+       }
+      },
+      "CancelInvite": {
+       "fields": {
+        "inviteId": {
+         "type": "uint64",
+         "id": 1
+        },
+        "invitee": {
+         "type": "uint32",
+         "id": 2
+        }
+       }
+      },
+      "CancelInviteAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        }
+       }
+      },
+      "SetEncrypt": {
+       "fields": {
+        "scope": {
+         "type": "ptt.rr.SetEncrypt.Scope",
+         "id": 1
+        },
+        "targets": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        },
+        "encrypt": {
+         "type": "ptt.EncryptKey",
+         "id": 3
+        }
+       },
+       "nested": {
+        "Scope": {
+         "values": {
+          "DEPARTMENT": 0,
+          "GROUP": 1,
+          "USER": 2
+         }
+        }
+       }
+      },
+      "SetEncryptAck": {
+       "fields": {
+        "result": {
+         "type": "int32",
+         "id": 1
+        }
+       }
+      }
+     }
+    },
+    "push": {
+     "nested": {
+      "Reconfigured": {
+       "fields": {
+        "conf": {
+         "type": "ptt.Configure",
+         "id": 1
+        }
+       }
+      },
+      "UsersChanged": {
+       "fields": {
+        "users": {
+         "type": "ptt.User",
+         "id": 1,
+         "rule": "repeated"
+        }
+       }
+      },
+      "GroupListChanged": {
+       "fields": {
+        "updateGroups": {
+         "type": "ptt.Group",
+         "id": 1,
+         "rule": "repeated"
+        },
+        "rmGroups": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "MembersChanged": {
+       "fields": {
+        "changes": {
+         "type": "ptt.push.MembersChanged.MemberChanged",
+         "id": 1,
+         "rule": "repeated"
+        }
+       },
+       "nested": {
+        "MemberChanged": {
+         "fields": {
+          "gid": {
+           "type": "uint32",
+           "id": 1
+          },
+          "joinedMembers": {
+           "type": "uint32",
+           "id": 2,
+           "rule": "repeated"
+          },
+          "leftMembers": {
+           "type": "uint32",
+           "id": 3,
+           "rule": "repeated"
+          },
+          "updateMembers": {
+           "type": "ptt.User",
+           "id": 4,
+           "rule": "repeated"
+          },
+          "rmMembers": {
+           "type": "uint32",
+           "id": 5,
+           "rule": "repeated"
+          },
+          "updateMms": {
+           "type": "ptt.Member",
+           "id": 6,
+           "rule": "repeated"
+          }
+         }
+        }
+       }
+      },
+      "ContactshipAsked": {
+       "fields": {
+        "requests": {
+         "type": "ptt.push.ContactshipAsked.Request",
+         "id": 1,
+         "rule": "repeated"
+        }
+       },
+       "nested": {
+        "Request": {
+         "fields": {
+          "uid": {
+           "type": "uint32",
+           "id": 1
+          },
+          "text": {
+           "type": "string",
+           "id": 2
+          },
+          "uname": {
+           "type": "string",
+           "id": 3
+          }
+         }
+        }
+       }
+      },
+      "ContactsChanged": {
+       "fields": {
+        "updateContacts": {
+         "type": "ptt.User",
+         "id": 1,
+         "rule": "repeated"
+        },
+        "rmContacts": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "MemberGetMic": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "uid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "sessionId": {
+         "type": "string",
+         "id": 3
+        },
+        "speechId": {
+         "type": "uint64",
+         "id": 4
+        }
+       }
+      },
+      "MemberLostMic": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "uid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "speechId": {
+         "type": "uint64",
+         "id": 3
+        }
+       }
+      },
+      "LostMic": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "reason": {
+         "type": "string",
+         "id": 2
+        },
+        "reasoncode": {
+         "type": "int32",
+         "id": 3
+        },
+        "speechId": {
+         "type": "uint64",
+         "id": 4
+        }
+       }
+      },
+      "CurrentGroup": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "reason": {
+         "type": "string",
+         "id": 2
+        },
+        "ip": {
+         "type": "uint32",
+         "id": 3
+        },
+        "port": {
+         "type": "uint32",
+         "id": 4
+        },
+        "gname": {
+         "type": "string",
+         "id": 5
+        },
+        "group": {
+         "type": "ptt.Group",
+         "id": 6
+        }
+       }
+      },
+      "Kickout": {
+       "fields": {
+        "reason": {
+         "type": "string",
+         "id": 1
+        },
+        "reasonCode": {
+         "type": "int32",
+         "id": 2
+        }
+       }
+      },
+      "NewWorksheet": {
+       "fields": {
+        "worksheets": {
+         "type": "ptt.Worksheet",
+         "id": 1,
+         "rule": "repeated"
+        },
+        "from": {
+         "type": "ptt.User",
+         "id": 2
+        }
+       }
+      },
+      "CustomBroadcast": {
+       "fields": {
+        "from": {
+         "type": "ptt.User",
+         "id": 1
+        },
+        "msgName": {
+         "type": "string",
+         "id": 2
+        },
+        "msg": {
+         "type": "bytes",
+         "id": 3
+        }
+       }
+      },
+      "ChangeRoles": {
+       "fields": {
+        "roles": {
+         "type": "uint32",
+         "id": 1
+        }
+       }
+      },
+      "Invite": {
+       "fields": {
+        "inviteId": {
+         "type": "uint64",
+         "id": 1
+        },
+        "inviter": {
+         "type": "uint32",
+         "id": 2
+        },
+        "withAudio": {
+         "type": "bool",
+         "id": 3
+        },
+        "withVideo": {
+         "type": "bool",
+         "id": 4
+        },
+        "msg": {
+         "type": "string",
+         "id": 5
+        },
+        "isRealtime": {
+         "type": "bool",
+         "id": 6
+        }
+       }
+      },
+      "ResponseInvite": {
+       "fields": {
+        "inviteId": {
+         "type": "uint64",
+         "id": 1
+        },
+        "invitee": {
+         "type": "uint32",
+         "id": 2
+        },
+        "accept": {
+         "type": "bool",
+         "id": 3
+        }
+       }
+      }
+     }
+    },
+    "server": {
+     "nested": {
+      "Exit": {
+       "fields": {}
+      },
+      "PttMessage": {
+       "fields": {
+        "msgName": {
+         "type": "string",
+         "id": 1
+        },
+        "msg": {
+         "type": "bytes",
+         "id": 2
+        },
+        "handlerId": {
+         "type": "uint32",
+         "id": 3
+        },
+        "uid": {
+         "type": "uint32",
+         "id": 4
+        },
+        "ip": {
+         "type": "uint32",
+         "id": 5
+        },
+        "port": {
+         "type": "uint32",
+         "id": 6
+        },
+        "timestamp": {
+         "type": "uint64",
+         "id": 7
+        }
+       }
+      },
+      "ConnectionBroken": {
+       "fields": {
+        "reason": {
+         "type": "string",
+         "id": 1
+        }
+       }
+      },
+      "RemovedGroups": {
+       "fields": {
+        "groups": {
+         "type": "ptt.GroupMembers",
+         "id": 1,
+         "rule": "repeated"
+        }
+       }
+      },
+      "UserOnline": {
+       "fields": {
+        "uid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "version": {
+         "type": "uint32",
+         "id": 2
+        }
+       }
+      },
+      "UserOffline": {
+       "fields": {
+        "uid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "name": {
+         "type": "string",
+         "id": 2
+        }
+       }
+      },
+      "UserJoinGroup": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "users": {
+         "type": "ptt.ChatUser",
+         "id": 2,
+         "rule": "repeated"
+        },
+        "isRequested": {
+         "type": "bool",
+         "id": 3
+        }
+       }
+      },
+      "UserLeaveGroup": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "uids": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        },
+        "isRequested": {
+         "type": "bool",
+         "id": 3
+        }
+       }
+      },
+      "UserGotMic": {
+       "fields": {
+        "uid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "gid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "speechId": {
+         "type": "uint64",
+         "id": 3
+        }
+       }
+      },
+      "UserLostMic": {
+       "fields": {
+        "uid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "gid": {
+         "type": "uint32",
+         "id": 2
+        },
+        "isRequested": {
+         "type": "bool",
+         "id": 3
+        },
+        "reason": {
+         "type": "int32",
+         "id": 4
+        },
+        "speechId": {
+         "type": "uint64",
+         "id": 5
+        }
+       }
+      },
+      "UserGroupsChanged": {
+       "fields": {
+        "uids": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        },
+        "newGroup": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        },
+        "removeGroup": {
+         "type": "uint32",
+         "id": 3,
+         "rule": "repeated"
+        },
+        "users": {
+         "type": "ptt.ChatUser",
+         "id": 4,
+         "rule": "repeated"
+        }
+       }
+      },
+      "MembershipChanged": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "members": {
+         "type": "ptt.Member",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "BroadcastContactRequest": {
+       "fields": {
+        "uids": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        }
+       }
+      },
+      "ContactMade": {
+       "fields": {
+        "uid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "contacts": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        }
+       }
+      },
+      "UserChanged": {
+       "fields": {
+        "uids": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        }
+       }
+      },
+      "UserContactsChanged": {
+       "fields": {
+        "uid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "updateUids": {
+         "type": "uint32",
+         "id": 2,
+         "rule": "repeated"
+        },
+        "rmUids": {
+         "type": "uint32",
+         "id": 3,
+         "rule": "repeated"
+        }
+       }
+      },
+      "UpdateGroup": {
+       "fields": {
+        "gid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "creator": {
+         "type": "uint32",
+         "id": 2
+        },
+        "department": {
+         "type": "int32",
+         "id": 3
+        },
+        "type": {
+         "type": "int32",
+         "id": 4
+        },
+        "name": {
+         "type": "string",
+         "id": 5
+        },
+        "priority": {
+         "type": "int32",
+         "id": 6
+        },
+        "dispatcher": {
+         "type": "uint32",
+         "id": 7
+        },
+        "speechLimitSec": {
+         "type": "uint32",
+         "id": 8
+        }
+       }
+      },
+      "UserWatchGroup": {
+       "fields": {
+        "gids": {
+         "type": "uint32",
+         "id": 1,
+         "rule": "repeated"
+        },
+        "user": {
+         "type": "ptt.ChatUser",
+         "id": 2
+        }
+       }
+      },
+      "UserInvite": {
+       "fields": {
+        "inviteId": {
+         "type": "uint64",
+         "id": 1
+        },
+        "inviter": {
+         "type": "uint32",
+         "id": 2
+        },
+        "invitees": {
+         "type": "uint32",
+         "id": 3,
+         "rule": "repeated"
+        },
+        "withAudio": {
+         "type": "bool",
+         "id": 4
+        },
+        "withVideo": {
+         "type": "bool",
+         "id": 5
+        },
+        "msg": {
+         "type": "string",
+         "id": 6
+        },
+        "isRealtime": {
+         "type": "bool",
+         "id": 7
+        }
+       }
+      },
+      "UserResponseInvite": {
+       "fields": {
+        "inviteId": {
+         "type": "uint64",
+         "id": 1
+        },
+        "inviter": {
+         "type": "uint32",
+         "id": 2
+        },
+        "invitee": {
+         "type": "uint32",
+         "id": 3
+        },
+        "accept": {
+         "type": "bool",
+         "id": 4
+        }
+       }
+      },
+      "UserCancelInvite": {
+       "fields": {
+        "inviteId": {
+         "type": "uint64",
+         "id": 1
+        },
+        "inviter": {
+         "type": "uint32",
+         "id": 2
+        },
+        "invitee": {
+         "type": "uint32",
+         "id": 3
+        }
+       }
+      },
+      "KickUser": {
+       "fields": {
+        "uid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "reason": {
+         "type": "int32",
+         "id": 2
+        }
+       }
+      }
+     }
+    },
+    "loc": {
+     "nested": {
+      "LocReport": {
+       "fields": {
+        "uid": {
+         "type": "uint64",
+         "id": 1
+        },
+        "locations": {
+         "type": "ptt.Location",
+         "id": 2,
+         "rule": "repeated"
+        },
+        "time": {
+         "type": "ptt.DateTime",
+         "id": 3
+        }
+       }
+      },
+      "LocReports": {
+       "fields": {
+        "reports": {
+         "type": "ptt.loc.LocReport",
+         "id": 1,
+         "rule": "repeated"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "conn": {
+   "nested": {
+    "penetrate": {
+     "nested": {
+      "UserMessage": {
+       "fields": {
+        "name": {
+         "type": "string",
+         "id": 1
+        },
+        "msg": {
+         "type": "bytes",
+         "id": 2
+        }
+       }
+      },
+      "Penetrate": {
+       "fields": {
+        "tartype": {
+         "type": "conn.penetrate.Penetrate.TargetType",
+         "id": 1
+        },
+        "targets": {
+         "type": "uint32",
+         "id": 2
+        },
+        "msg": {
+         "type": "conn.penetrate.UserMessage",
+         "id": 3,
+         "rule": "repeated"
+        }
+       },
+       "nested": {
+        "TargetType": {
+         "values": {
+          "USER": 0,
+          "GROUP": 1,
+          "COMPANY": 2,
+          "COMPANY_TREE": 3,
+          "INGROUP": 4
+         }
+        }
+       }
+      },
+      "ClientMessageIn": {
+       "fields": {
+        "uid": {
+         "type": "uint32",
+         "id": 1
+        },
+        "name": {
+         "type": "string",
+         "id": 2
+        },
+        "msg": {
+         "type": "bytes",
+         "id": 3
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

@@ -24,6 +24,14 @@ router.get("/registry", async (c) => {
   }
 });
 
+router.get("/network", async (c) => {
+  try {
+    return c.json(await db.listRadioNetwork());
+  } catch (error) {
+    return c.json(jsonError(error), 500);
+  }
+});
+
 router.post("/sync", requireOps, async (c) => {
   const user = (c as any).get("user");
   try {

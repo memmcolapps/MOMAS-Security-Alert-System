@@ -4091,6 +4091,56 @@ async function listPocstarsRegistry() {
   return { dispatchers, groups, pool_radios };
 }
 
+// The whole radio estate in one read, for the platform's "who owns what" view.
+// Membership comes from the vendor sync rather than channel_devices, because a
+// group can hold radios that were added outside MOMAS - that is exactly what the
+// view has to show.
+async function listRadioNetwork() {
+  const [{ rows: organizations }, { rows: channels }, { rows: foreign }, { rows: radios }] = await Promise.all([
+    pool.query(
+      `SELECT o.id, o.name, o.status, o.radio_seats, o.pocstars_company_id,
+              COUNT(d.device_id)::int AS radio_count,
+              COUNT(d.device_id) FILTER (WHERE d.pocstars_online)::int AS online_count
+         FROM organizations o
+         LEFT JOIN devices d ON d.organization_id = o.id AND d.pocstars_managed AND d.active
+        GROUP BY o.id
+        ORDER BY COUNT(d.device_id) DESC, o.name`,
+    ),
+    pool.query(
+      `SELECT c.id, c.name, c.organization_id, c.unit_id, ou.name AS unit_name,
+              c.pocstars_group_id, c.provision_state,
+              COUNT(m.device_id)::int AS radio_count,
+              COUNT(m.device_id) FILTER (WHERE d.pocstars_online)::int AS online_count
+         FROM channels c
+         LEFT JOIN organization_units ou ON ou.id = c.unit_id
+         LEFT JOIN pocstars_radio_group_memberships m ON m.group_id = c.pocstars_group_id
+         LEFT JOIN devices d ON d.device_id = m.device_id
+        WHERE c.active
+        GROUP BY c.id, ou.name
+        ORDER BY c.name`,
+    ),
+    pool.query(
+      `SELECT c.id AS channel_id, d.organization_id, COUNT(*)::int AS radio_count
+         FROM channels c
+         JOIN pocstars_radio_group_memberships m ON m.group_id = c.pocstars_group_id
+         JOIN devices d ON d.device_id = m.device_id
+        WHERE c.active AND d.organization_id IS DISTINCT FROM c.organization_id
+        GROUP BY c.id, d.organization_id`,
+    ),
+    pool.query(
+      `SELECT d.device_id, d.name, d.imei, d.organization_id, d.pocstars_online, d.pocstars_last_seen_at,
+              COALESCE(array_agg(c.id ORDER BY c.name) FILTER (WHERE c.id IS NOT NULL), '{}') AS channel_ids
+         FROM devices d
+         LEFT JOIN pocstars_radio_group_memberships m ON m.device_id = d.device_id
+         LEFT JOIN channels c ON c.pocstars_group_id = m.group_id AND c.active
+        WHERE d.pocstars_managed AND d.active
+        GROUP BY d.device_id
+        ORDER BY d.name`,
+    ),
+  ]);
+  return { organizations, channels, foreign, radios };
+}
+
 async function upsertDevice({ device_id, name, company, operator, device_type, notes, active, organization_id, unit_id }) {
   const { rows } = await pool.query(
     `INSERT INTO devices (device_id, organization_id, unit_id, name, company, operator, device_type, notes, active)
@@ -5344,6 +5394,7 @@ export {
   assignPocstarsGroupToOrganization,
   unassignPocstarsGroup,
   listPocstarsRegistry,
+  listRadioNetwork,
   listOrganizationUsers,
   removeOrganizationUser,
   getOrganizationScope,

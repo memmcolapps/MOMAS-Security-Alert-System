@@ -249,6 +249,13 @@ const adminOrganizationDetailRoute = createRoute({
   component: page("AdminOrganizationDetailRoute"),
 });
 
+const adminRadioNetworkRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/radio-network",
+  beforeLoad: requireAdmin,
+  component: page("AdminRadioNetworkRoute"),
+});
+
 const platformStaffRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/team",
@@ -275,6 +282,7 @@ const routeTree = rootRoute.addChildren([
   changePasswordRoute,
   adminOrganizationsRoute,
   adminOrganizationDetailRoute,
+  adminRadioNetworkRoute,
   platformStaffRoute,
   orgAdminRoute,
 ]);

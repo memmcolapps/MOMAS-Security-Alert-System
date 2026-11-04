@@ -209,6 +209,10 @@ export function getPocstarsRegistry() {
   return request("/api/pocstars/admin/registry");
 }
 
+export function getRadioNetwork() {
+  return request("/api/pocstars/admin/network");
+}
+
 export function runPocstarsPlatformSync() {
   return request("/api/pocstars/admin/sync", {
     method: "POST",

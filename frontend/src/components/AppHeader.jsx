@@ -1,6 +1,6 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, ChevronDown, FileSearch, History, LogOut, Map, MapPinned, Plane, Radio, ShieldAlert, ShieldCheck, Siren, UsersRound } from "lucide-react";
+import { Building2, ChevronDown, FileSearch, History, LogOut, Map, MapPinned, Plane, Radio, RadioTower, ShieldAlert, ShieldCheck, Siren, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getActiveOrganizationId, getMe, setActiveOrganizationId, setAuthToken } from "../lib/api";
 import { clearOfflineCache } from "../lib/offline-cache";
@@ -131,6 +131,13 @@ export function AppHeader() {
                     icon={Building2}
                     label="Companies"
                     active={isActive("/admin/organizations")}
+                    onNavigate={() => setMenuOpen(false)}
+                  />
+                  <MenuLink
+                    to="/admin/radio-network"
+                    icon={RadioTower}
+                    label="Radio network"
+                    active={isActive("/admin/radio-network")}
                     onNavigate={() => setMenuOpen(false)}
                   />
                   {isOwner ? (
