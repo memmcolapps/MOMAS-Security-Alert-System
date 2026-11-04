@@ -1,42 +1,21 @@
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Building2, ChevronRight, Plus, Radio, Search, X } from "lucide-react";
+import { AlertTriangle, Building2, ChevronRight, Plus, RefreshCw, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
-  assignPocstarsGroup,
+  allocateRadioToOrganization,
   createOrganization,
-  createPlatformChannel,
   getMe,
-  getPocstarsRegistry,
+  getRadioNetwork,
   listOrganizations,
   runPocstarsPlatformSync,
 } from "../lib/api";
 import { NIGERIAN_STATES } from "../lib/domain";
 import { isPlatformOperator } from "../lib/platform-roles";
 
-// What makes a company incomplete rather than merely suspended. These are the
-// three states an admin scans this list for, and none of them were visible:
-// every row rendered identically whether it was ready to use or half-built.
-function companyIssues(org) {
-  // A discovered company has none of these by definition - it is another
-  // operator's, found by the radio-network sync, and MOMAS has deliberately not
-  // given it channels or admins. Flagging that as "needs setup" would put an
-  // amber warning on most of the list and hide the companies that really are
-  // half-built.
-  if (isDiscovered(org)) return [];
-  const issues = [];
-  if (!org.pocstars_company_id) issues.push("not on the radio network");
-  if (!org.channel_count) issues.push("no channels");
-  if (!org.user_count) issues.push("no admins");
-  return issues;
-}
-
-// A company the radio-network sync found and landed here, which is not the same
-// as one MOMAS operates. Visible to everybody, actionable by nobody until an
-// owner promotes it.
-function isDiscovered(org) {
-  return org?.status === "discovered";
-}
+// The platform home: every organization, how its radios are doing, and what
+// needs someone's attention. It replaces the Companies list and the Radio
+// network page, which answered halves of the same question in two places.
 
 const emptyOrg = {
   name: "",
@@ -47,6 +26,59 @@ const emptyOrg = {
   platform_radio_seats: 1,
 };
 
+const isDiscovered = (org) => org?.status === "discovered";
+
+// Organization rows from two sources joined once: the list (people, states,
+// status) and the radio network view (radios, online, mixed channels).
+function shapeHome(organizations, network) {
+  const byOrg = new Map((network?.organizations || []).map((org) => [Number(org.id), org]));
+  const mixedByOrg = new Map();
+  for (const row of network?.foreign || []) {
+    const owner = (network.channels || []).find((channel) => Number(channel.id) === Number(row.channel_id));
+    if (!owner) continue;
+    const key = Number(owner.organization_id);
+    if (!mixedByOrg.has(key)) mixedByOrg.set(key, new Set());
+    mixedByOrg.get(key).add(Number(row.channel_id));
+  }
+  const idleByOrg = new Map();
+  const waiting = [];
+  for (const radio of network?.radios || []) {
+    if (radio.organization_id == null) {
+      waiting.push(radio);
+      continue;
+    }
+    if (!(radio.channel_ids || []).length) {
+      const key = Number(radio.organization_id);
+      idleByOrg.set(key, (idleByOrg.get(key) || 0) + 1);
+    }
+  }
+  const rows = organizations.map((org) => {
+    const radio = byOrg.get(Number(org.id)) || {};
+    const issues = [];
+    // Notes are worth seeing but not worth chasing: most organizations on the
+    // shared network have no MOMAS users at all, and flagging that as a problem
+    // buried the radio problems under it.
+    const notes = [];
+    if (!isDiscovered(org)) {
+      if (!org.pocstars_company_id) issues.push("Not on the radio network");
+      if (!Number(org.channel_count)) issues.push("No channels");
+      if (!Number(org.user_count)) notes.push("No people yet");
+    }
+    const mixed = mixedByOrg.get(Number(org.id))?.size || 0;
+    if (mixed) issues.push(`${mixed} mixed channel${mixed === 1 ? "" : "s"}`);
+    const idle = idleByOrg.get(Number(org.id)) || 0;
+    if (idle && !isDiscovered(org)) issues.push(`${idle} radio${idle === 1 ? "" : "s"} on no channel`);
+    return {
+      ...org,
+      radios: Number(radio.radio_count ?? org.device_count ?? 0),
+      online: Number(radio.online_count ?? 0),
+      issues,
+      notes,
+    };
+  });
+  return { rows, waiting };
+}
+
 export function AdminOrganizationsRoute() {
   const queryClient = useQueryClient();
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
@@ -54,15 +86,12 @@ export function AdminOrganizationsRoute() {
   const [creating, setCreating] = useState(false);
   const [orgForm, setOrgForm] = useState(emptyOrg);
   const [search, setSearch] = useState("");
-  // The sync brings in every company on the shared radio network - dozens of
-  // them, most belonging to other operators - so the companies MOMAS actually
-  // runs have to stay findable. Operated is the default view for that reason.
+  // Dozens of discovered organizations belong to other operators, so the ones
+  // MOMAS runs stay the default view.
   const [scope, setScope] = useState("operated");
 
-  const orgsQuery = useQuery({
-    queryKey: ["organizations"],
-    queryFn: listOrganizations,
-  });
+  const orgsQuery = useQuery({ queryKey: ["organizations"], queryFn: listOrganizations });
+  const networkQuery = useQuery({ queryKey: ["radio-network"], queryFn: getRadioNetwork, staleTime: 30_000 });
 
   const [createResult, setCreateResult] = useState(null);
   const createMutation = useMutation({
@@ -72,482 +101,336 @@ export function AdminOrganizationsRoute() {
       setCreating(false);
       setCreateResult(result || null);
       queryClient.invalidateQueries({ queryKey: ["organizations"] });
+      queryClient.invalidateQueries({ queryKey: ["radio-network"] });
+    },
+  });
+  const syncMutation = useMutation({
+    mutationFn: runPocstarsPlatformSync,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["organizations"] });
+      queryClient.invalidateQueries({ queryKey: ["radio-network"] });
     },
   });
 
   const organizations = useMemo(() => orgsQuery.data?.organizations || [], [orgsQuery.data?.organizations]);
-  const discoveredCount = useMemo(() => organizations.filter(isDiscovered).length, [organizations]);
-  const filtered = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return organizations.filter((org) => {
-      if (scope === "operated" && isDiscovered(org)) return false;
-      if (scope === "discovered" && !isDiscovered(org)) return false;
-      if (!term) return true;
-      return [org.name, org.slug].filter(Boolean).some((value) => value.toLowerCase().includes(term));
-    });
-  }, [organizations, search, scope]);
+  const { rows, waiting } = useMemo(() => shapeHome(organizations, networkQuery.data), [organizations, networkQuery.data]);
+  const term = search.trim().toLowerCase();
+  const counts = useMemo(() => ({
+    operated: rows.filter((org) => !isDiscovered(org)).length,
+    attention: rows.filter((org) => org.issues.length).length,
+    discovered: rows.filter(isDiscovered).length,
+    all: rows.length,
+  }), [rows]);
+  const filtered = rows
+    .filter((org) => {
+      if (scope === "operated") return !isDiscovered(org);
+      if (scope === "attention") return org.issues.length > 0;
+      if (scope === "discovered") return isDiscovered(org);
+      return true;
+    })
+    .filter((org) => !term || [org.name, org.slug].filter(Boolean).some((value) => value.toLowerCase().includes(term)))
+    .sort((a, b) => b.radios - a.radios || a.name.localeCompare(b.name));
+  // A search can also be for a radio: the old Radio network page's main use.
+  const radioMatches = term.length >= 2
+    ? (networkQuery.data?.radios || [])
+      .filter((radio) => `${radio.name || ""} ${radio.device_id} ${radio.imei || ""}`.toLowerCase().includes(term))
+      .slice(0, 12)
+    : [];
+  const orgName = new Map(organizations.map((org) => [Number(org.id), org.name]));
+
+  const network = networkQuery.data;
+  const totalRadios = network?.radios?.length ?? 0;
+  const totalOnline = (network?.radios || []).filter((radio) => radio.pocstars_online).length;
+  const loading = orgsQuery.isLoading;
 
   return (
-    <main className="device-page bg-ops-bg px-6 pb-8 pt-20 text-neutral-200">
-      <header className="mb-7 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-xl font-bold text-ops-red">
-            <Building2 size={22} /> Companies
-          </h1>
-          <p className="mt-1 text-[11px] text-neutral-500">All client workspaces. Click a company to manage its access, admins, and devices.</p>
-        </div>
-        {canWrite ? (
-          <button
-            className="inline-flex items-center gap-2 rounded-md bg-ops-red px-4 py-2 text-xs font-bold text-black hover:opacity-85"
-            onClick={() => setCreating((value) => !value)}
-          >
-            {creating ? <X size={14} /> : <Plus size={14} />}
-            {creating ? "Cancel" : "New company"}
-          </button>
-        ) : null}
-      </header>
-
-      {/* The outcome of a create belongs next to the button that caused it. This
-          used to render below the radio panel at the foot of the page, where a
-          failed radio setup was easy to scroll past entirely. */}
-      {createResult ? (
-        <div
-          className={`mb-6 flex flex-wrap items-start justify-between gap-3 rounded border px-3 py-3 text-xs ${
-            createResult.warning
-              ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
-              : "border-green-500/30 bg-green-500/10 text-ops-green"
-          }`}
-        >
-          <div className="min-w-0">
-            <p className="font-bold">
-              {createResult.organization?.name} created
-              {createResult.warning ? " — but it has no radio yet" : " and set up on the radio network"}
+    <main className="device-page bg-ops-bg px-6 pb-10 pt-20 text-neutral-200">
+      <div className="mx-auto max-w-[1400px]">
+        <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="flex items-center gap-2 text-xl font-bold text-neutral-100">
+              <Building2 size={20} className="text-ops-red" /> Organizations
+            </h1>
+            <p className="mt-1 text-[12px] text-neutral-500">
+              {network ? `${totalRadios} radios · ${totalOnline} online · ${counts.operated} organizations run by MOMAS` : "Every organization and how its radios are doing."}
             </p>
-            {createResult.warning ? (
-              <p className="mt-1 text-[11px] opacity-90">
-                {createResult.warning} You can retry this from the company's Radio tab.
-              </p>
-            ) : null}
           </div>
-          <div className="flex shrink-0 gap-2">
-            {createResult.organization ? (
-              <Link
-                to="/admin/organizations/$id"
-                params={{ id: String(createResult.organization.id) }}
-                className="rounded border border-current px-3 py-1 text-[11px] font-bold"
+          {canWrite ? (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="inline-flex items-center gap-2 rounded-md border border-white/15 px-3 py-2 text-xs font-bold text-neutral-200 hover:bg-white/5 disabled:opacity-50"
+                disabled={syncMutation.isPending}
+                onClick={() => syncMutation.mutate()}
+                title="Read every company, channel and radio from the radio network now"
               >
-                Open company
-              </Link>
-            ) : null}
-            <button className="rounded px-2 py-1 text-[11px] opacity-70 hover:opacity-100" onClick={() => setCreateResult(null)}>
-              Dismiss
+                <RefreshCw size={13} className={syncMutation.isPending ? "animate-spin" : ""} />
+                {syncMutation.isPending ? "Syncing…" : "Sync radio network"}
+              </button>
+              <button
+                type="button"
+                className="inline-flex items-center gap-2 rounded-md bg-ops-red px-4 py-2 text-xs font-bold text-black hover:opacity-85"
+                onClick={() => setCreating((value) => !value)}
+              >
+                {creating ? <X size={14} /> : <Plus size={14} />}
+                {creating ? "Cancel" : "New organization"}
+              </button>
+            </div>
+          ) : null}
+        </header>
+
+        {syncMutation.error ? <p className="mb-4 text-xs text-ops-red">{syncMutation.error.message}</p> : null}
+
+        {createResult ? (
+          <div
+            className={`mb-6 flex flex-wrap items-start justify-between gap-3 rounded-lg border px-4 py-3 text-xs ${
+              createResult.warning
+                ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                : "border-green-500/30 bg-green-500/10 text-ops-green"
+            }`}
+          >
+            <div className="min-w-0">
+              <p className="font-bold">
+                {createResult.organization?.name} created
+                {createResult.warning ? ", but it is not on the radio network yet" : " and set up on the radio network"}
+              </p>
+              {createResult.warning ? (
+                <p className="mt-1 text-[11px] opacity-90">{createResult.warning} You can retry from its Platform tab.</p>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 gap-2">
+              {createResult.organization ? (
+                <Link
+                  to="/admin/organizations/$id"
+                  params={{ id: String(createResult.organization.id) }}
+                  className="rounded-md border border-current px-3 py-1 text-[11px] font-bold"
+                >
+                  Open it
+                </Link>
+              ) : null}
+              <button type="button" className="rounded px-2 py-1 text-[11px] opacity-70 hover:opacity-100" onClick={() => setCreateResult(null)}>
+                Dismiss
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {creating ? (
+          <form
+            className="glass-panel mb-6 rounded-lg p-5"
+            onSubmit={(event) => {
+              event.preventDefault();
+              createMutation.mutate(orgForm);
+            }}
+          >
+            <h2 className="mb-4 text-[13px] font-bold text-neutral-100">New organization</h2>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Field label="Name">
+                <input autoFocus className="field-input" value={orgForm.name} onChange={(event) => setOrgForm({ ...orgForm, name: event.target.value })} />
+              </Field>
+              <Field label="Short name">
+                <input className="field-input" value={orgForm.slug} onChange={(event) => setOrgForm({ ...orgForm, slug: event.target.value })} placeholder="Made from the name if left blank" />
+              </Field>
+              <Field label="Console seats (their calls at once)">
+                <input className="field-input" type="number" min="1" value={orgForm.radio_seats} onChange={(event) => setOrgForm({ ...orgForm, radio_seats: event.target.value })} />
+              </Field>
+              <Field label="Platform seats (ours)">
+                <input className="field-input" type="number" min="0" value={orgForm.platform_radio_seats} onChange={(event) => setOrgForm({ ...orgForm, platform_radio_seats: event.target.value })} />
+              </Field>
+            </div>
+            <StatePicker value={orgForm} onChange={setOrgForm} />
+            {createMutation.error ? <p className="mt-3 text-xs text-ops-red">{createMutation.error.message}</p> : null}
+            <p className="mt-3 text-[11px] text-neutral-500">Its company and console seats are created on the radio network automatically.</p>
+            <button className="mt-4 inline-flex items-center gap-2 rounded-md bg-ops-red px-4 py-2 text-xs font-bold text-black hover:opacity-85 disabled:opacity-50" disabled={createMutation.isPending || !orgForm.name.trim()}>
+              <Plus size={14} /> {createMutation.isPending ? "Creating…" : "Create organization"}
             </button>
+          </form>
+        ) : null}
+
+        {waiting.length ? <WaitingRadios radios={waiting} organizations={organizations} canWrite={canWrite} /> : null}
+
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <label className="flex min-w-[240px] flex-1 items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-3 py-2">
+            <Search size={14} className="text-neutral-500" />
+            <input
+              className="flex-1 bg-transparent text-xs text-neutral-200 placeholder:text-neutral-600 focus:outline-none"
+              placeholder="Find an organization, or a radio by name or IMEI"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { key: "operated", label: `Run by MOMAS (${counts.operated})` },
+              { key: "attention", label: `Needs attention (${counts.attention})` },
+              { key: "discovered", label: `Discovered (${counts.discovered})` },
+              { key: "all", label: `All (${counts.all})` },
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setScope(tab.key)}
+                className={`rounded-full border px-3 py-1 text-[11px] font-bold transition ${
+                  scope === tab.key
+                    ? "border-ops-red/50 bg-ops-red/15 text-ops-red"
+                    : "border-white/10 bg-white/[0.03] text-neutral-400 hover:text-neutral-200"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
         </div>
-      ) : null}
 
-      {creating ? (
-        <form
-          className="glass-panel mb-6 rounded-lg p-5"
-          onSubmit={(event) => {
-            event.preventDefault();
-            createMutation.mutate(orgForm);
-          }}
-        >
-          <h2 className="mb-4 text-[13px] font-bold text-ops-red">New company</h2>
-          <div className="grid gap-3 md:grid-cols-2">
-            <Field label="Company name">
-              <input className="field-input" value={orgForm.name} onChange={(event) => setOrgForm({ ...orgForm, name: event.target.value })} />
-            </Field>
-            <Field label="Slug">
-              <input className="field-input" value={orgForm.slug} onChange={(event) => setOrgForm({ ...orgForm, slug: event.target.value })} placeholder="auto-created if blank" />
-            </Field>
-            <Field label="Radio seats (their concurrent audio sessions)">
-              <input className="field-input" type="number" min="1" value={orgForm.radio_seats} onChange={(event) => setOrgForm({ ...orgForm, radio_seats: event.target.value })} />
-            </Field>
-            <Field label="Platform seats (reserved for us)">
-              <input className="field-input" type="number" min="0" value={orgForm.platform_radio_seats} onChange={(event) => setOrgForm({ ...orgForm, platform_radio_seats: event.target.value })} />
-            </Field>
+        {radioMatches.length ? (
+          <section className="glass-panel mb-4 overflow-hidden rounded-lg">
+            <div className="border-b border-white/10 px-4 py-2.5 text-[11px] text-neutral-500">Radios matching “{search.trim()}”</div>
+            <div className="divide-y divide-white/5">
+              {radioMatches.map((radio) => (
+                <div key={radio.device_id} className="flex items-center gap-3 px-4 py-2.5 text-[12px]">
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${radio.pocstars_online ? "bg-ops-green" : "bg-neutral-600"}`} />
+                  <span className="min-w-0 flex-1 truncate text-neutral-100">{radio.name || `Radio ${radio.device_id}`}</span>
+                  <span className="hidden font-mono text-[10px] text-neutral-600 sm:inline">{radio.imei || radio.device_id}</span>
+                  {radio.organization_id != null ? (
+                    <Link
+                      to="/admin/organizations/$id"
+                      params={{ id: String(radio.organization_id) }}
+                      className="shrink-0 text-[11px] font-bold text-ops-green hover:underline"
+                    >
+                      {orgName.get(Number(radio.organization_id)) || "Open organization"}
+                    </Link>
+                  ) : (
+                    <span className="shrink-0 text-[11px] text-amber-300/90">Waiting for an organization</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        <section className="glass-panel overflow-hidden rounded-lg">
+          <div className="hidden grid-cols-[minmax(0,2fr)_80px_80px_90px_80px_minmax(0,2fr)_20px] gap-3 border-b border-white/10 px-4 py-2.5 text-[10px] uppercase tracking-wide text-neutral-600 md:grid">
+            <span>Organization</span>
+            <span className="text-right">Radios</span>
+            <span className="text-right">Online</span>
+            <span className="text-right">Channels</span>
+            <span className="text-right">People</span>
+            <span>Needs attention</span>
+            <span />
           </div>
-          <StatePicker value={orgForm} onChange={setOrgForm} />
-          {createMutation.error ? <p className="mt-3 text-xs text-ops-red">{createMutation.error.message}</p> : null}
-          <p className="mt-3 text-[11px] text-neutral-500">
-            The company, its dispatcher seats and their credentials are created on the radio network automatically.
-          </p>
-          <button className="mt-4 inline-flex items-center gap-2 rounded bg-ops-red px-4 py-2 text-xs font-bold text-black disabled:opacity-50" disabled={createMutation.isPending || !orgForm.name.trim()}>
-            <Plus size={14} /> Create company
-          </button>
-        </form>
-      ) : null}
-
-      {discoveredCount ? (
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          {[
-            { key: "operated", label: `Operated (${organizations.length - discoveredCount})` },
-            { key: "discovered", label: `Discovered (${discoveredCount})` },
-            { key: "all", label: `All (${organizations.length})` },
-          ].map((tab) => (
-            <button
-              key={tab.key}
-              type="button"
-              onClick={() => setScope(tab.key)}
-              className={`rounded-full border px-3 py-1 text-[11px] font-bold transition ${
-                scope === tab.key
-                  ? "border-ops-red/50 bg-ops-red/15 text-ops-red"
-                  : "border-white/10 bg-white/[0.03] text-neutral-400 hover:text-neutral-200"
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-          <p className="basis-full text-[10px] text-neutral-600">
-            Discovered companies were found on the shared radio network. MOMAS can see their radios but
-            cannot add users, change their channels or use their consoles until an owner promotes them.
-          </p>
-        </div>
-      ) : null}
-
-      <div className="mb-4 flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-3 py-2">
-        <Search size={14} className="text-neutral-500" />
-        <input
-          className="flex-1 bg-transparent text-xs text-neutral-200 placeholder:text-neutral-600 focus:outline-none"
-          placeholder="Search companies"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-        />
-      </div>
-
-      <section className="glass-panel overflow-hidden rounded-lg">
-        <div className="border-b border-white/10 px-4 py-3 text-[11px] text-neutral-500">
-          {orgsQuery.isLoading ? "Loading..." : `${filtered.length} of ${organizations.length} compan${organizations.length === 1 ? "y" : "ies"}`}
-        </div>
-        <div className="divide-y divide-white/5">
-          {filtered.map((org) => {
-            const issues = companyIssues(org);
-            const discovered = isDiscovered(org);
-            const suspended = !discovered && org.status !== "active";
-            return (
+          <div className="divide-y divide-white/5">
+            {loading
+              ? Array.from({ length: 6 }, (_, index) => (
+                <div key={index} className="flex items-center gap-3 px-4 py-3.5">
+                  <span className="h-3 w-48 animate-pulse rounded bg-white/[0.07]" />
+                  <span className="ml-auto h-3 w-24 animate-pulse rounded bg-white/[0.05]" />
+                </div>
+              ))
+              : null}
+            {filtered.map((org) => (
               <Link
                 key={org.id}
                 to="/admin/organizations/$id"
                 params={{ id: String(org.id) }}
-                className="flex items-center justify-between gap-3 px-4 py-3 transition hover:bg-white/[0.04]"
+                className="grid grid-cols-1 gap-1 px-4 py-3 transition hover:bg-white/[0.04] md:grid-cols-[minmax(0,2fr)_80px_80px_90px_80px_minmax(0,2fr)_20px] md:items-center md:gap-3"
               >
-                <span
-                  className={`mt-1.5 h-2 w-2 shrink-0 self-start rounded-full ${
-                    issues.length ? "bg-amber-400"
-                      : discovered ? "bg-sky-400"
-                      : suspended ? "bg-neutral-600"
-                      : "bg-ops-green"
-                  }`}
-                  title={
-                    issues.length ? `Needs setup: ${issues.join(", ")}`
-                      : discovered ? "Discovered on the radio network - not operated by MOMAS"
-                      : suspended ? "Suspended"
-                      : "Ready"
-                  }
-                />
-                <div className="min-w-0 flex-1">
-                  <h3 className="flex items-center gap-2 text-sm font-bold text-neutral-100">
-                    {org.name}
-                    {discovered ? (
-                      <span className="rounded-full border border-sky-400/30 bg-sky-400/10 px-2 py-0.5 text-[9px] font-bold uppercase text-sky-300">
-                        Discovered
-                      </span>
-                    ) : null}
-                    {suspended ? (
-                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[9px] font-bold uppercase text-neutral-400">
-                        Suspended
-                      </span>
-                    ) : null}
-                  </h3>
-                  <p className="mt-1 truncate text-[11px] text-neutral-500">
-                    {org.slug} · {org.device_count || 0} radio{org.device_count === 1 ? "" : "s"} · {org.channel_count || 0} channel{org.channel_count === 1 ? "" : "s"} · {org.user_count || 0} admin{org.user_count === 1 ? "" : "s"}
-                  </p>
-                  <p className="mt-1 truncate text-[11px] text-neutral-600">
-                    {org.all_states ? "All states" : (org.states || []).join(", ") || "No states assigned"}
-                  </p>
-                  {issues.length ? (
-                    <p className="mt-1 flex items-center gap-1 truncate text-[11px] text-amber-400/90">
-                      <AlertTriangle size={11} className="shrink-0" /> Needs setup: {issues.join(", ")}
-                    </p>
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="truncate text-sm font-bold text-neutral-100">{org.name}</span>
+                  {isDiscovered(org) ? (
+                    <span className="shrink-0 rounded-full border border-sky-400/30 bg-sky-400/10 px-2 py-0.5 text-[9px] font-bold uppercase text-sky-300">Discovered</span>
+                  ) : org.status !== "active" ? (
+                    <span className="shrink-0 rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[9px] font-bold uppercase text-neutral-400">{org.status}</span>
                   ) : null}
-                </div>
-                <ChevronRight size={16} className="shrink-0 text-neutral-500" />
+                </span>
+                <Num label="radios" value={org.radios} />
+                <Num label="online" value={org.online} tone={org.online ? "text-ops-green" : ""} />
+                <Num label="channels" value={Number(org.channel_count) || 0} />
+                <Num label="people" value={Number(org.user_count) || 0} />
+                <span className="flex min-w-0 flex-wrap gap-1">
+                  {org.issues.map((issue) => (
+                    <span key={issue} className="inline-flex items-center gap-1 rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[10px] text-amber-200">
+                      <AlertTriangle size={10} /> {issue}
+                    </span>
+                  ))}
+                  {org.notes.map((note) => (
+                    <span key={note} className="px-1 py-0.5 text-[10px] text-neutral-600">{note}</span>
+                  ))}
+                </span>
+                <ChevronRight size={15} className="hidden text-neutral-600 md:block" />
               </Link>
-            );
-          })}
-          {!orgsQuery.isLoading && !filtered.length ? (
-            <div className="px-4 py-12 text-center text-[12px] text-neutral-500">
-              <Building2 className="mx-auto mb-2" size={28} />
-              {search
-                ? "No companies match your search"
-                : scope === "discovered"
-                  ? "No companies discovered on the radio network yet"
-                  : "No companies yet"}
-            </div>
-          ) : null}
-        </div>
-      </section>
-
-      <RadioNetworkPanel organizations={organizations} />
+            ))}
+            {!loading && !filtered.length ? (
+              <div className="px-4 py-12 text-center text-[12px] text-neutral-500">
+                {search ? "No organization matches." : scope === "attention" ? "Nothing needs attention." : "No organizations here yet."}
+              </div>
+            ) : null}
+          </div>
+        </section>
+      </div>
     </main>
   );
 }
 
-function RadioNetworkPanel({ organizations }) {
-  const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
-  // Every tier reads the registry; only operators sync it or move a channel.
-  const canWrite = isPlatformOperator(meQuery.data?.user);
-  const queryClient = useQueryClient();
-  const [assignTargets, setAssignTargets] = useState({});
-
-  const registryQuery = useQuery({
-    queryKey: ["pocstars-registry"],
-    queryFn: getPocstarsRegistry,
-  });
-
-  const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ["pocstars-registry"] });
-    queryClient.invalidateQueries({ queryKey: ["organizations"] });
-  };
-
-  const syncMutation = useMutation({
-    mutationFn: runPocstarsPlatformSync,
-    onSuccess: refresh,
-  });
-
-  // A null organization releases the channel. Assignment used to be one-way, so
-  // a channel handed to the wrong company stayed there.
-  const assignMutation = useMutation({
-    mutationFn: ({ groupId, organizationId }) =>
-      assignPocstarsGroup(groupId, { organization_id: organizationId }),
-    onSuccess: refresh,
-  });
-
-  const registry = registryQuery.data;
-  const dispatcher = registry?.dispatchers?.[0];
-  const groups = registry?.groups || [];
-  const poolRadios = registry?.pool_radios || [];
-  const summary = syncMutation.data?.summary || dispatcher?.last_sync_summary;
-
+function Num({ label, value, tone = "" }) {
   return (
-    <section className="glass-panel mt-6 rounded-lg p-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="flex items-center gap-2 text-[13px] font-bold text-ops-green">
-            <Radio size={15} /> Radio network
-          </h2>
-          <p className="mt-1 text-[11px] text-neutral-500">
-            The whole radio network imports here first. Assign each channel to a company and its radios follow automatically. Release it to send them back to the pool. Unassigned radios stay platform-only until you place them.
-          </p>
-          <p className="mt-1 text-[11px] text-neutral-500">
-            {dispatcher
-              ? `Connected${dispatcher.last_sync_at ? ` · Last sync ${new Date(dispatcher.last_sync_at).toLocaleString("en-GB")}` : ""}`
-              : "No sync has run yet."}
-            {registry && !registry.configured ? " · Radio link not configured on this server." : ""}
-          </p>
-        </div>
-        <button
-          className="inline-flex items-center gap-2 rounded-md bg-ops-green px-4 py-2 text-xs font-bold text-black hover:opacity-85 disabled:opacity-50"
-          hidden={!canWrite}
-          disabled={syncMutation.isPending || (registry && !registry.configured)}
-          onClick={() => syncMutation.mutate()}
-        >
-          <Radio size={13} /> {syncMutation.isPending ? "Syncing radio network…" : "Sync radio network"}
-        </button>
-      </div>
-
-      {syncMutation.error ? <p className="mt-3 text-xs text-ops-red">{syncMutation.error.message}</p> : null}
-      {assignMutation.error ? <p className="mt-3 text-xs text-ops-red">{assignMutation.error.message}</p> : null}
-      {assignMutation.data?.result ? (
-        <p className="mt-3 text-[11px] text-ops-green">
-          {assignMutation.data.result.radiosReleased !== undefined
-            ? `Released ${assignMutation.data.result.channel_name} from ${assignMutation.data.result.organization_name} · ${assignMutation.data.result.radiosReleased} radio${assignMutation.data.result.radiosReleased === 1 ? "" : "s"} returned to the pool.`
-            : `Assigned ${assignMutation.data.result.group_name} · ${assignMutation.data.result.radiosMoved} radio${assignMutation.data.result.radiosMoved === 1 ? "" : "s"} moved in.`}
-        </p>
-      ) : null}
-      {summary ? (
-        <p className="mt-3 text-[11px] text-neutral-400">
-          {summary.groupsFound} groups · {summary.radiosFound} radios seen · {summary.radiosCreated} added · {summary.radiosUpdated} refreshed · {summary.pooled ?? 0} awaiting assignment
-          {summary.dispatchersSkipped ? ` · ${summary.dispatchersSkipped} dispatcher console${summary.dispatchersSkipped === 1 ? "" : "s"} skipped` : ""}
-        </p>
-      ) : null}
-
-      {canWrite ? <CreateChannelForm organizations={organizations} onCreated={refresh} /> : null}
-
-      {groups.length ? (
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full text-left text-[11px]">
-            <thead>
-              <tr className="text-[10px] uppercase tracking-wide text-neutral-500">
-                <th className="py-2 pr-3">Channel</th>
-                <th className="py-2 pr-3">Network ID</th>
-                <th className="py-2 pr-3">Radios</th>
-                <th className="py-2 pr-3">Assigned to</th>
-                <th className="py-2" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {groups.map((group) => (
-                <tr key={group.group_id} className={group.active ? "" : "opacity-50"}>
-                  <td className="py-2 pr-3 font-bold text-neutral-200">
-                    {group.name}
-                    {group.active ? "" : " (no longer on the network)"}
-                  </td>
-                  <td className="py-2 pr-3 font-mono text-neutral-400">{group.group_id}</td>
-                  <td className="py-2 pr-3 text-neutral-400">{group.radio_count}</td>
-                  <td className="py-2 pr-3 text-neutral-300">
-                    {group.organization_id ? (
-                      <>
-                        {group.organization_name}
-                        {group.unit_name ? ` · ${group.unit_name}` : ""}
-                      </>
-                    ) : (
-                      <select
-                        className="field-input py-1 text-[11px]"
-                        value={assignTargets[group.group_id] || ""}
-                        onChange={(event) => setAssignTargets({ ...assignTargets, [group.group_id]: event.target.value })}
-                      >
-                        <option value="">Choose a company…</option>
-                        {organizations.map((org) => (
-                          <option key={org.id} value={org.id}>{org.name}</option>
-                        ))}
-                      </select>
-                    )}
-                  </td>
-                  <td className="py-2 text-right">
-                    {group.organization_id ? (
-                      <button
-                        className="rounded border border-white/10 px-3 py-1 text-[11px] text-neutral-400 hover:border-ops-red hover:text-ops-red disabled:opacity-40"
-                        hidden={!canWrite}
-                        disabled={assignMutation.isPending}
-                        onClick={() => {
-                          if (window.confirm(
-                            `Release ${group.name} from ${group.organization_name}? Its radios return to the unallocated pool. The talk group stays on the radio network.`,
-                          )) {
-                            assignMutation.mutate({ groupId: group.group_id, organizationId: null });
-                          }
-                        }}
-                      >
-                        Release
-                      </button>
-                    ) : (
-                      <button
-                        className="rounded bg-ops-green px-3 py-1 text-[11px] font-bold text-black disabled:opacity-40"
-                        hidden={!canWrite}
-                        disabled={!assignTargets[group.group_id] || assignMutation.isPending}
-                        onClick={() => assignMutation.mutate({
-                          groupId: group.group_id,
-                          organizationId: Number(assignTargets[group.group_id]),
-                        })}
-                      >
-                        Assign
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : registryQuery.isLoading ? (
-        <p className="mt-4 text-[11px] text-neutral-500">Loading registry…</p>
-      ) : (
-        <p className="mt-4 text-[11px] text-neutral-500">No channels imported yet. Run a sync to load the radio network.</p>
-      )}
-
-      {poolRadios.length ? (
-        <div className="mt-4 rounded border border-white/10 bg-white/[0.03] p-3">
-          <h3 className="text-[11px] font-bold text-neutral-300">
-            {poolRadios.length} radio{poolRadios.length === 1 ? "" : "s"} awaiting assignment
-          </h3>
-          <p className="mt-1 text-[10px] text-neutral-500">
-            These radios are not in any assigned group. Assign their group above, or attach them to a company from its device list.
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {poolRadios.map((radio) => (
-              <span key={radio.device_id} className="inline-flex items-center gap-1 rounded bg-white/[0.05] px-2 py-1 text-[10px] text-neutral-300">
-                <span className={`h-1.5 w-1.5 rounded-full ${radio.pocstars_online ? "bg-ops-green" : "bg-neutral-600"}`} />
-                {radio.name || radio.device_id}
-              </span>
-            ))}
-          </div>
-        </div>
-      ) : null}
-    </section>
+    <span className={`text-[12px] tabular-nums text-neutral-300 md:text-right ${tone}`}>
+      {value}
+      <span className="ml-1 text-[11px] text-neutral-600 md:hidden">{label}</span>
+    </span>
   );
 }
 
-// Create a channel from the platform side. The company picker only enables
-// organizations already on the radio network - the backend refuses the rest
-// with a 409 pointing at the company's Radio tab setup, so the form disables
-// them up front with the same explanation rather than letting the click fail.
-function CreateChannelForm({ organizations, onCreated }) {
-  const [organizationId, setOrganizationId] = useState("");
-  const [name, setName] = useState("");
-  const [warning, setWarning] = useState("");
-  const createMutation = useMutation({
-    mutationFn: (payload) => createPlatformChannel(payload),
-    onSuccess: (result) => {
-      setName("");
-      setWarning(result?.warning || "");
-      onCreated();
+// Radios the platform holds that no organization has yet. Only shown when there
+// are some: giving them out is the one job here, and an empty panel is noise.
+function WaitingRadios({ radios, organizations, canWrite }) {
+  const queryClient = useQueryClient();
+  const [targets, setTargets] = useState({});
+  const choices = organizations.filter((org) => !isDiscovered(org)).sort((a, b) => a.name.localeCompare(b.name));
+  const mutation = useMutation({
+    mutationFn: ({ deviceId, orgId }) => allocateRadioToOrganization(deviceId, Number(orgId), []),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["radio-network"] });
+      queryClient.invalidateQueries({ queryKey: ["organizations"] });
     },
   });
-  const eligible = useMemo(
-    () => (organizations || []).filter((org) => org.pocstars_company_id),
-    [organizations],
-  );
-  const ineligibleCount = (organizations || []).length - eligible.length;
 
   return (
-    <form
-      className="mt-4 rounded border border-white/10 bg-white/[0.03] p-4"
-      onSubmit={(event) => {
-        event.preventDefault();
-        setWarning("");
-        createMutation.reset();
-        createMutation.mutate({ organization_id: Number(organizationId), name: name.trim() });
-      }}
-    >
-      <h3 className="flex items-center gap-2 text-[12px] font-bold text-neutral-200">
-        <Plus size={13} /> New channel
-      </h3>
-      <p className="mt-1 text-[11px] text-neutral-500">
-        Created for the whole company on the radio network. It is live straight away.
-        {ineligibleCount ? ` ${ineligibleCount} compan${ineligibleCount === 1 ? "y is" : "ies are"} not on the radio network yet and cannot receive channels.` : ""}
-      </p>
-      <div className="mt-3 grid gap-3 md:grid-cols-[1fr_1fr_auto]">
-        <Field label="Company">
-          <select className="field-input" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
-            <option value="">Choose a company…</option>
-            {eligible.map((org) => (
-              <option key={org.id} value={org.id}>{org.name}</option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Channel name">
-          <input
-            className="field-input"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="e.g. Lagos Patrol"
-          />
-        </Field>
-        <div className="flex items-end pb-3">
-          <button
-            className="inline-flex items-center gap-2 rounded bg-ops-green px-4 py-2 text-xs font-bold text-black disabled:opacity-50"
-            disabled={createMutation.isPending || !organizationId || !name.trim()}
-          >
-            <Plus size={13} /> {createMutation.isPending ? "Creating…" : "Create"}
-          </button>
-        </div>
+    <section className="glass-panel mb-6 overflow-hidden rounded-lg border border-amber-400/20">
+      <div className="border-b border-white/10 px-4 py-3">
+        <h2 className="text-[13px] font-bold text-neutral-100">Waiting for an organization · {radios.length}</h2>
+        <p className="mt-0.5 text-[11px] text-neutral-500">These radios belong to no one yet. Give each to the organization that will use it.</p>
       </div>
-      {createMutation.error ? <p className="mt-2 text-xs text-ops-red">{createMutation.error.message}</p> : null}
-      {warning ? <p className="mt-2 text-xs text-amber-300/90">{warning}</p> : null}
-      {createMutation.isSuccess && !warning ? <p className="mt-2 text-xs text-ops-green">Channel created and live</p> : null}
-    </form>
+      <div className="divide-y divide-white/5">
+        {radios.map((radio) => (
+          <div key={radio.device_id} className="flex flex-wrap items-center gap-3 px-4 py-2.5 text-[12px]">
+            <span className={`h-2 w-2 shrink-0 rounded-full ${radio.pocstars_online ? "bg-ops-green" : "bg-neutral-600"}`} />
+            <span className="min-w-0 flex-1 truncate text-neutral-100">{radio.name || `Radio ${radio.device_id}`}</span>
+            <span className="font-mono text-[10px] text-neutral-600">{radio.imei || radio.device_id}</span>
+            {canWrite ? (
+              <span className="flex items-center gap-2">
+                <select
+                  className="field-input w-48"
+                  value={targets[radio.device_id] || ""}
+                  onChange={(event) => setTargets({ ...targets, [radio.device_id]: event.target.value })}
+                >
+                  <option value="">Choose organization</option>
+                  {choices.map((org) => <option key={org.id} value={org.id}>{org.name}</option>)}
+                </select>
+                <button
+                  type="button"
+                  className="rounded-md bg-ops-green px-3 py-1.5 text-[11px] font-bold text-black hover:opacity-85 disabled:opacity-40"
+                  disabled={!targets[radio.device_id] || mutation.isPending}
+                  onClick={() => mutation.mutate({ deviceId: radio.device_id, orgId: targets[radio.device_id] })}
+                >
+                  Give
+                </button>
+              </span>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      {mutation.error ? <p className="px-4 py-2 text-[11px] text-ops-red">{mutation.error.message}</p> : null}
+    </section>
   );
 }
 
@@ -568,7 +451,8 @@ function StatePicker({ value, onChange }) {
   };
 
   return (
-    <div className="mt-4">
+    <div className="mt-2">
+      <p className="mb-2 text-[10px] uppercase tracking-wide text-neutral-500">States it can see</p>
       <label className="mb-3 flex items-center gap-2 text-xs text-neutral-300">
         <input type="checkbox" checked={Boolean(value.all_states)} onChange={(event) => onChange({ ...value, all_states: event.target.checked })} />
         All states

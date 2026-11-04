@@ -162,34 +162,42 @@ export function getRadioChannels() {
   return request("/api/pocstars/radio/channels");
 }
 
-export function listOrgChannels() {
-  return request("/api/org/channels");
+// The /api/org endpoints act on the caller's own organization. Platform staff
+// name the organization instead, so one organization page serves both: pass
+// orgId when a platform admin is looking at someone else's.
+function orgPath(path, orgId) {
+  if (!orgId) return path;
+  return `${path}${path.includes("?") ? "&" : "?"}organization_id=${encodeURIComponent(orgId)}`;
 }
 
-export function createOrgChannel(payload) {
-  return request("/api/org/channels", {
+export function listOrgChannels(orgId) {
+  return request(orgPath("/api/org/channels", orgId));
+}
+
+export function createOrgChannel(payload, orgId) {
+  return request(orgPath("/api/org/channels", orgId), {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export function updateOrgChannel(channelId, payload) {
-  return request(`/api/org/channels/${channelId}`, {
+export function updateOrgChannel(channelId, payload, orgId) {
+  return request(orgPath(`/api/org/channels/${channelId}`, orgId), {
     method: "PUT",
     body: JSON.stringify(payload),
   });
 }
 
-export function deleteOrgChannel(channelId) {
-  return request(`/api/org/channels/${channelId}`, { method: "DELETE" });
+export function deleteOrgChannel(channelId, orgId) {
+  return request(orgPath(`/api/org/channels/${channelId}`, orgId), { method: "DELETE" });
 }
 
-export function listOrgChannelDevices(channelId) {
-  return request(`/api/org/channels/${channelId}/devices`);
+export function listOrgChannelDevices(channelId, orgId) {
+  return request(orgPath(`/api/org/channels/${channelId}/devices`, orgId));
 }
 
-export function setOrgChannelDevice(channelId, deviceId, member) {
-  return request(`/api/org/channels/${channelId}/devices/${deviceId}`, {
+export function setOrgChannelDevice(channelId, deviceId, member, orgId) {
+  return request(orgPath(`/api/org/channels/${channelId}/devices/${deviceId}`, orgId), {
     method: member ? "POST" : "DELETE",
   });
 }
@@ -284,45 +292,45 @@ export function removePlatformStaff(userId) {
   });
 }
 
-export function getOrgAdmin() {
-  return request("/api/org");
+export function getOrgAdmin(orgId) {
+  return request(orgPath("/api/org", orgId));
 }
 
-export function addOrgAdminUser(payload) {
-  return request("/api/org/users", {
+export function addOrgAdminUser(payload, orgId) {
+  return request(orgPath("/api/org/users", orgId), {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export function removeOrgAdminUser(userId) {
-  return request(`/api/org/users/${userId}`, {
+export function removeOrgAdminUser(userId, orgId) {
+  return request(orgPath(`/api/org/users/${userId}`, orgId), {
     method: "DELETE",
   });
 }
 
-export function createOrgUnit(payload) {
-  return request("/api/org/units", {
+export function createOrgUnit(payload, orgId) {
+  return request(orgPath("/api/org/units", orgId), {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
-export function updateOrgUnit(unitId, payload) {
-  return request(`/api/org/units/${unitId}`, {
+export function updateOrgUnit(unitId, payload, orgId) {
+  return request(orgPath(`/api/org/units/${unitId}`, orgId), {
     method: "PUT",
     body: JSON.stringify(payload),
   });
 }
 
-export function deleteOrgUnit(unitId) {
-  return request(`/api/org/units/${unitId}`, {
+export function deleteOrgUnit(unitId, orgId) {
+  return request(orgPath(`/api/org/units/${unitId}`, orgId), {
     method: "DELETE",
   });
 }
 
-export function assignDeviceUnit(deviceId, unitId) {
-  return request(`/api/org/devices/${encodeURIComponent(deviceId)}/unit`, {
+export function assignDeviceUnit(deviceId, unitId, orgId) {
+  return request(orgPath(`/api/org/devices/${encodeURIComponent(deviceId)}/unit`, orgId), {
     method: "POST",
     body: JSON.stringify({ unit_id: unitId || null }),
   });

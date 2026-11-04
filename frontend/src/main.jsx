@@ -242,18 +242,25 @@ const adminOrganizationsRoute = createRoute({
   component: page("AdminOrganizationsRoute"),
 });
 
+// The organization page's tab lives in the address, so a link can open it on
+// Channels or Platform and a refresh keeps the tab.
+const validateTab = (search) => (search.tab ? { tab: String(search.tab) } : {});
+
 const adminOrganizationDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/organizations/$id",
   beforeLoad: requireAdmin,
+  validateSearch: validateTab,
   component: page("AdminOrganizationDetailRoute"),
 });
 
+// The Radio network page was folded into Organizations; old links still land.
 const adminRadioNetworkRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin/radio-network",
-  beforeLoad: requireAdmin,
-  component: page("AdminRadioNetworkRoute"),
+  beforeLoad: () => {
+    throw redirect({ to: "/admin/organizations" });
+  },
 });
 
 const platformStaffRoute = createRoute({
@@ -267,6 +274,7 @@ const orgAdminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/org/admin",
   beforeLoad: requireOrgAdmin,
+  validateSearch: validateTab,
   component: page("OrgAdminRoute"),
 });
 

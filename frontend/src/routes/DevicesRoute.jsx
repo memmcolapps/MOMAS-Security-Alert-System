@@ -484,7 +484,7 @@ export function DevicesRoute() {
                   <p className="px-1 py-2 text-[11px] text-ops-red">Could not load channels: {orgChannelsQuery.error.message}</p>
                 ) : !pickedOrgChannels.length ? (
                   <p className="rounded border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-neutral-500">
-                    This company has no channels yet. Create one from the Companies page first.
+                    This organization has no channels yet. Create one on its Channels tab first.
                   </p>
                 ) : (
                   <div className="flex flex-wrap gap-2">
