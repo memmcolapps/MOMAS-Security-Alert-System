@@ -1036,6 +1036,35 @@ export class PocstarsProvisioning {
     return { groupId };
   }
 
+  // The name the handset shows and every console lists. The timestamp bumps
+  // are what make echat's incremental sync pick the new name up.
+  async renameRadio({
+    uid,
+    companyId,
+    name,
+  }: {
+    uid: number;
+    companyId: number | null;
+    name: string;
+  }) {
+    if (!name) throw new Error("A radio name is required.");
+    const scoped = Number.isSafeInteger(companyId) && Number(companyId) > 0;
+    const [result]: any = await this.pool.query(
+      `UPDATE tb_User
+          SET User_Name = ?, User_UpdateTime = NOW(), Last_Update_Time = NOW()
+        WHERE User_ID = ? AND User_Type = 0 AND IsActive = 1
+          ${scoped ? "AND User_CompanyID = ?" : ""}`,
+      scoped ? [name, uid, companyId] : [name, uid],
+    );
+    if (!result.affectedRows)
+      throw new Error(
+        scoped
+          ? "That radio does not belong to this organization on the radio network."
+          : "That radio is not active on the radio network.",
+      );
+    return { uid, name };
+  }
+
   // Retire rather than delete: the vendor keeps recordings and SOS history
   // pointing at the group id.
   async retireChannel({

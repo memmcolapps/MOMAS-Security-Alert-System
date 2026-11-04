@@ -577,6 +577,25 @@ router.get("/radio/channels", async (c) => {
   }
 });
 
+// The radio network owns a managed radio's name: the handset shows it and the
+// inventory sync copies it back over this row every cycle. So a rename goes to
+// the network first, and a rename that fails there fails here too - otherwise
+// the new name would quietly revert within minutes.
+async function renameOnNetwork(existing: any, name: unknown, companyId: number | null) {
+  const next = typeof name === "string" ? name.trim() : "";
+  if (!existing?.pocstars_managed || !next || next === existing.name) return null;
+  const uid = Number(existing.device_id);
+  if (!Number.isSafeInteger(uid) || uid <= 0) return null;
+  try {
+    await provisionOnNetwork("provision.radio.rename", { uid, companyId, name: next });
+    return null;
+  } catch (error) {
+    return error instanceof Error
+      ? `The radio could not be renamed on the radio network: ${error.message}`
+      : "The radio could not be renamed on the radio network.";
+  }
+}
+
 router.post("/devices", async (c) => {
   const user = (c as any).get("user");
   const body = await c.req.json().catch(() => ({}));
@@ -589,6 +608,10 @@ router.post("/devices", async (c) => {
     // upserts organization_id, which previously let an organization admin claim
     // an existing device_id and pull another tenant's radio into their own org.
     if (isPlatformOperator(user)) {
+      // Platform operators can rename any radio, pooled ones included, so the
+      // network write is not scoped to a company.
+      const renameError = await renameOnNetwork(await db.getDevice(device_id.trim()), name, null);
+      if (renameError) return c.json({ error: renameError }, 502);
       const device = await db.upsertDevice({
         device_id: device_id.trim(),
         name,
@@ -624,6 +647,11 @@ router.post("/devices", async (c) => {
     const existing = await db.getDevice(device_id.trim());
     if (!existing) return c.json({ error: "Device not found" }, 404);
     if (existing.organization_id !== orgId) return c.json({ error: "forbidden" }, 403);
+
+    const organization = await db.getOrganization(Number(orgId));
+    const companyId = Number(organization?.pocstars_company_id) || null;
+    const renameError = await renameOnNetwork(existing, name, companyId);
+    if (renameError) return c.json({ error: renameError }, 502);
 
     const device = await db.updateDeviceFields(device_id.trim(), {
       name,

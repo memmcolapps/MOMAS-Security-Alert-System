@@ -552,6 +552,18 @@ async function handleProvisioning(
           }),
         });
       }
+      case "provision.radio.rename": {
+        return send(ws, {
+          type: "provision.result",
+          requestId,
+          ok: true,
+          result: await provisioning.renameRadio({
+            uid: Number(message.uid),
+            companyId: Number(message.companyId) || null,
+            name: String(message.name || "").trim(),
+          }),
+        });
+      }
       case "provision.radio.retire": {
         return send(ws, {
           type: "provision.result",
