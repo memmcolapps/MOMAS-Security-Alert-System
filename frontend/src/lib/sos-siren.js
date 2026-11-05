@@ -141,24 +141,91 @@ export function stopSiren() {
   source = null;
 }
 
-/**
- * A single two-note chime for an amber alarm: heard once, then quiet. Uses
- * the same audio context as the siren, so it is armed by the same first click.
- */
-export function playChime() {
+// Amber: a soft two-note chime, then quiet, round again until someone answers.
+// Rendered and looped like the siren, so a background tab keeps its pace.
+const CHIME_CYCLE_SECONDS = 6;
+
+let chimeBuffer = null;
+let chimeRendering = null;
+let chimeSource = null;
+let chimeWanted = false;
+
+function addBell(offline, hz, start, level, length = 0.9) {
+  const osc = offline.createOscillator();
+  const gain = offline.createGain();
+  osc.type = "sine";
+  osc.frequency.value = hz;
+  gain.gain.setValueAtTime(0, start);
+  gain.gain.linearRampToValueAtTime(level, start + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.001, start + length);
+  osc.connect(gain);
+  gain.connect(offline.destination);
+  osc.start(start);
+  osc.stop(start + length + 0.05);
+}
+
+async function renderChime(sampleRate) {
+  const OfflineContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const offline = new OfflineContext(1, Math.ceil(CHIME_CYCLE_SECONDS * sampleRate), sampleRate);
+  addBell(offline, 880, 0, 0.45);
+  addBell(offline, 660, 0.25, 0.45);
+  return offline.startRendering();
+}
+
+function loadChime() {
+  if (chimeBuffer) return Promise.resolve(chimeBuffer);
+  if (!chimeRendering) {
+    chimeRendering = renderChime(ctx.sampleRate)
+      .then((rendered) => {
+        chimeBuffer = rendered;
+        return rendered;
+      })
+      .finally(() => {
+        chimeRendering = null;
+      });
+  }
+  return chimeRendering;
+}
+
+/** Amber: the chime repeats every few seconds until stopped. Same first-click arming as the siren. */
+export async function startChime() {
+  chimeWanted = true;
+  if (chimeSource || !ensureContext()) return;
+  void ctx.resume().catch(() => {});
+  const cycle = await loadChime().catch(() => null);
+  if (!cycle || !chimeWanted || chimeSource) return;
+  chimeSource = ctx.createBufferSource();
+  chimeSource.buffer = cycle;
+  chimeSource.loop = true;
+  chimeSource.connect(output);
+  chimeSource.start();
+}
+
+export function stopChime() {
+  chimeWanted = false;
+  if (!chimeSource) return;
+  try {
+    chimeSource.stop();
+  } catch {
+    // Already stopped.
+  }
+  chimeSource.disconnect();
+  chimeSource = null;
+}
+
+/** Yellow: one soft, low tone when it arrives, so it is heard without alarming anyone. */
+export function playSoftTone() {
   if (!ensureContext() || ctx.state !== "running") return;
   const now = ctx.currentTime;
-  [[880, 0], [660, 0.22]].forEach(([hz, offset]) => {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "sine";
-    osc.frequency.value = hz;
-    gain.gain.setValueAtTime(0, now + offset);
-    gain.gain.linearRampToValueAtTime(0.5, now + offset + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.6);
-    osc.connect(gain);
-    gain.connect(output);
-    osc.start(now + offset);
-    osc.stop(now + offset + 0.65);
-  });
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = "sine";
+  osc.frequency.value = 523;
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.25, now + 0.03);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.7);
+  osc.connect(gain);
+  gain.connect(output);
+  osc.start(now);
+  osc.stop(now + 0.75);
 }

@@ -1,8 +1,8 @@
 // How loud an alarm is, and how a geofence alarm is said in words.
 //
 // red    — siren until someone answers, full-width banner, on every page.
-// amber  — one chime and a quieter banner until someone answers.
-// yellow — no sound and no banner; it is logged in the alarms list for review.
+// amber  — a soft chime every few seconds and a quieter banner until someone answers.
+// yellow — one gentle tone and no banner; it is logged in the alarms list for review.
 //
 // A radio's SOS button is always red. Geofence alarms carry the level of the
 // rule that raised them; ones raised before levels existed are red, which is
@@ -18,8 +18,8 @@ export const LEVEL_STYLES = {
 
 export const LEVEL_MEANING = {
   red: "Siren until answered",
-  amber: "One chime, needs an answer",
-  yellow: "Silent, logged only",
+  amber: "Soft chime until answered",
+  yellow: "One gentle tone, logged",
 };
 
 export function isGeofenceAlarm(alert) {

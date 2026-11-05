@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classify, ruleMembers, signedDistanceMetres, step, zoneBounds, inBounds, type Membership } from "./rules";
+import { classify, loudestPerStep, ruleMembers, signedDistanceMetres, step, zoneBounds, inBounds, type Membership } from "./rules";
 
 // ~111 m per 0.001° of latitude.
 const base = { shape_type: "circle" as const, center_lat: 9.0, center_lon: 7.0, radius_m: 500 };
@@ -100,5 +100,19 @@ describe("zone bounds", () => {
     const far = at(600);
     expect(inBounds(bounds, near.lat, near.lon)).toBe(true);
     expect(inBounds(bounds, far.lat, far.lon)).toBe(false);
+  });
+});
+
+describe("stepped alarms", () => {
+  const rule = (id: number, level: string, geofence_id = 1, trigger = "exit") => ({ rule: { id, level, geofence_id, trigger } });
+
+  test("a radio crossing every step at once raises only the loudest", () => {
+    const kept = loudestPerStep([rule(1, "yellow"), rule(2, "red"), rule(3, "amber")]);
+    expect(kept.map((b) => b.rule.id)).toEqual([2]);
+  });
+
+  test("steps on different zones or directions alarm separately", () => {
+    const kept = loudestPerStep([rule(1, "yellow", 1), rule(2, "amber", 2), rule(3, "red", 1, "enter")]);
+    expect(kept.map((b) => b.rule.id).sort()).toEqual([1, 2, 3]);
   });
 });

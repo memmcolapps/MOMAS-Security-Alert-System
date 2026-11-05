@@ -5,6 +5,7 @@ import { assetKey, currentAssetPositions } from "./positions";
 import {
   classify,
   inBounds,
+  loudestPerStep,
   ruleMembers,
   signedDistanceMetres,
   step,
@@ -125,6 +126,11 @@ async function evaluatePosition(position: PositionUpdate) {
   if (!rules?.length) return;
   const normalized = { ...position, asset_id: String(position.asset_id), lat, lon, observed_at: observedAt };
 
+  // Stepped alarms on one zone (Yellow at the edge, Amber further out, Red
+  // further still) are separate rules. A radio that crosses several steps in
+  // one fix should raise only the loudest of them.
+  const breaches: Array<{ rule: IndexedRule; distanceM: number }> = [];
+
   for (const rule of rules) {
     const sk = stateKey(rule.id, key);
     const previous = states.get(sk) || null;
@@ -147,14 +153,23 @@ async function evaluatePosition(position: PositionUpdate) {
       });
     }
     if (result.event === "breach") {
-      const alert = await store.createRuleAlert(rule, normalized, Math.round(verdict.distanceM));
-      if (alert) bus.emit("operational-alert:new", alert);
+      breaches.push({ rule, distanceM: verdict.distanceM });
     } else if (result.event === "clear") {
       const cleared = await store.markRuleCleared(rule, normalized);
       cleared.forEach((alert) => bus.emit("operational-alert:updated", alert));
     }
   }
+
+  for (const { rule, distanceM } of loudestPerStep(breaches)) {
+    const alert = await store.createRuleAlert(rule, normalized, Math.round(distanceM));
+    if (!alert) continue;
+    bus.emit("operational-alert:new", alert);
+    // The quieter step this radio already alarmed on is now old news.
+    const escalated = await store.escalateLowerAlerts(rule, normalized, alert);
+    escalated.forEach((lower) => bus.emit("operational-alert:updated", lower));
+  }
 }
+
 
 /** Direct entry point for deterministic integration tests and trusted ingest. */
 export async function evaluatePositionNow(position: PositionUpdate) {

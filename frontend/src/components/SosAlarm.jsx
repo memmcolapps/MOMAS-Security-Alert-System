@@ -1,10 +1,10 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { BellOff, Siren, Volume2 } from "lucide-react";
+import { BellOff, ChevronDown, Siren, Volume2 } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { alertsEventsUrl, listAlarms } from "../lib/api";
-import { alarmHeadline, levelOf } from "../lib/alarm-levels";
-import { armSiren, playChime, sirenState, startSiren, stopSiren, subscribeSiren } from "../lib/sos-siren";
+import { alertsEventsUrl, listAlarms, startAlarmResponse } from "../lib/api";
+import { alarmHeadline, LEVEL_STYLES, levelOf } from "../lib/alarm-levels";
+import { armSiren, playSoftTone, sirenState, startChime, startSiren, stopChime, stopSiren, subscribeSiren } from "../lib/sos-siren";
 
 const SosAlarmContext = createContext({ ringing: [], silence: () => {}, soundState: "blocked" });
 
@@ -14,6 +14,15 @@ export function useSosAlarm() {
 
 const alarmKey = (alert) => String(alert.alert_key || `pocstars:${alert.sos_msg_id}`);
 const alarmLabel = (alert) => alarmHeadline(alert);
+const LEVEL_RANK = { yellow: 0, amber: 1, red: 2 };
+
+/** Loudest first, then newest first within a level. */
+function byUrgency(a, b) {
+  return (
+    LEVEL_RANK[levelOf(b)] - LEVEL_RANK[levelOf(a)] ||
+    (new Date(b.triggered_at).getTime() || 0) - (new Date(a.triggered_at).getTime() || 0)
+  );
+}
 
 /**
  * Rings for alarms that arrive while the console is open, on every page.
@@ -23,9 +32,10 @@ const alarmLabel = (alert) => alarmHeadline(alert);
  * response to it (status leaves 0) or silences it here; silencing covers the
  * alarms ringing now, never the next one.
  *
- * Only red alarms (every SOS, and red geofence rules) sound the siren. An
- * amber one chimes once and shows a quieter banner; a yellow one is only
- * logged, so it never reaches this provider's ringing set.
+ * Every alarm makes a sound, louder the more it matters. Red (every SOS, and
+ * red geofence rules) sounds the siren until answered. Amber repeats a soft
+ * chime until answered, under a quieter banner. Yellow plays one gentle tone
+ * as it arrives and is logged; it never reaches this provider's ringing set.
  */
 export function SosAlarmProvider({ enabled = true, children }) {
   const queryClient = useQueryClient();
@@ -108,9 +118,13 @@ export function SosAlarmProvider({ enabled = true, children }) {
       return;
     }
     const arrived = unanswered.filter((alert) => !knownRef.current.has(alarmKey(alert)));
+    const arrivedYellow = alerts.filter(
+      (alert) => Number(alert.status) === 0 && !alert.returned_at && levelOf(alert) === "yellow" && !knownRef.current.has(alarmKey(alert)),
+    );
     alerts.forEach((alert) => knownRef.current.add(alarmKey(alert)));
     if (arrived.length) notifyDesktop(arrived);
-    if (arrived.some((alert) => levelOf(alert) === "amber") && !arrived.some((alert) => levelOf(alert) === "red")) playChime();
+    // Red and amber keep sounding below; a yellow only needs its one tone.
+    if (arrivedYellow.length && !arrived.length) playSoftTone();
     setRingingKeys((current) => {
       const next = new Set([...current].filter((key) => unansweredKeys.has(key)));
       arrived.forEach((alert) => next.add(alarmKey(alert)));
@@ -124,17 +138,28 @@ export function SosAlarmProvider({ enabled = true, children }) {
   );
 
   const redCount = useMemo(() => ringing.filter((alert) => levelOf(alert) === "red").length, [ringing]);
+  const amberCount = useMemo(() => ringing.filter((alert) => levelOf(alert) === "amber").length, [ringing]);
 
+  // One sound at a time: the siren covers everything while any red rings, and
+  // the amber chime only plays when nothing louder is.
   useEffect(() => {
-    if (!redCount) {
+    if (redCount) {
+      stopChime();
+      void startSiren();
+    } else {
       stopSiren();
-      return undefined;
+      if (amberCount) void startChime();
+      else stopChime();
     }
-    void startSiren();
-    return undefined;
-  }, [redCount]);
+  }, [redCount, amberCount]);
 
-  useEffect(() => () => stopSiren(), []);
+  useEffect(
+    () => () => {
+      stopSiren();
+      stopChime();
+    },
+    [],
+  );
 
   // A tab title is visible from another tab, another window and the taskbar,
   // and unlike a flashing title it needs no timer for a background tab to throttle.
@@ -160,7 +185,21 @@ export function SosAlarmProvider({ enabled = true, children }) {
     };
   }, [soundState]);
 
-  const silence = useCallback(() => setRingingKeys(new Set()), []);
+  // Silence takes the alarms to quiet. Without a list it quiets only the
+  // loudest level ringing, so muting an amber chime can never also mute a red
+  // siren that came in a moment later: that one stays on until silenced itself.
+  const silence = useCallback(
+    (keys) => {
+      const chosen = Array.isArray(keys)
+        ? new Set(keys)
+        : (() => {
+            const top = Math.max(-1, ...ringing.map((alert) => LEVEL_RANK[levelOf(alert)]));
+            return new Set(ringing.filter((alert) => LEVEL_RANK[levelOf(alert)] === top).map(alarmKey));
+          })();
+      setRingingKeys((current) => new Set([...current].filter((key) => !chosen.has(key))));
+    },
+    [ringing],
+  );
   const value = useMemo(() => ({ ringing, silence, soundState }), [ringing, silence, soundState]);
 
   return <SosAlarmContext.Provider value={value}>{children}</SosAlarmContext.Provider>;
@@ -212,25 +251,87 @@ export function SosAlarmBanner() {
     );
   }
 
-  // Red first: the loudest alarm leads the banner and decides its colour.
-  const ordered = [...ringing].sort((a, b) => (levelOf(a) === "red" ? 0 : 1) - (levelOf(b) === "red" ? 0 : 1));
+  // The loudest alarm leads the banner and decides its colour.
+  const ordered = [...ringing].sort(byUrgency);
+  return <RingingBanner blocked={blocked} ordered={ordered} silence={silence} />;
+}
+
+function LevelDot({ alert }) {
+  return (
+    <span
+      className="inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-black/30"
+      style={{ background: LEVEL_STYLES[levelOf(alert)]?.dot }}
+      title={LEVEL_STYLES[levelOf(alert)]?.label}
+    />
+  );
+}
+
+function sinceText(alert) {
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(alert.triggered_at).getTime()) / 1000));
+  if (!Number.isFinite(seconds)) return "";
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.round(seconds / 60)} min ago`;
+  return `${Math.round(seconds / 3600)} h ago`;
+}
+
+function RingingBanner({ blocked, ordered, silence }) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
   const red = levelOf(ordered[0]) === "red";
-  const names = ordered.slice(0, 3).map(alarmLabel).join(", ");
-  const more = ordered.length > 3 ? ` and ${ordered.length - 3} more` : "";
+  const topLevel = levelOf(ordered[0]);
+  const atTop = ordered.filter((alert) => levelOf(alert) === topLevel).length;
+  const shown = ordered.slice(0, 3);
+  const more = ordered.length - shown.length;
+
+  // Answering starts the response, which is what stops an alarm ringing. It
+  // leaves the banner at once and comes back if the server refuses.
+  const answer = useMutation({
+    mutationFn: (alert) => startAlarmResponse({ alertKey: alert.alert_key }),
+    onMutate: async (alert) => {
+      await queryClient.cancelQueries({ queryKey: ["alarms", "operations"] });
+      const previous = queryClient.getQueryData(["alarms", "operations"]);
+      queryClient.setQueryData(["alarms", "operations"], (current) =>
+        current?.alerts
+          ? { ...current, alerts: current.alerts.map((item) => (alarmKey(item) === alarmKey(alert) ? { ...item, status: 1 } : item)) }
+          : current,
+      );
+      return { previous };
+    },
+    onError: (_error, _alert, context) => {
+      if (context?.previous) queryClient.setQueryData(["alarms", "operations"], context.previous);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["alarms"] }),
+  });
+
+  const edge = red ? "border-white/60 hover:bg-white/10 active:bg-white/20" : "border-black/40 hover:bg-black/10 active:bg-black/20";
   return (
     <div
       role="alert"
       data-grid-avoid=""
-      className={`fixed inset-x-0 top-[var(--ops-chrome)] z-[1200] border-b-2 px-4 py-2.5 ${
-        red ? "animate-pulse border-red-300 bg-red-700 text-white" : "border-amber-300 bg-amber-500 text-black"
+      className={`fixed inset-x-0 top-[var(--ops-chrome)] z-[1200] border-b-2 ${
+        red ? "border-red-300 bg-red-700 text-white" : "border-amber-300 bg-amber-500 text-black"
       }`}
     >
-      <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-3">
+      <div className={`mx-auto flex max-w-5xl flex-wrap items-center gap-3 px-4 py-2.5 ${red && !open ? "animate-pulse" : ""}`}>
         <Siren size={20} className="shrink-0" />
-        <p className="min-w-0 flex-1 text-sm font-black">
-          {names}
-          {more}
-        </p>
+        <button
+          aria-expanded={open}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm font-black"
+          onClick={() => setOpen((value) => !value)}
+          title={open ? "Hide the list" : "Show every alarm"}
+          type="button"
+        >
+          <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            {shown.map((alert) => (
+              <span className="inline-flex min-w-0 items-center gap-1.5" key={alarmKey(alert)}>
+                <LevelDot alert={alert} />
+                <span className="truncate">{alarmLabel(alert)}</span>
+              </span>
+            ))}
+            {more > 0 ? <span className="opacity-80">and {more} more</span> : null}
+          </span>
+          <ChevronDown size={16} className={`ml-auto shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+        </button>
         {blocked ? (
           <button
             type="button"
@@ -240,20 +341,54 @@ export function SosAlarmBanner() {
             <Volume2 size={13} className="mr-1 inline" /> Sound is blocked - click to hear
           </button>
         ) : null}
-        <Link
-          to="/alarms"
-          className={`rounded border px-3 py-1.5 text-[11px] font-bold ${red ? "border-white/60 hover:bg-white/10" : "border-black/40 hover:bg-black/10"}`}
-        >
+        <Link to="/alarms" className={`rounded border px-3 py-1.5 text-[11px] font-bold ${edge}`}>
           Open alarms
         </Link>
         <button
           type="button"
-          onClick={silence}
-          className={`inline-flex items-center gap-1.5 rounded border px-3 py-1.5 text-[11px] font-bold ${red ? "border-white/60 hover:bg-white/10" : "border-black/40 hover:bg-black/10"}`}
+          onClick={() => silence()}
+          className={`inline-flex items-center gap-1.5 rounded border px-3 py-1.5 text-[11px] font-bold ${edge}`}
+          title={atTop < ordered.length ? `Quiets the ${LEVEL_STYLES[topLevel].label.toLowerCase()} alarms only` : ""}
         >
-          <BellOff size={13} /> {red ? "Silence" : "Dismiss"}
+          <BellOff size={13} /> Silence {atTop < ordered.length ? LEVEL_STYLES[topLevel].label.toLowerCase() : ""}
         </button>
       </div>
+
+      {open ? (
+        <ul className="mx-auto max-h-[50vh] max-w-5xl overflow-y-auto px-4 pb-3">
+          {ordered.map((alert) => (
+            <li
+              className={`flex items-center gap-2.5 border-t py-2 text-[12px] ${red ? "border-white/15" : "border-black/15"}`}
+              key={alarmKey(alert)}
+            >
+              <LevelDot alert={alert} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-bold">{alarmLabel(alert)}</span>
+                <span className="block text-[10px] opacity-75">
+                  {LEVEL_STYLES[levelOf(alert)]?.label} · {sinceText(alert)}
+                </span>
+              </span>
+              <button
+                type="button"
+                className={`rounded border px-2.5 py-1 text-[11px] font-bold ${edge}`}
+                onClick={() => silence([alarmKey(alert)])}
+              >
+                Silence
+              </button>
+              {alert.alert_key ? (
+                <button
+                  type="button"
+                  disabled={answer.isPending && answer.variables && alarmKey(answer.variables) === alarmKey(alert)}
+                  className={`rounded px-2.5 py-1 text-[11px] font-black disabled:opacity-60 ${red ? "bg-white text-red-700 hover:bg-white/90" : "bg-black text-amber-300 hover:bg-black/85"}`}
+                  onClick={() => answer.mutate(alert)}
+                >
+                  Answer
+                </button>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }

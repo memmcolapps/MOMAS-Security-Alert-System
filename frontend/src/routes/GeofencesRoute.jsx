@@ -2,10 +2,12 @@ import L from "leaflet";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
+  Ban,
   Check,
   ChevronDown,
   LoaderCircle,
   LocateFixed,
+  LogOut,
   MapPin,
   MapPinned,
   Minus,
@@ -66,8 +68,10 @@ const EMPTY_ZONE = {
 };
 
 // In the editor a rule card holds any number of radios, plus units or
-// channels as a shortcut. It shares one direction and one level. On save it
-// becomes one stored rule per radio or group, so each radio still alarms on its own.
+// channels as a shortcut, and one direction. Its alarm comes in steps that get
+// louder further from the edge: Yellow at the edge, Amber 200 m out, Red 500 m
+// out. On save it becomes one stored rule per radio and step, so each radio
+// still alarms on its own and the server knows each step's line.
 let ruleSeq = 0;
 function newRule(patch = {}) {
   ruleSeq += 1;
@@ -75,15 +79,72 @@ function newRule(patch = {}) {
     key: `new-${ruleSeq}`,
     targets: [],
     trigger: "exit",
-    level: "amber",
-    buffer_m: 30,
+    // The first step sits at the edge, held off it by the GPS drift allowance.
+    steps: [{ level: "amber", distance_m: 30 }],
     confirmations_required: 3,
     active: true,
+    saved: {},
     ...patch,
   };
 }
 
+const LEVEL_RANK = { yellow: 0, amber: 1, red: 2 };
+const QUIET_FIRST = [...LEVELS].sort((a, b) => LEVEL_RANK[a] - LEVEL_RANK[b]);
+const MAX_STEP_M = 20_000;
+
+/** Steps must get louder as they go out; anything that no longer does is dropped. */
+function keepRising(steps) {
+  const kept = [];
+  for (const step of steps) {
+    const previous = kept[kept.length - 1];
+    if (!previous || LEVEL_RANK[step.level] > LEVEL_RANK[previous.level]) kept.push(step);
+  }
+  return kept;
+}
+
+/** The next, louder step and a sensible distance for it. */
+function nextStep(steps) {
+  const last = steps[steps.length - 1];
+  const level = QUIET_FIRST.find((item) => LEVEL_RANK[item] > LEVEL_RANK[last.level]);
+  if (!level) return null;
+  const distance = Number(last.distance_m) < 200 ? 200 : Math.round((Number(last.distance_m) * 2.5) / 50) * 50;
+  return { level, distance_m: Math.min(MAX_STEP_M, distance) };
+}
+
+const savedKey = (target, trigger, level) => `${target.target_type}:${target.target_id}:${trigger}:${level}`;
+
 const TRIGGER_LABEL = { exit: "must stay inside", enter: "must not enter" };
+
+// Leaving and entering look different everywhere a zone is listed or drawn:
+// a blue keep-in zone, a rose no-go zone with a dashed edge.
+const TRIGGER_LOOK = {
+  exit: {
+    zone: "Keep-in zone",
+    Icon: LogOut,
+    chip: "border-sky-400/40 bg-sky-400/10 text-sky-300",
+    accent: "border-l-sky-400",
+    icon: "text-sky-300",
+    breach: "outside",
+    stroke: "#38bdf8",
+    dash: null,
+  },
+  enter: {
+    zone: "No-go zone",
+    Icon: Ban,
+    chip: "border-rose-400/40 bg-rose-400/10 text-rose-300",
+    accent: "border-l-rose-400",
+    icon: "text-rose-300",
+    breach: "inside",
+    stroke: "#fb7185",
+    dash: "6 5",
+  },
+};
+
+/** "exit", "enter", or null for a zone with both kinds of rule (or none). */
+function zoneKind(rules) {
+  const triggers = new Set((rules || []).map((rule) => rule.trigger));
+  return triggers.size === 1 ? [...triggers][0] : null;
+}
 const AROUND_MARGIN_M = 150;
 
 // The same basemaps as the operations map, so a zone is drawn on exactly what
@@ -114,52 +175,77 @@ function toForm(zone) {
       center_lon: zone.center_lon == null ? null : Number(zone.center_lon),
       radius_m: Number(zone.radius_m) || 300,
     },
-    rules: groupRules(zone.rules || []).map((group) => ({
-      key: `rule-${group[0].id}`,
-      targets: group.map((rule) => ({
-        id: rule.id,
-        target_type: rule.target_type,
-        target_id: String(rule.target_id),
-        saved_as: `${rule.target_type}:${rule.target_id}:${rule.trigger}`,
-      })),
-      trigger: group[0].trigger,
-      level: group[0].level,
-      buffer_m: Number(group[0].buffer_m),
-      confirmations_required: Number(group[0].confirmations_required),
-      active: group[0].active !== false,
-    })),
+    rules: cardsFromRules(zone.rules || []),
   };
 }
 
-/** Stored rules that share direction, level and tuning read as one card. */
-function groupRules(rules) {
-  const groups = new Map();
+/**
+ * Stored rules back into cards: each radio's rules on one direction are its
+ * steps, and radios with exactly the same steps share a card.
+ */
+function cardsFromRules(rules) {
+  const perTarget = new Map();
   for (const rule of rules) {
-    const key = [rule.trigger, rule.level, Number(rule.buffer_m), Number(rule.confirmations_required), rule.active !== false].join("|");
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(rule);
+    const target = { target_type: rule.target_type, target_id: String(rule.target_id) };
+    const tuning = [Number(rule.confirmations_required), rule.active !== false];
+    const key = [target.target_type, target.target_id, rule.trigger, ...tuning].join("|");
+    if (!perTarget.has(key)) {
+      perTarget.set(key, { target, trigger: rule.trigger, tuning, steps: [], saved: {} });
+    }
+    const entry = perTarget.get(key);
+    entry.steps.push({ level: LEVELS.includes(rule.level) ? rule.level : "red", distance_m: Number(rule.buffer_m) || 0 });
+    entry.saved[savedKey(target, rule.trigger, rule.level)] = rule.id;
   }
-  return [...groups.values()];
+  const cards = new Map();
+  for (const entry of perTarget.values()) {
+    const steps = keepRising([...entry.steps].sort((a, b) => a.distance_m - b.distance_m || LEVEL_RANK[a.level] - LEVEL_RANK[b.level]));
+    const signature = [entry.trigger, ...entry.tuning, steps.map((step) => `${step.level}@${step.distance_m}`).join(",")].join("|");
+    const card = cards.get(signature);
+    if (card) {
+      card.targets.push(entry.target);
+      Object.assign(card.saved, entry.saved);
+      continue;
+    }
+    cards.set(signature, {
+      key: `rule-${Object.values(entry.saved)[0]}`,
+      targets: [entry.target],
+      trigger: entry.trigger,
+      steps,
+      confirmations_required: entry.tuning[0],
+      active: entry.tuning[1],
+      saved: { ...entry.saved },
+    });
+  }
+  return [...cards.values()];
 }
 
-/** One stored rule per radio or group in the card, each flagged if it is new or changed. */
+/**
+ * One stored rule per radio and step. A step keeps its stored rule while its
+ * radio, direction and level stay the same; anything else is a new rule, so the
+ * server starts it fresh instead of carrying an old breach state over.
+ */
 function expandRule(card) {
-  return card.targets.map((target) => ({
-    cardKey: card.key,
-    fresh: !target.id || target.saved_as !== `${target.target_type}:${target.target_id}:${card.trigger}`,
-    payload: {
-      // A rule that changed direction is replaced rather than kept, so the
-      // server starts it fresh instead of carrying the old breach state over.
-      id: target.saved_as === `${target.target_type}:${target.target_id}:${card.trigger}` ? target.id : null,
-      target_type: target.target_type,
-      target_id: target.target_id,
-      trigger: card.trigger,
-      level: card.level,
-      buffer_m: Number(card.buffer_m),
-      confirmations_required: Number(card.confirmations_required),
-      active: card.active,
-    },
-  }));
+  return card.targets.flatMap((target) =>
+    card.steps.map((step, stepIndex) => {
+      const id = card.saved?.[savedKey(target, card.trigger, step.level)] || null;
+      return {
+        cardKey: card.key,
+        stepIndex,
+        level: step.level,
+        fresh: !id,
+        payload: {
+          id,
+          target_type: target.target_type,
+          target_id: target.target_id,
+          trigger: card.trigger,
+          level: step.level,
+          buffer_m: Number(step.distance_m),
+          confirmations_required: Number(card.confirmations_required),
+          active: card.active,
+        },
+      };
+    }),
+  );
 }
 
 const hasTarget = (card, type, id) => card.targets.some((t) => t.target_type === type && String(t.target_id) === String(id));
@@ -426,12 +512,21 @@ function ZoneMap({
     layer.clearLayers();
     for (const other of zones) {
       if (editing && Number(other.id) === Number(zone.id)) continue;
-      const style = { color: "#94a3b8", weight: 1.5, fillColor: "#475569", fillOpacity: editing ? 0.05 : 0.12, interactive: !editing };
+      const look = TRIGGER_LOOK[zoneKind(other.rules)];
+      const style = {
+        color: look?.stroke || "#94a3b8",
+        weight: 1.5,
+        dashArray: look?.dash || null,
+        fillColor: look?.stroke || "#475569",
+        fillOpacity: editing ? 0.04 : 0.1,
+        opacity: editing ? 0.6 : 1,
+        interactive: !editing,
+      };
       const shape =
         other.shape_type === "circle"
           ? L.circle([Number(other.center_lat), Number(other.center_lon)], { ...style, radius: Number(other.radius_m) })
           : L.polygon((other.geometry?.coordinates?.[0] || []).map(([lon, lat]) => [lat, lon]), style);
-      shape.bindTooltip(other.name).addTo(layer);
+      shape.bindTooltip(look ? `${other.name} · ${look.zone}` : other.name).addTo(layer);
     }
   }, [zones, editing, zone.id]);
 
@@ -582,24 +677,28 @@ function ZoneMap({
     }
   }, [zone]);
 
-  // The dashed line where the focused rule actually fires: outside the shape
-  // for "must stay inside", inside it for "must not enter".
+  // One dashed line per alarm step of the focused card, in that step's colour,
+  // where it actually fires: outside the shape for "must stay inside", inside
+  // it for "must not enter". The same offset works for every kind of shape.
   useEffect(() => {
     const layer = layers.current.alarm;
     if (!layer) return;
     layer.clearLayers();
     if (!editing || !focusRule || !isPlaced(zone) || drawing) return;
-    const buffer = Number(focusRule.buffer_m) || 0;
-    if (!(buffer > 0)) return;
-    const style = { color: "#fbbf24", weight: 1.5, dashArray: "6 6", fill: false, interactive: false };
-    if (zone.shape_type === "circle") {
-      const radius = Number(zone.radius_m) + (focusRule.trigger === "enter" ? -buffer : buffer);
-      if (radius > 0) L.circle([zone.center_lat, zone.center_lon], { ...style, radius }).addTo(layer);
-      return;
+    const crossed = zone.shape_type === "polygon" && polygonSelfIntersects(zone.points);
+    for (const step of focusRule.steps) {
+      const distance = Number(step.distance_m) || 0;
+      if (!(distance > 0)) continue;
+      const style = { color: LEVEL_STYLES[step.level].dot, weight: 2, dashArray: "6 6", fill: false, interactive: false };
+      if (zone.shape_type === "circle") {
+        const radius = Number(zone.radius_m) + (focusRule.trigger === "enter" ? -distance : distance);
+        if (radius > 0) L.circle([zone.center_lat, zone.center_lon], { ...style, radius }).addTo(layer);
+        continue;
+      }
+      if (crossed) return;
+      const ring = focusRule.trigger === "enter" ? insetRing(zone.points, distance) : bufferRing(zone.points, distance);
+      if (ring) L.polygon(ring.map(([lon, lat]) => [lat, lon]), style).addTo(layer);
     }
-    if (polygonSelfIntersects(zone.points)) return;
-    const ring = focusRule.trigger === "enter" ? insetRing(zone.points, buffer) : bufferRing(zone.points, buffer);
-    if (ring) L.polygon(ring.map(([lon, lat]) => [lat, lon]), style).addTo(layer);
   }, [editing, focusRule, zone, drawing]);
 
   // Who the rules watch, coloured by the server's verdict.
@@ -613,7 +712,8 @@ function ZoneMap({
         radius: 7,
         color: "#0b0b0b",
         weight: 2,
-        fillColor: MEMBER_COLOURS[member.state] || MEMBER_COLOURS.pending,
+        // Past a step: that step's colour, so the map says how loud it is.
+        fillColor: (member.state === "breach" && LEVEL_STYLES[member.level]?.dot) || MEMBER_COLOURS[member.state] || MEMBER_COLOURS.pending,
         fillOpacity: 1,
         interactive: !drawing,
         bubblingMouseEvents: false,
@@ -1118,10 +1218,92 @@ function verdictText(rule, verdict) {
   const parts = summary.ok || !breached.length ? [`${summary.ok} of ${summary.total} ${okWord}`] : [];
   if (breached.length) {
     const names = breached.slice(0, 2).map((member) => member.name).join(", ");
-    parts.push(`${names}${breached.length > 2 ? ` +${breached.length - 2}` : ""} ${breachWord}`);
+    const loudest = breached.reduce((top, member) => (LEVEL_RANK[member.level] > LEVEL_RANK[top] ? member.level : top), breached[0].level);
+    const level = rule.steps.length > 1 && LEVEL_STYLES[loudest] ? ` (${LEVEL_STYLES[loudest].label})` : "";
+    parts.push(`${names}${breached.length > 2 ? ` +${breached.length - 2}` : ""} ${breachWord}${level}`);
   }
   if (summary.unknown) parts.push(`${summary.unknown} not reporting`);
   return { tone: breached.length ? "text-amber-300" : "text-green-300", text: parts.join(" · ") };
+}
+
+/**
+ * The alarm as steps out from the edge. Pick how loud it is at the edge, then
+ * optionally a louder one further out, and the loudest further still.
+ */
+function AlarmSteps({ rule, onChange }) {
+  const away = rule.trigger === "exit" ? "out" : "inside";
+  const setSteps = (steps) => onChange({ steps: keepRising(steps) });
+  const update = (index, patch) => setSteps(rule.steps.map((step, i) => (i === index ? { ...step, ...patch } : step)));
+  const next = nextStep(rule.steps);
+  return (
+    <div className="mt-2 space-y-1.5">
+      {rule.steps.map((step, index) => {
+        const previous = rule.steps[index - 1];
+        const choices = previous ? QUIET_FIRST.filter((level) => LEVEL_RANK[level] > LEVEL_RANK[previous.level]) : QUIET_FIRST;
+        return (
+          <div className="rounded-md border border-white/10 bg-black/20 p-1.5" key={index}>
+            <div className="flex items-center gap-1">
+              {choices.map((level) => {
+                const style = LEVEL_STYLES[level];
+                const on = step.level === level;
+                return (
+                  <button
+                    className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-[10px] font-bold transition-colors ${on ? style.chip : "border-white/10 text-neutral-500 hover:text-neutral-300"}`}
+                    key={level}
+                    onClick={() => update(index, { level })}
+                    title={LEVEL_MEANING[level]}
+                    type="button"
+                  >
+                    <span className="h-2 w-2 rounded-full" style={{ background: style.dot, opacity: on ? 1 : 0.5 }} />
+                    {style.label}
+                  </button>
+                );
+              })}
+              {index ? (
+                <button
+                  aria-label="Remove this step"
+                  className="rounded p-1.5 text-neutral-600 hover:bg-white/5 hover:text-neutral-200"
+                  onClick={() => setSteps(rule.steps.filter((_, i) => i !== index))}
+                  type="button"
+                >
+                  <X size={11} />
+                </button>
+              ) : null}
+            </div>
+            <div className="mt-1.5 flex items-center gap-1.5 px-0.5 text-[10px] text-neutral-400">
+              {index ? (
+                <>
+                  <span>at</span>
+                  <input
+                    aria-label={`Distance for ${LEVEL_STYLES[step.level].label}`}
+                    className="field-input w-20 py-1 text-[10px]"
+                    max={MAX_STEP_M}
+                    min="1"
+                    onChange={(event) => update(index, { distance_m: event.target.value })}
+                    type="number"
+                    value={step.distance_m}
+                  />
+                  <span>m {away}</span>
+                </>
+              ) : (
+                <span>At the edge</span>
+              )}
+              <span className="ml-auto text-[9px] text-neutral-600">{LEVEL_MEANING[step.level]}</span>
+            </div>
+          </div>
+        );
+      })}
+      {next ? (
+        <button
+          className="inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-white/15 px-2 py-1.5 text-[10px] font-bold text-neutral-400 hover:border-white/30 hover:text-neutral-200"
+          onClick={() => setSteps([...rule.steps, next])}
+          type="button"
+        >
+          <Plus size={11} /> Then {LEVEL_STYLES[next.level].label} further {away === "out" ? "out" : "in"}
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 function RuleCard({ rule, targets, index, verdict, focused, onFocus, onChange, onToggle, onRemove, removable }) {
@@ -1160,25 +1342,7 @@ function RuleCard({ rule, targets, index, verdict, focused, onFocus, onChange, o
         ))}
       </div>
 
-      <div className="mt-2 flex items-center gap-1">
-        {LEVELS.map((level) => {
-          const style = LEVEL_STYLES[level];
-          const on = rule.level === level;
-          return (
-            <button
-              className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-[10px] font-bold transition-colors ${on ? style.chip : "border-white/10 text-neutral-500 hover:text-neutral-300"}`}
-              key={level}
-              onClick={() => onChange({ level })}
-              title={LEVEL_MEANING[level]}
-              type="button"
-            >
-              <span className="h-2 w-2 rounded-full" style={{ background: style.dot, opacity: on ? 1 : 0.5 }} />
-              {style.label}
-            </button>
-          );
-        })}
-      </div>
-      <p className="mt-1.5 text-[9px] text-neutral-600">{LEVEL_MEANING[rule.level]}</p>
+      <AlarmSteps rule={rule} onChange={onChange} />
 
       {status ? <p className={`mt-1.5 text-[10px] font-bold ${status.tone}`}>{status.text}</p> : null}
 
@@ -1198,9 +1362,9 @@ function RuleCard({ rule, targets, index, verdict, focused, onFocus, onChange, o
               <input
                 className="field-input mt-1"
                 min="0"
-                onChange={(event) => onChange({ buffer_m: event.target.value })}
+                onChange={(event) => onChange({ steps: rule.steps.map((step, i) => (i === 0 ? { ...step, distance_m: event.target.value } : step)) })}
                 type="number"
-                value={rule.buffer_m}
+                value={rule.steps[0].distance_m}
               />
             </label>
             <label className="text-[9px] text-neutral-500">
@@ -1216,7 +1380,7 @@ function RuleCard({ rule, targets, index, verdict, focused, onFocus, onChange, o
             </label>
           </div>
           <p className="text-[9px] leading-relaxed text-neutral-600">
-            Alarms after {rule.confirmations_required} readings in a row past the dashed line, about{" "}
+            Each step alarms after {rule.confirmations_required} readings in a row past its line, about{" "}
             {Number(rule.confirmations_required) * 5} seconds for a radio.
           </p>
           <label className="flex items-center gap-2 text-[10px] text-neutral-400">
@@ -1360,7 +1524,10 @@ export function GeofencesRoute() {
       const entry = map.get(item.cardKey) || { members: new Map(), freshBreach: new Set() };
       for (const member of answers[i].members) {
         const key = `${member.asset_type}:${member.asset_id}`;
-        entry.members.set(key, member);
+        const known = entry.members.get(key);
+        // A radio past several steps is shown at the loudest one it is past.
+        const louder = member.state === "breach" && (known?.state !== "breach" || LEVEL_RANK[item.level] > LEVEL_RANK[known.level]);
+        if (!known || louder) entry.members.set(key, member.state === "breach" ? { ...member, level: item.level } : member);
         if (item.fresh && member.state === "breach") entry.freshBreach.add(key);
       }
       map.set(item.cardKey, entry);
@@ -1395,7 +1562,10 @@ export function GeofencesRoute() {
         const okWord = focusRule.trigger === "exit" ? "inside" : "outside";
         map.set(`${member.asset_type}:${member.asset_id}`, {
           ...member,
-          label: member.state === "breach" ? breachWord : member.state === "ok" ? okWord : "not reporting",
+          label:
+            member.state === "breach"
+              ? `${breachWord} · ${LEVEL_STYLES[member.level]?.label || "alarm"}`
+              : member.state === "ok" ? okWord : "not reporting",
         });
       }
       return map;
@@ -1643,6 +1813,9 @@ export function GeofencesRoute() {
     if (drawing) return setError("Close the shape: click its first corner, or press Done.");
     if (crossed) return setError("The shape crosses over itself. Drag a corner to untangle it.");
     if (rules.length > 1 && rules.some((rule) => !rule.targets.length)) return setError("A rule has no radios. Choose some, or remove it.");
+    const outOfOrder = rules.some((rule) => rule.steps.some((step, i) => i && !(Number(step.distance_m) > Number(rule.steps[i - 1].distance_m))));
+    if (outOfOrder) return setError("Each louder step has to be further from the edge than the one before.");
+    if (rules.some((rule) => rule.steps.some((step) => Number(step.distance_m) > MAX_STEP_M))) return setError(`Steps can be at most ${formatDistance(MAX_STEP_M)} from the edge.`);
     if (!orgId) return setError("Choose an organization.");
     saveMutation.mutate({
       id: zone.id,
@@ -2010,17 +2183,44 @@ function zoneSummary(zone, ready, where, radios) {
 }
 
 function ZoneCard({ zone, index, canManage, onFocus, onEdit, onDelete }) {
-  const breached = zone.rules.reduce((sum, rule) => sum + (Number(rule.in_breach) || 0), 0);
+  // A radio past the Red step is also past Amber and Yellow; counting the
+  // nearest step alone counts each radio once.
+  const cards = useMemo(() => {
+    const breachById = new Map(zone.rules.map((rule) => [rule.id, Number(rule.in_breach) || 0]));
+    return cardsFromRules(zone.rules).map((card) => ({
+      ...card,
+      outside: card.targets.reduce((sum, target) => sum + (breachById.get(card.saved[savedKey(target, card.trigger, card.steps[0].level)]) || 0), 0),
+    }));
+  }, [zone.rules]);
+  const breached = cards.reduce((sum, card) => sum + card.outside, 0);
+  const kind = zoneKind(zone.rules);
+  const kinds = [...new Set(cards.map((card) => card.trigger))].filter((trigger) => TRIGGER_LOOK[trigger]);
   return (
-    <article className="group rounded-lg border border-white/10 bg-white/[0.02] p-3 transition-colors hover:border-white/20">
+    <article
+      className={`group rounded-lg border border-white/10 bg-white/[0.02] p-3 transition-colors hover:border-white/20 ${kind ? `border-l-2 ${TRIGGER_LOOK[kind].accent}` : ""}`}
+    >
       <div className="flex items-start gap-2">
         <button className="min-w-0 flex-1 text-left" onClick={onFocus} title="Show on map" type="button">
           <span className="flex items-center gap-2">
             <span className="truncate text-[12px] font-bold text-neutral-100">{zone.name}</span>
             {breached ? (
-              <span className="shrink-0 rounded-full bg-red-500/15 px-1.5 py-0.5 text-[9px] font-bold text-red-300">{breached} in breach</span>
+              <span className="shrink-0 rounded-full bg-red-500/15 px-1.5 py-0.5 text-[9px] font-bold text-red-300">
+                {breached} {kind ? TRIGGER_LOOK[kind].breach : "in breach"}
+              </span>
             ) : null}
           </span>
+          {kinds.length ? (
+            <span className="mt-1 flex flex-wrap gap-1">
+              {kinds.map((trigger) => {
+                const look = TRIGGER_LOOK[trigger];
+                return (
+                  <span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${look.chip}`} key={trigger}>
+                    <look.Icon size={9} /> {look.zone}
+                  </span>
+                );
+              })}
+            </span>
+          ) : null}
           <span className="mt-0.5 block text-[9px] text-neutral-600">
             {zone.shape_type === "circle" ? `Circle · ${formatDistance(Number(zone.radius_m))} radius` : "Shape"}
           </span>
@@ -2038,19 +2238,23 @@ function ZoneCard({ zone, index, canManage, onFocus, onEdit, onDelete }) {
       </div>
       {zone.rules.length ? (
         <ul className="mt-2 space-y-1">
-          {groupRules(zone.rules).map((group) => {
-            const rule = group[0];
-            const inBreach = group.reduce((sum, item) => sum + (Number(item.in_breach) || 0), 0);
-            return (
-              <li className={`flex items-center gap-2 text-[10px] ${rule.active ? "text-neutral-400" : "text-neutral-600 line-through"}`} key={rule.id}>
-                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: LEVEL_STYLES[rule.level]?.dot }} title={LEVEL_STYLES[rule.level]?.label} />
-                <span className="truncate">
-                  <span className="font-bold text-neutral-300">{targetsSummary(index, group, 3)}</span> {TRIGGER_LABEL[rule.trigger]}
-                </span>
-                {inBreach ? <span className="ml-auto shrink-0 font-bold text-red-300">{inBreach}</span> : null}
-              </li>
-            );
-          })}
+          {cards.map((card) => (
+            <li className={`flex items-center gap-2 text-[10px] ${card.active ? "text-neutral-400" : "text-neutral-600 line-through"}`} key={card.key}>
+              <span className="flex shrink-0 gap-0.5" title={card.steps.map((step) => LEVEL_STYLES[step.level].label).join(" → ")}>
+                {card.steps.map((step) => (
+                  <span className="h-2 w-2 rounded-full" key={step.level} style={{ background: LEVEL_STYLES[step.level].dot }} />
+                ))}
+              </span>
+              {(() => {
+                const look = TRIGGER_LOOK[card.trigger];
+                return look ? <look.Icon className={`shrink-0 ${look.icon}`} size={10} /> : null;
+              })()}
+              <span className="truncate">
+                <span className="font-bold text-neutral-300">{targetsSummary(index, card.targets, 3)}</span> {TRIGGER_LABEL[card.trigger]}
+              </span>
+              {card.outside ? <span className="ml-auto shrink-0 font-bold text-red-300">{card.outside}</span> : null}
+            </li>
+          ))}
         </ul>
       ) : (
         <p className="mt-2 text-[10px] text-neutral-600">No rules: watches nobody.</p>

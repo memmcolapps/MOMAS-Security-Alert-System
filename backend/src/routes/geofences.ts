@@ -106,6 +106,9 @@ async function loadTarget(targetType: string, targetId: string, organizationId: 
   return unit ? { ...unit, unit_id: unit.id } : null;
 }
 
+// How far out (or in) the furthest alarm step may sit from the zone's edge.
+const MAX_STEP_M = 20_000;
+
 /**
  * Checks each rule's target belongs to the organization (and the caller's
  * units). A zone may watch dozens of radios, so the lookups run together.
@@ -136,7 +139,7 @@ async function validateRules(rules: any[], organizationId: number, units: number
       target_id: String(raw.target_id).trim(),
       trigger: raw.trigger,
       level: raw.level,
-      buffer_m: Math.min(1000, Math.max(0, Number(raw.buffer_m ?? env.GEOFENCE_DEFAULT_BUFFER_M) || 0)),
+      buffer_m: Math.min(MAX_STEP_M, Math.max(0, Number(raw.buffer_m ?? env.GEOFENCE_DEFAULT_BUFFER_M) || 0)),
       confirmations_required: Math.min(10, Math.max(1, Number(raw.confirmations_required) || env.GEOFENCE_CONFIRMATIONS)),
       active: raw.active !== false,
     };

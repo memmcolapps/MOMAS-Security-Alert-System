@@ -155,3 +155,18 @@ export function ruleMembers(rule: { target_type: string; target_id: string }, me
   }
   return [];
 }
+
+const LEVEL_RANK: Record<string, number> = { yellow: 0, amber: 1, red: 2 };
+
+/** One breach per zone and direction: the loudest step crossed. */
+export function loudestPerStep<T extends { rule: { geofence_id?: any; trigger: string; level?: string } }>(breaches: T[]): T[] {
+  const loudest = new Map<string, T>();
+  for (const breach of breaches) {
+    const group = `${breach.rule.geofence_id}|${breach.rule.trigger}`;
+    const current = loudest.get(group);
+    if (!current || (LEVEL_RANK[breach.rule.level || "red"] ?? 2) > (LEVEL_RANK[current.rule.level || "red"] ?? 2)) {
+      loudest.set(group, breach);
+    }
+  }
+  return [...loudest.values()];
+}

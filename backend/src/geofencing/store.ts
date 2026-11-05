@@ -323,6 +323,34 @@ export async function markRuleCleared(rule: any, position: any) {
   return rows;
 }
 
+const QUIETER_LEVELS: Record<string, string[]> = { red: ["amber", "yellow"], amber: ["yellow"], yellow: [] };
+
+/**
+ * A radio that moves from the Amber step to the Red one gets the Red alarm;
+ * the Amber alarm it already had for the same zone is closed as escalated, so
+ * an operator answers one alarm, not a pile of them.
+ */
+export async function escalateLowerAlerts(rule: any, position: any, alert: any) {
+  const quieter = QUIETER_LEVELS[rule.level] || [];
+  if (!quieter.length || rule.geofence_id == null) return [];
+  const { rows } = await pool.query(
+    `UPDATE operational_alerts SET
+       status=2, resolved_at=NOW(), resolution_note=$6, updated_at=NOW()
+     WHERE geofence_id=$1 AND trigger=$2 AND asset_type=$3 AND asset_id=$4
+       AND level = ANY($5::text[]) AND status < 2 AND id <> $7
+     RETURNING *`,
+    [rule.geofence_id, rule.trigger, position.asset_type, position.asset_id, quieter, `Escalated to ${rule.level}`, alert.id],
+  );
+  for (const lower of rows) {
+    await pool.query(
+      `INSERT INTO operational_alert_events (alert_id, event_type, metadata)
+       VALUES ($1,'escalated',$2::jsonb)`,
+      [lower.id, JSON.stringify({ to_alert_id: alert.id, level: rule.level })],
+    );
+  }
+  return rows;
+}
+
 /** Shared predicate so the alarm list and its badge counts describe one population. */
 function operationalAlertFilterSql(scope: Scope = {}, filters: any = {}, { includeStatus = true } = {}) {
   const scoped = scopeSql(scope, "a");
