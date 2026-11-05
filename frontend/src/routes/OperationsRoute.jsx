@@ -452,7 +452,7 @@ export function OperationsRoute() {
   const locations = locationsQuery.data?.data || [];
   const allAlerts = useMemo(() => alertsQuery.data?.alerts || [], [alertsQuery.data?.alerts]);
   const drones = dronesQuery.data?.drones || [];
-  const geofences = geofencesQuery.data?.geofences || [];
+  const geofences = geofencesQuery.data?.zones || [];
   const selectedIncident = useMemo(
     () =>
       evidenceQuery.data?.incident ||

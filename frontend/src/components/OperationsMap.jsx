@@ -1,5 +1,5 @@
 import L from "leaflet";
-import { LEVEL_STYLES, levelOf } from "../lib/alarm-levels";
+import { LEVELS, LEVEL_STYLES, levelOf } from "../lib/alarm-levels";
 import "leaflet.heat";
 import "leaflet.markercluster";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -488,8 +488,12 @@ export function OperationsMap({
     if (!geofenceLayer) return;
     geofenceLayer.clearLayers();
     for (const fence of geofences) {
-      if (!fence.active) continue;
-      const style = { color: "#fb7185", weight: 2, fillColor: "#ef4444", fillOpacity: 0.06, dashArray: "6 5" };
+      // A zone is live while any of its rules is; it takes the colour of the
+      // loudest one, so a red zone reads as red on the map too.
+      const level = LEVELS.find((l) => fence.rules?.some((rule) => rule.active && rule.level === l));
+      if (!level) continue;
+      const colour = LEVEL_STYLES[level].dot;
+      const style = { color: colour, weight: 2, fillColor: colour, fillOpacity: 0.08, dashArray: "6 5" };
       let layer = null;
       if (fence.shape_type === "circle") {
         const lat = Number(fence.center_lat);

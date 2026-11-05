@@ -31,7 +31,7 @@ import {
   saveGeofence,
   searchPlaces,
 } from "../lib/api";
-import { DARK_TILES, IMAGERY_LABEL_TILES, SATELLITE_TILES } from "../lib/basemaps";
+import { IMAGERY_LABEL_TILES, IMAGERY_ROAD_TILES, LABELLED_BASEMAPS, SATELLITE_TILES, vectorBasemapLayer } from "../lib/basemaps";
 import {
   bufferRing,
   circleAroundAssets,
@@ -79,14 +79,12 @@ function newRule(patch = {}) {
 const TRIGGER_LABEL = { exit: "must stay inside", enter: "must not enter" };
 const AROUND_MARGIN_M = 150;
 
+// The same basemaps as the operations map, so a zone is drawn on exactly what
+// operators will see it on.
 const BASEMAPS = {
-  satellite: { label: "Satellite", url: SATELLITE_TILES.url, options: SATELLITE_TILES.options, labels: IMAGERY_LABEL_TILES },
-  streets: {
-    label: "Streets",
-    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-    options: { maxZoom: 21, maxNativeZoom: 19, attribution: "&copy; OpenStreetMap" },
-  },
-  dark: { label: "Dark", url: DARK_TILES.url, options: DARK_TILES.options },
+  satellite: { label: "Satellite" },
+  streets: { label: "Streets" },
+  grey: { label: "Grey" },
 };
 
 const MEMBER_COLOURS = { ok: "#22c55e", breach: "#ef4444", unknown: "#94a3b8", pending: "#38bdf8" };
@@ -319,12 +317,44 @@ function ZoneMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const config = BASEMAPS[basemap] || BASEMAPS.satellite;
-    layers.current.base?.remove();
-    layers.current.labels?.remove();
-    layers.current.base = L.tileLayer(config.url, config.options).addTo(map);
-    layers.current.labels = config.labels ? L.tileLayer(config.labels.url, config.labels.options).addTo(map) : null;
-    layers.current.base.bringToBack();
+    const cache = (layers.current.baseLayers ||= {
+      satellite: L.tileLayer(SATELLITE_TILES.url, SATELLITE_TILES.options),
+    });
+    layers.current.labelLayer ||= L.layerGroup([
+      L.tileLayer(IMAGERY_ROAD_TILES.url, IMAGERY_ROAD_TILES.options),
+      L.tileLayer(IMAGERY_LABEL_TILES.url, IMAGERY_LABEL_TILES.options),
+    ]);
+    let cancelled = false;
+    const key = basemap in BASEMAPS ? basemap : "satellite";
+    const show = (next) => {
+      if (cancelled || mapRef.current !== map) return;
+      if (layers.current.base !== next) {
+        if (layers.current.base) map.removeLayer(layers.current.base);
+        next.addTo(map);
+        layers.current.base = next;
+        next.bringToBack?.();
+      }
+      const labels = layers.current.labelLayer;
+      const wantsLabels = LABELLED_BASEMAPS.has(key);
+      if (wantsLabels && !map.hasLayer(labels)) labels.addTo(map);
+      else if (!wantsLabels && map.hasLayer(labels)) map.removeLayer(labels);
+    };
+    if (cache[key]) show(cache[key]);
+    else {
+      vectorBasemapLayer(L, key)
+        .then((layer) => {
+          cache[key] = layer;
+          show(layer);
+        })
+        // No WebGL, or the tile service is unreachable: stay on imagery.
+        .catch((error) => {
+          console.warn("[Geofences] vector basemap unavailable:", error);
+          show(cache.satellite);
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
   }, [basemap]);
 
   // Every other zone, faint, so a new one is drawn knowing what is already there.
