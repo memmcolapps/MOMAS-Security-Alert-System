@@ -413,3 +413,76 @@ export function polygonToCircle(ring) {
   if (!points.length) return null;
   return circleAroundAssets(points, 0);
 }
+
+/**
+ * Fewer corners, same outline. A finger trace or a widened border can carry
+ * hundreds of points, and every corner becomes a drag handle in the editor.
+ * Douglas-Peucker in local metres, with the tolerance raised until it fits.
+ * `ring` is [lon, lat] pairs, open (no repeated closing corner).
+ */
+export function simplifyRing(ring, maxPoints = 60, startToleranceM = 2) {
+  if (!Array.isArray(ring) || ring.length <= 3) return ring;
+  const points = ring.map(([lon, lat]) => ({ lat, lon }));
+  const centre = centroidOf(points);
+  const local = toLocal(points, centre);
+  const closed = [...local, local[0]];
+  let tolerance = startToleranceM;
+  let kept = closed.map((_, i) => i);
+  do {
+    kept = keepIndices(closed, tolerance);
+    tolerance *= 1.5;
+  } while (kept.length - 1 > maxPoints);
+  const result = kept.slice(0, -1).map((i) => ring[i]);
+  return result.length >= 3 ? result : ring;
+}
+
+function keepIndices(points, tolerance) {
+  const keep = new Uint8Array(points.length);
+  keep[0] = 1;
+  keep[points.length - 1] = 1;
+  const stack = [[0, points.length - 1]];
+  while (stack.length) {
+    const [start, end] = stack.pop();
+    let worst = 0;
+    let at = -1;
+    for (let i = start + 1; i < end; i++) {
+      const distance = distanceToSegment(points[i], points[start], points[end]);
+      if (distance > worst) {
+        worst = distance;
+        at = i;
+      }
+    }
+    if (at !== -1 && worst > tolerance) {
+      keep[at] = 1;
+      stack.push([start, at], [at, end]);
+    }
+  }
+  const indices = [];
+  keep.forEach((flag, i) => flag && indices.push(i));
+  return indices;
+}
+
+function distanceToSegment(p, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const length = dx * dx + dy * dy;
+  const t = length ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length)) : 0;
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+/** Whether a point is inside a zone as the editor holds it (circle or open ring). */
+export function insideZone(point, zone) {
+  if (zone.shape_type === "circle") {
+    if (zone.center_lat == null) return false;
+    return metresBetween(point, { lat: Number(zone.center_lat), lon: Number(zone.center_lon) }) <= Number(zone.radius_m);
+  }
+  const ring = zone.points || [];
+  if (ring.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    if (yi > point.lat !== yj > point.lat && point.lon < ((xj - xi) * (point.lat - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}

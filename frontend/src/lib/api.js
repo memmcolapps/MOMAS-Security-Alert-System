@@ -677,3 +677,13 @@ export function acknowledgeSos(sosMsgId) {
 export function resolveSos(sosMsgId, note = "") {
   return resolveAlarm({ sosMsgId, note });
 }
+
+/** OpenStreetMap places as you type; `osm` is set when the place has an outline. */
+export function suggestPlaces(query) {
+  return request(`/api/geofences/places/suggest?${new URLSearchParams({ q: query })}`);
+}
+
+/** The real outline of a place picked from suggestPlaces. */
+export function getPlaceBorder(osm) {
+  return request(`/api/geofences/places/border?${new URLSearchParams({ osm })}`);
+}

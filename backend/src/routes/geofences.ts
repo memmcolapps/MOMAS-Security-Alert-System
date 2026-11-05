@@ -13,6 +13,7 @@ import { breachedCounts, judgeRule, membersOf, rulesChanged } from "../geofencin
 import { fenceMetrics, ringSelfIntersects, validatePolygonGeometry } from "../geofencing/geometry";
 import { assetKey, currentAssetPositions } from "../geofencing/positions";
 import { LEVELS, TARGET_TYPES, TRIGGERS, unitAndDescendants, zoneBounds } from "../geofencing/rules";
+import { placeBorder, suggestPlaces } from "../geofencing/borders";
 import * as store from "../geofencing/store";
 import { reverseGeocode, searchPlaces } from "../geocoder";
 
@@ -226,6 +227,24 @@ router.get("/targets", async (c) => {
 });
 
 /** Type-ahead place search, so a zone can be found by name instead of by eye. */
+/** OpenStreetMap places as you type; `osm` marks one with an outline. */
+router.get("/places/suggest", async (c) => {
+  try {
+    return c.json({ places: await suggestPlaces(c.req.query("q") || "") });
+  } catch (error) {
+    return c.json({ places: [], error: errorMessage(error) }, 502);
+  }
+});
+
+/** The picked place's real outline, ready to use as a zone. */
+router.get("/places/border", async (c) => {
+  try {
+    return c.json({ points: await placeBorder(c.req.query("osm") || "") });
+  } catch (error) {
+    return c.json({ points: null, error: errorMessage(error) }, 502);
+  }
+});
+
 router.get("/places", (c) => {
   return c.json({ places: searchPlaces(c.req.query("q"), Number(c.req.query("limit")) || 8) });
 });

@@ -4,16 +4,22 @@ import {
   ArrowLeft,
   Check,
   ChevronDown,
-  Circle,
-  Hexagon,
+  LoaderCircle,
+  LocateFixed,
+  MapPin,
   MapPinned,
+  Minus,
+  MousePointerClick,
   Pencil,
+  PenLine,
   Plus,
   Radio,
   Save,
   Search,
   Settings2,
+  Spline,
   Trash2,
+  Undo2,
   Users,
   X,
 } from "lucide-react";
@@ -25,23 +31,24 @@ import {
   getGeofenceTargets,
   getLocations,
   getMe,
+  getPlaceBorder,
   listGeofences,
   listOrganizations,
   previewGeofence,
   saveGeofence,
   searchPlaces,
+  suggestPlaces,
 } from "../lib/api";
 import { IMAGERY_LABEL_TILES, IMAGERY_ROAD_TILES, LABELLED_BASEMAPS, SATELLITE_TILES, vectorBasemapLayer } from "../lib/basemaps";
 import {
   bufferRing,
   circleAroundAssets,
-  circleToPolygon,
-  formatArea,
   formatDistance,
   insetRing,
-  polygonAroundAssets,
+  insideZone,
+  metresBetween,
   polygonSelfIntersects,
-  polygonToCircle,
+  simplifyRing,
 } from "../lib/fence-placement";
 import { isPlatformOperator, isPlatformStaff } from "../lib/platform-roles";
 
@@ -245,14 +252,16 @@ function ZoneMap({
   onAddPoint,
   onFinishPolygon,
   onRadioAction,
+  tracing,
+  onTrace,
 }) {
   const nodeRef = useRef(null);
   const mapRef = useRef(null);
   const layers = useRef({});
   const handlers = useRef({});
-  handlers.current = { onShapeChange, onAddPoint, onFinishPolygon, onRadioAction };
+  handlers.current = { onShapeChange, onAddPoint, onFinishPolygon, onRadioAction, onTrace };
   const live = useRef({});
-  live.current = { editing, zone, drawing };
+  live.current = { editing, zone, drawing, tracing };
   const gesture = useRef({ active: false, justDrew: false });
   const edit = useRef(null);
 
@@ -295,8 +304,8 @@ function ZoneMap({
         gesture.current.justDrew = false;
         return;
       }
-      const { editing: isEditing, zone: current, drawing: isDrawing } = live.current;
-      if (!isEditing) return;
+      const { editing: isEditing, zone: current, drawing: isDrawing, tracing: isTracing } = live.current;
+      if (!isEditing || isTracing) return;
       if (current.shape_type === "circle" && current.center_lat == null) {
         handlers.current.onShapeChange({ center_lat: event.latlng.lat, center_lon: event.latlng.lng, radius_m: viewRadius(map) });
         return;
@@ -313,6 +322,59 @@ function ZoneMap({
       layers.current = {};
     };
   }, []);
+
+  // Tracing: press and draw round the area with a finger or the mouse. The map
+  // holds still while this mode is on, so the stroke draws instead of panning;
+  // zoom still works from the buttons and the wheel.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !tracing) return undefined;
+    const node = map.getContainer();
+    map.dragging.disable();
+    let stroke = null;
+    const down = (event) => {
+      if (event.button > 0 || event.target.closest?.(".leaflet-control")) return;
+      node.setPointerCapture?.(event.pointerId);
+      const at = map.mouseEventToLatLng(event);
+      stroke = {
+        last: map.mouseEventToContainerPoint(event),
+        points: [at],
+        line: L.polyline([at], { color: "#fb7185", weight: 3, interactive: false }).addTo(map),
+      };
+    };
+    const move = (event) => {
+      if (!stroke) return;
+      const point = map.mouseEventToContainerPoint(event);
+      if (point.distanceTo(stroke.last) < 4) return;
+      stroke.last = point;
+      const at = map.mouseEventToLatLng(event);
+      stroke.points.push(at);
+      stroke.line.addLatLng(at);
+    };
+    const up = () => {
+      if (!stroke) return;
+      const { points, line } = stroke;
+      stroke = null;
+      line.remove();
+      gesture.current.justDrew = true;
+      if (points.length >= 6) handlers.current.onTrace(points.map((p) => [p.lng, p.lat]));
+    };
+    node.addEventListener("pointerdown", down);
+    node.addEventListener("pointermove", move);
+    node.addEventListener("pointerup", up);
+    node.addEventListener("pointercancel", up);
+    // With dragging off, Leaflet hands touch back to the page; keep it.
+    node.style.touchAction = "none";
+    return () => {
+      node.style.touchAction = "";
+      node.removeEventListener("pointerdown", down);
+      node.removeEventListener("pointermove", move);
+      node.removeEventListener("pointerup", up);
+      node.removeEventListener("pointercancel", up);
+      stroke?.line.remove();
+      map.dragging.enable();
+    };
+  }, [tracing]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -690,6 +752,212 @@ function PlaceSearch({ onPick }) {
   );
 }
 
+// Sizes said the way people say them. A circle is one of these unless someone
+// drags it to something else.
+const SIZES = [
+  { label: "Building", radius: 50 },
+  { label: "Compound", radius: 150 },
+  { label: "Street block", radius: 300 },
+  { label: "Neighbourhood", radius: 1000 },
+  { label: "Town", radius: 5000 },
+];
+const DEFAULT_RADIUS = 150;
+
+/** A place with no outline gets a circle about the size its kind suggests. */
+function radiusForKind(kind) {
+  if (["City", "Local government"].includes(kind)) return 5000;
+  if (["Town", "Village", "Area", "Airport", "Military", "Barracks", "University"].includes(kind)) return 1000;
+  return DEFAULT_RADIUS;
+}
+
+// How far "Bigger" pushes a place's own border out, a step at a time.
+const MARGINS = [0, 50, 100, 250, 500, 1000];
+
+const borderQuery = (osm) => ({
+  queryKey: ["place-border", osm],
+  queryFn: () => getPlaceBorder(osm),
+  staleTime: Infinity,
+});
+
+/**
+ * The one question for a new zone: where is it? Takes a place name, a radio's
+ * name, or "my location", and works out the shape itself. Drawing by hand is
+ * the other way in, right underneath.
+ */
+function WherePicker({ radios, aroundCount, onPlace, onDraw, onAround }) {
+  const queryClient = useQueryClient();
+  const [query, setQuery] = useState("");
+  const [online, setOnline] = useState([]);
+  const [local, setLocal] = useState([]);
+  const [busy, setBusy] = useState(null);
+  const [problem, setProblem] = useState(null);
+  const needle = query.trim();
+
+  useEffect(() => {
+    if (needle.length < 2) {
+      setLocal([]);
+      setOnline([]);
+      return undefined;
+    }
+    let stale = false;
+    // The town list answers at once; OpenStreetMap follows with the borders.
+    const fast = window.setTimeout(() => {
+      searchPlaces(needle)
+        .then((data) => !stale && setLocal(data.places || []))
+        .catch(() => !stale && setLocal([]));
+    }, 150);
+    const slow = window.setTimeout(() => {
+      if (needle.length < 3) return;
+      suggestPlaces(needle)
+        .then((data) => !stale && setOnline(data.places || []))
+        .catch(() => !stale && setOnline([]));
+    }, 350);
+    return () => {
+      stale = true;
+      window.clearTimeout(fast);
+      window.clearTimeout(slow);
+    };
+  }, [needle]);
+
+  const places = useMemo(() => {
+    const names = new Set(online.map((place) => place.name.toLowerCase()));
+    const towns = local
+      .filter((place) => !names.has(place.name.toLowerCase()))
+      .map((place) => ({ name: place.name, detail: place.state, kind: "Town", lat: place.lat, lon: place.lon, osm: null }));
+    return [...online, ...towns].slice(0, 7);
+  }, [online, local]);
+
+  const radioMatches = needle
+    ? radios.filter((radio) => radio.name.toLowerCase().includes(needle.toLowerCase())).slice(0, 5)
+    : [];
+
+  async function pickPlace(place) {
+    setProblem(null);
+    const label = place.name;
+    if (place.osm) {
+      setBusy(place.osm);
+      try {
+        const data = await queryClient.fetchQuery(borderQuery(place.osm));
+        if (data?.points?.length >= 3) {
+          onPlace({ kind: "border", label, points: data.points });
+          return;
+        }
+      } catch {
+        // No border to be had: the circle below still puts the zone in the right place.
+      } finally {
+        setBusy(null);
+      }
+    }
+    onPlace({ kind: "point", label, lat: place.lat, lon: place.lon, radius: radiusForKind(place.kind) });
+  }
+
+  function pickMyLocation() {
+    setProblem(null);
+    if (!window.navigator.geolocation) return setProblem("This device can't share its location.");
+    setBusy("me");
+    window.navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setBusy(null);
+        onPlace({ kind: "point", label: "", lat: position.coords.latitude, lon: position.coords.longitude, radius: DEFAULT_RADIUS });
+      },
+      () => {
+        setBusy(null);
+        setProblem("Couldn't get your location. Allow location access, or type the place instead.");
+      },
+      { enableHighAccuracy: true, timeout: 10_000 },
+    );
+  }
+
+  const row = "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-white/[0.06] active:bg-white/[0.1]";
+  return (
+    <div>
+      <h2 className="mb-2 text-[13px] font-bold text-neutral-100">Where is the place?</h2>
+      <div className="relative">
+        <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-500" />
+        <input
+          aria-label="Place, area or radio"
+          autoFocus
+          className="field-input py-2.5 pl-9 text-[12px]"
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="A town, area, building or radio"
+          value={query}
+        />
+      </div>
+
+      <div className="mt-1.5 rounded-lg border border-white/10 bg-white/[0.02] p-1">
+        <button className={row} disabled={Boolean(busy)} onClick={pickMyLocation} type="button">
+          {busy === "me" ? <LoaderCircle className="animate-spin text-sky-300" size={14} /> : <LocateFixed className="text-sky-300" size={14} />}
+          <span className="text-[11px] font-bold text-neutral-200">My location</span>
+          <span className="ml-auto text-[9px] text-neutral-500">Where this device is</span>
+        </button>
+
+        {places.length ? <p className="px-2.5 pb-0.5 pt-2 text-[9px] font-bold uppercase tracking-wide text-neutral-600">Places</p> : null}
+        {places.map((place) => (
+          <button
+            className={row}
+            disabled={Boolean(busy)}
+            key={`${place.osm || place.name}-${place.detail}`}
+            onClick={() => pickPlace(place)}
+            // The border is usually loaded before the click lands.
+            onMouseEnter={() => place.osm && queryClient.prefetchQuery(borderQuery(place.osm))}
+            type="button"
+          >
+            {busy === place.osm ? <LoaderCircle className="animate-spin text-neutral-400" size={14} /> : <MapPin className="text-neutral-500" size={14} />}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[11px] font-bold text-neutral-200">{place.name}</span>
+              <span className="block truncate text-[9px] text-neutral-500">{[place.kind, place.detail].filter(Boolean).join(" · ")}</span>
+            </span>
+            {place.osm ? <span className="shrink-0 rounded bg-emerald-400/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-300">Has border</span> : null}
+          </button>
+        ))}
+
+        {radioMatches.length ? <p className="px-2.5 pb-0.5 pt-2 text-[9px] font-bold uppercase tracking-wide text-neutral-600">Radios</p> : null}
+        {radioMatches.map((radio) => (
+          <button
+            className={row}
+            disabled={Boolean(busy)}
+            key={radio.key}
+            onClick={() => onPlace({ kind: "point", label: `${radio.name} area`, lat: radio.lat, lon: radio.lon, radius: DEFAULT_RADIUS })}
+            type="button"
+          >
+            <Radio className="text-neutral-500" size={14} />
+            <span className="truncate text-[11px] font-bold text-neutral-200">{radio.name}</span>
+            <span className="ml-auto shrink-0 text-[9px] text-neutral-500">Where it is now</span>
+          </button>
+        ))}
+
+        {needle.length >= 3 && !places.length && !radioMatches.length ? (
+          <p className="px-2.5 py-2 text-[10px] text-neutral-500">Nothing found by that name. Try a nearby town, or draw it yourself.</p>
+        ) : null}
+      </div>
+
+      {problem ? <p className="mt-1.5 text-[10px] text-amber-300">{problem}</p> : null}
+
+      <div className="mt-3 flex items-center gap-2 text-[10px] text-neutral-600">
+        <span className="h-px flex-1 bg-white/10" /> or <span className="h-px flex-1 bg-white/10" />
+      </div>
+      <div className="mt-2 grid gap-1.5">
+        <button
+          className="inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-white/[0.08] px-3 py-2.5 text-[11px] font-bold text-neutral-100 hover:bg-white/[0.12] active:bg-white/[0.16]"
+          onClick={onDraw}
+          type="button"
+        >
+          <PenLine size={13} /> Draw it myself
+        </button>
+        {aroundCount ? (
+          <button
+            className="inline-flex w-full items-center justify-center gap-1.5 rounded-md px-3 py-2 text-[10px] font-bold text-neutral-400 hover:bg-white/[0.05] hover:text-neutral-100"
+            onClick={onAround}
+            type="button"
+          >
+            <Users size={12} /> Around the {aroundCount} radio{aroundCount === 1 ? "" : "s"} you chose
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 /**
  * Pick radios one by one, ticking as many as needed; the list stays open.
  * Units and channels sit underneath as a shortcut for "all of them".
@@ -968,6 +1236,10 @@ export function GeofencesRoute() {
   const [rules, setRules] = useState([]);
   const [focusKey, setFocusKey] = useState(null);
   const [drawing, setDrawing] = useState(false);
+  const [drawMode, setDrawMode] = useState("tap");
+  // What the area was made from: a place's name, and its own border while that
+  // is still what's on the map, so Bigger and Smaller can work from it.
+  const [area, setArea] = useState(null);
   const [quiet, setQuiet] = useState(true);
   const [error, setError] = useState(null);
   const [feedback, setFeedback] = useState(null);
@@ -1181,6 +1453,8 @@ export function GeofencesRoute() {
     setRules(nextRules);
     setFocusKey(nextRules[0]?.key || null);
     setDrawing(nextZone.shape_type === "polygon" && nextZone.points.length < 3);
+    setDrawMode("tap");
+    setArea(null);
     setQuiet(true);
     setError(null);
     setFeedback(null);
@@ -1262,22 +1536,58 @@ export function GeofencesRoute() {
     );
   }
 
-  function changeShape(shape) {
-    if (shape === zone.shape_type) return;
-    if (shape === "circle") {
-      const circle = zone.points.length >= 3 ? polygonToCircle(zone.points) : null;
-      updateZone({ shape_type: "circle", points: [], ...(circle || { center_lat: null, center_lon: null }) });
-      setDrawing(false);
+  /** A pick from "Where is the place?": a real border, or a point that gets a circle. */
+  function placeArea(choice) {
+    const name = zone.name.trim() || !choice.label ? {} : { name: choice.label };
+    setDrawing(false);
+    if (choice.kind === "border") {
+      setArea({ label: choice.label, border: choice.points, margin: 0 });
+      updateZone({ shape_type: "polygon", points: choice.points, center_lat: null, center_lon: null, ...name });
+      fitTo(choice.points.map(([lon, lat]) => ({ lat, lon })), 0.2);
       return;
     }
-    const ring = zone.center_lat != null ? circleToPolygon(zone.center_lat, zone.center_lon, Number(zone.radius_m)) : null;
-    updateZone({ shape_type: "polygon", points: ring || [], center_lat: null, center_lon: null });
-    setDrawing(!ring);
+    setArea({ label: choice.label });
+    updateZone({ shape_type: "circle", points: [], center_lat: choice.lat, center_lon: choice.lon, radius_m: choice.radius, ...name });
+    setFitToken({ bounds: L.latLng(choice.lat, choice.lon).toBounds(choice.radius * 2.8), key: Date.now() });
   }
 
-  function redraw() {
-    updateZone(zone.shape_type === "circle" ? { center_lat: null, center_lon: null } : { points: [] });
-    setDrawing(zone.shape_type === "polygon");
+  /** Back to the question, with nothing on the map. */
+  function changePlace() {
+    setArea(null);
+    setDrawing(false);
+    updateZone({ shape_type: "circle", points: [], center_lat: null, center_lon: null, radius_m: DEFAULT_RADIUS });
+  }
+
+  function startDrawing() {
+    setArea(null);
+    setDrawMode("tap");
+    updateZone({ shape_type: "polygon", points: [], center_lat: null, center_lon: null });
+    setDrawing(true);
+  }
+
+  /** A finished finger trace becomes a shape with a sensible number of corners. */
+  function finishTrace(points) {
+    const ring = simplifyRing(points, 40);
+    if (!ring || ring.length < 3) return;
+    updateZone({ points: ring });
+    setDrawing(false);
+  }
+
+  /** Pushes a place's own border out by a margin; Smaller steps back towards it. */
+  function stepMargin(direction) {
+    if (!area?.border) return;
+    const at = MARGINS.indexOf(area.margin);
+    const margin = MARGINS[Math.min(MARGINS.length - 1, Math.max(0, at + direction))];
+    const ring = margin ? bufferRing(area.border, margin) : area.border;
+    if (!ring) return;
+    setArea({ ...area, margin });
+    updateZone({ points: margin ? simplifyRing(ring, 120) : ring });
+  }
+
+  /** Shape changes from the map. Moving a corner by hand ends Bigger/Smaller. */
+  function shapeChangedOnMap(patch) {
+    if (patch.points && area?.border) setArea({ label: area.label });
+    updateZone(patch);
   }
 
   /** Draws the zone round where the watched people are right now. */
@@ -1287,8 +1597,8 @@ export function GeofencesRoute() {
       setError("None of the chosen radios are reporting a position right now.");
       return;
     }
-    if (zone.shape_type === "circle") updateZone(circleAroundAssets(points, AROUND_MARGIN_M));
-    else updateZone({ points: polygonAroundAssets(points, AROUND_MARGIN_M) });
+    setArea({ label: "" });
+    updateZone({ shape_type: "circle", points: [], ...circleAroundAssets(points, AROUND_MARGIN_M) });
     setDrawing(false);
     fitTo(points);
   }
@@ -1343,8 +1653,8 @@ export function GeofencesRoute() {
     });
   }
 
-  const metrics = previewQuery.data?.metrics;
   const place = previewQuery.data?.place;
+  const summary = zoneSummary(zone, placed && !drawing, area?.label || place?.label, radios);
   const visibleZones = filter.trim()
     ? zones.filter((item) => item.name.toLowerCase().includes(filter.trim().toLowerCase()))
     : zones;
@@ -1368,151 +1678,194 @@ export function GeofencesRoute() {
               </header>
 
               <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
-                <section>
-                  <input
-                    aria-label="Zone name"
-                    className="field-input text-[12px] font-bold"
-                    onChange={(event) => updateZone({ name: event.target.value })}
-                    placeholder="Zone name, e.g. Kaduna base"
-                    value={zone.name}
-                  />
-                  {isAdmin && !zone.id ? (
-                    <select
-                      aria-label="Organization"
-                      className="field-input mt-2"
-                      onChange={(event) => {
-                        updateZone({ organization_id: event.target.value });
-                        setRules([newRule()]);
-                      }}
-                      value={orgId}
-                    >
-                      <option value="">Choose organization</option>
-                      {organizations.map((org) => <option key={org.id} value={org.id}>{org.name}</option>)}
-                    </select>
-                  ) : null}
-                </section>
-
-                <section>
-                  <h2 className="mb-2 text-[10px] font-bold uppercase tracking-wide text-neutral-500">Radios to watch</h2>
-                  <div className="space-y-2">
-                    {rules.map((rule) => (
-                      <RuleCard
-                        focused={focusRule?.key === rule.key}
-                        index={index}
-                        key={rule.key}
-                        onChange={(patch) => updateRule(rule.key, patch)}
-                        onFocus={() => setFocusKey(rule.key)}
-                        onRemove={() => setRules((current) => current.filter((item) => item.key !== rule.key))}
-                        onToggle={(type, id) => toggleTarget(rule.key, type, id)}
-                        removable={rules.length > 1}
-                        rule={rule}
-                        targets={targets}
-                        verdict={verdictByKey.get(rule.key)}
-                      />
-                    ))}
-                  </div>
-                  <button
-                    className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-white/15 px-3 py-2 text-[10px] font-bold text-neutral-400 hover:border-white/30 hover:text-neutral-200"
-                    onClick={() => {
-                      const rule = newRule();
-                      setRules((current) => [...current, rule]);
-                      setFocusKey(rule.key);
+                {isAdmin && !zone.id ? (
+                  <select
+                    aria-label="Organization"
+                    className="field-input"
+                    onChange={(event) => {
+                      updateZone({ organization_id: event.target.value });
+                      setRules([newRule()]);
                     }}
-                    type="button"
+                    value={orgId}
                   >
-                    <Plus size={12} /> Add radios with a different alarm
-                  </button>
-                  <p className="mt-1.5 text-[9px] text-neutral-600">Tip: click radios on the map to add or remove them.</p>
-                </section>
+                    <option value="">Choose organization</option>
+                    {organizations.map((org) => <option key={org.id} value={org.id}>{org.name}</option>)}
+                  </select>
+                ) : null}
 
-                <section>
-                  <h2 className="mb-2 text-[10px] font-bold uppercase tracking-wide text-neutral-500">Area</h2>
-                  <div className="grid grid-cols-2 gap-1 rounded-md bg-black/30 p-0.5">
-                    {[["circle", Circle, "Circle"], ["polygon", Hexagon, "Shape"]].map(([shape, Icon, label]) => (
-                      <button
-                        className={`inline-flex items-center justify-center gap-1.5 rounded px-2 py-1.5 text-[10px] font-bold transition-colors ${zone.shape_type === shape ? "bg-white/[0.12] text-neutral-100 shadow-sm" : "text-neutral-500 hover:text-neutral-300"}`}
-                        key={shape}
-                        onClick={() => changeShape(shape)}
-                        type="button"
-                      >
-                        <Icon size={12} /> {label}
-                      </button>
-                    ))}
-                  </div>
+                {!placed && !drawing ? (
+                  <WherePicker
+                    aroundCount={highlighted.size}
+                    onAround={drawAround}
+                    onDraw={startDrawing}
+                    onPlace={placeArea}
+                    radios={radios}
+                  />
+                ) : (
+                  <>
+                    <section>
+                      <div className="mb-2 flex items-center justify-between">
+                        <h2 className="text-[10px] font-bold uppercase tracking-wide text-neutral-500">Area</h2>
+                        <button
+                          className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] font-bold text-neutral-400 hover:bg-white/5 hover:text-neutral-100"
+                          onClick={changePlace}
+                          type="button"
+                        >
+                          <ArrowLeft size={11} /> Change place
+                        </button>
+                      </div>
 
-                  <div className="mt-2 rounded-md border border-white/10 bg-white/[0.02] px-2.5 py-2 text-[10px] leading-relaxed text-neutral-400">
-                    {zone.shape_type === "circle"
-                      ? zone.center_lat == null
-                        ? "Press on the map where the centre goes and drag out the size."
-                        : "Drag the white dot to move it, the red dot to resize."
-                      : drawing
-                        ? `Click the map to place corners (${zone.points.length} so far). Click the first corner to close.`
-                        : "Drag corners to move them. Drag an edge dot to add a corner. Double-click a corner to remove it."}
-                  </div>
+                      {drawing ? (
+                        <>
+                          <div className="grid grid-cols-2 gap-1 rounded-md bg-black/30 p-0.5">
+                            {[["tap", MousePointerClick, "Tap corners"], ["trace", Spline, "Trace with finger"]].map(([mode, Icon, label]) => (
+                              <button
+                                className={`inline-flex items-center justify-center gap-1.5 rounded px-2 py-1.5 text-[10px] font-bold transition-colors ${drawMode === mode ? "bg-white/[0.12] text-neutral-100 shadow-sm" : "text-neutral-500 hover:text-neutral-300"}`}
+                                key={mode}
+                                onClick={() => {
+                                  setDrawMode(mode);
+                                  updateZone({ points: [] });
+                                }}
+                                type="button"
+                              >
+                                <Icon size={12} /> {label}
+                              </button>
+                            ))}
+                          </div>
+                          <p className="mt-2 rounded-md border border-white/10 bg-white/[0.02] px-2.5 py-2 text-[10px] leading-relaxed text-neutral-400">
+                            {drawMode === "trace"
+                              ? "Press on the map and draw all the way round the area, then let go. Zoom with the + and − buttons."
+                              : `Tap the map at each corner (${zone.points.length} so far). Tap the first corner, or press Done, to close it.`}
+                          </p>
+                          {drawMode === "tap" && zone.points.length ? (
+                            <div className="mt-2 flex gap-2">
+                              <button
+                                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-md border border-white/10 px-3 py-2 text-[10px] font-bold text-neutral-300 hover:bg-white/5"
+                                onClick={() => updateZone({ points: zone.points.slice(0, -1) })}
+                                type="button"
+                              >
+                                <Undo2 size={12} /> Undo last corner
+                              </button>
+                              {zone.points.length >= 3 ? (
+                                <button
+                                  className="flex-1 rounded-md bg-red-400 px-3 py-2 text-[10px] font-bold text-black hover:opacity-90"
+                                  onClick={() => setDrawing(false)}
+                                  type="button"
+                                >
+                                  Done
+                                </button>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </>
+                      ) : zone.shape_type === "circle" ? (
+                        <>
+                          <p className="mb-1.5 text-[11px] font-bold text-neutral-200">How big?</p>
+                          <div className="flex flex-wrap gap-1">
+                            {SIZES.map((size) => (
+                              <button
+                                className={`rounded-full border px-2.5 py-1.5 text-[10px] font-bold transition-colors ${Number(zone.radius_m) === size.radius ? "border-red-400 bg-red-400 text-black" : "border-white/10 text-neutral-300 hover:border-white/25 hover:text-neutral-100"}`}
+                                key={size.label}
+                                onClick={() => {
+                                  updateZone({ radius_m: size.radius });
+                                  setFitToken({ bounds: L.latLng(zone.center_lat, zone.center_lon).toBounds(size.radius * 2.8), key: Date.now() });
+                                }}
+                                type="button"
+                              >
+                                {size.label}
+                              </button>
+                            ))}
+                          </div>
+                          <p className="mt-2 text-[10px] text-neutral-500">
+                            {formatDistance(Number(zone.radius_m) * 2)} across. Drag the white dot to move it, the red dot for any other size.
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          {area?.border ? (
+                            <div className="flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.02] px-2.5 py-2">
+                              <span className="min-w-0 flex-1 text-[11px] text-neutral-300">
+                                Border of <span className="font-bold text-neutral-100">{area.label}</span>
+                                {area.margin ? <span className="text-neutral-500"> + {formatDistance(area.margin)}</span> : null}
+                              </span>
+                              <button
+                                aria-label="Smaller"
+                                className="rounded-md border border-white/10 p-1.5 text-neutral-300 hover:bg-white/5 disabled:opacity-30"
+                                disabled={!area.margin}
+                                onClick={() => stepMargin(-1)}
+                                title="Smaller"
+                                type="button"
+                              >
+                                <Minus size={12} />
+                              </button>
+                              <button
+                                aria-label="Bigger"
+                                className="rounded-md border border-white/10 p-1.5 text-neutral-300 hover:bg-white/5 disabled:opacity-30"
+                                disabled={area.margin === MARGINS[MARGINS.length - 1]}
+                                onClick={() => stepMargin(1)}
+                                title="Bigger"
+                                type="button"
+                              >
+                                <Plus size={12} />
+                              </button>
+                            </div>
+                          ) : null}
+                          <p className="mt-2 text-[10px] leading-relaxed text-neutral-500">
+                            Drag a corner to move it. Drag an edge dot to add a corner. Double-click a corner to remove it.
+                          </p>
+                        </>
+                      )}
+                    </section>
 
-                  <div className="mt-2 flex gap-2">
-                    <button
-                      className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-md bg-white/[0.08] px-3 py-2 text-[10px] font-bold text-neutral-100 hover:bg-white/[0.12] disabled:cursor-not-allowed disabled:opacity-40"
-                      disabled={!highlighted.size}
-                      onClick={drawAround}
-                      title={highlighted.size ? "" : "Choose radios first"}
-                      type="button"
-                    >
-                      <Users size={12} /> Draw around them
-                    </button>
-                    {drawing && zone.points.length >= 3 ? (
-                      <button
-                        className="rounded-md bg-red-400 px-3 py-2 text-[10px] font-bold text-black"
-                        onClick={() => setDrawing(false)}
-                        type="button"
-                      >
-                        Done
-                      </button>
-                    ) : null}
-                    {drawing && zone.points.length ? (
-                      <button
-                        className="rounded-md border border-white/10 px-3 py-2 text-[10px] font-bold text-neutral-400 hover:text-neutral-100"
-                        onClick={() => updateZone({ points: zone.points.slice(0, -1) })}
-                        type="button"
-                      >
-                        Undo
-                      </button>
-                    ) : null}
-                    {placed && !drawing ? (
-                      <button
-                        className="rounded-md border border-white/10 px-3 py-2 text-[10px] font-bold text-neutral-400 hover:text-neutral-100"
-                        onClick={redraw}
-                        type="button"
-                      >
-                        Redraw
-                      </button>
-                    ) : null}
-                  </div>
-
-                  {zone.shape_type === "circle" && zone.center_lat != null ? (
-                    <label className="mt-2 flex items-center gap-2 text-[10px] text-neutral-500">
-                      Radius
+                    <section>
                       <input
-                        className="field-input w-24"
-                        min="10"
-                        onChange={(event) => updateZone({ radius_m: event.target.value })}
-                        type="number"
-                        value={zone.radius_m}
+                        aria-label="Zone name"
+                        className="field-input text-[12px] font-bold"
+                        onChange={(event) => updateZone({ name: event.target.value })}
+                        placeholder="Zone name, e.g. Kaduna base"
+                        value={zone.name}
                       />
-                      m
-                    </label>
-                  ) : null}
+                    </section>
 
-                  {placed && metrics && !drawing ? (
-                    <p className="mt-2 text-[10px] text-neutral-500">
-                      {formatDistance(Math.max(metrics.width_m, metrics.height_m))} across · {formatArea(metrics.area_sq_m)}
-                      {place ? ` · ${place.label}` : ""}
-                    </p>
-                  ) : null}
-                </section>
+                    <section>
+                      <h2 className="mb-2 text-[10px] font-bold uppercase tracking-wide text-neutral-500">Radios to watch</h2>
+                      <div className="space-y-2">
+                        {rules.map((rule) => (
+                          <RuleCard
+                            focused={focusRule?.key === rule.key}
+                            index={index}
+                            key={rule.key}
+                            onChange={(patch) => updateRule(rule.key, patch)}
+                            onFocus={() => setFocusKey(rule.key)}
+                            onRemove={() => setRules((current) => current.filter((item) => item.key !== rule.key))}
+                            onToggle={(type, id) => toggleTarget(rule.key, type, id)}
+                            removable={rules.length > 1}
+                            rule={rule}
+                            targets={targets}
+                            verdict={verdictByKey.get(rule.key)}
+                          />
+                        ))}
+                      </div>
+                      <button
+                        className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-white/15 px-3 py-2 text-[10px] font-bold text-neutral-400 hover:border-white/30 hover:text-neutral-200"
+                        onClick={() => {
+                          const rule = newRule();
+                          setRules((current) => [...current, rule]);
+                          setFocusKey(rule.key);
+                        }}
+                        type="button"
+                      >
+                        <Plus size={12} /> Add radios with a different alarm
+                      </button>
+                      <p className="mt-1.5 text-[9px] text-neutral-600">Tip: click radios on the map to add or remove them.</p>
+                    </section>
+                  </>
+                )}
               </div>
 
+              {!placed && !drawing ? null : (
               <footer className="border-t border-white/10 bg-black/40 p-3">
+                {summary ? <p className="mb-2 text-[11px] leading-relaxed text-neutral-300">{summary}</p> : null}
                 {error ? (
                   <p className="mb-2 rounded border border-red-400/25 bg-red-500/[0.07] px-2 py-1.5 text-[10px] text-red-200">{error}</p>
                 ) : null}
@@ -1534,6 +1887,7 @@ export function GeofencesRoute() {
                   <Save size={14} /> {saveMutation.isPending ? "Saving…" : "Save zone"}
                 </button>
               </footer>
+              )}
             </form>
           ) : (
             <>
@@ -1620,16 +1974,39 @@ export function GeofencesRoute() {
             onBasemapChange={setBasemap}
             onFinishPolygon={() => setDrawing(false)}
             onRadioAction={onRadioAction}
-            onShapeChange={updateZone}
+            onShapeChange={shapeChangedOnMap}
+            onTrace={finishTrace}
             radios={radios}
+            tracing={editing && drawing && drawMode === "trace"}
             zone={zone}
             zones={zones}
           />
-          <PlaceSearch onPick={(place) => setFitToken({ centre: { lat: place.lat, lon: place.lon }, zoom: 13, key: Date.now() })} />
+          {editing ? null : <PlaceSearch onPick={(place) => setFitToken({ centre: { lat: place.lat, lon: place.lon }, zoom: 13, key: Date.now() })} />}
         </section>
       </div>
     </main>
   );
+}
+
+/** "Covers Barnawa, about 1.2 km across. 8 radios inside now." */
+function zoneSummary(zone, ready, where, radios) {
+  if (!ready) return null;
+  let across = Number(zone.radius_m) * 2;
+  if (zone.shape_type === "polygon") {
+    const lats = zone.points.map(([, lat]) => lat);
+    const lons = zone.points.map(([lon]) => lon);
+    const south = Math.min(...lats);
+    const west = Math.min(...lons);
+    across = Math.max(
+      metresBetween({ lat: south, lon: west }, { lat: Math.max(...lats), lon: west }),
+      metresBetween({ lat: south, lon: west }, { lat: south, lon: Math.max(...lons) }),
+    );
+  }
+  const inside = radios.filter((radio) => insideZone(radio, zone)).length;
+  const size = `about ${formatDistance(across)} across`;
+  const first = where ? `Covers ${where}, ${size}.` : `${size[0].toUpperCase()}${size.slice(1)}.`;
+  const count = inside ? `${inside} radio${inside === 1 ? "" : "s"} inside now.` : "No radios inside now.";
+  return `${first} ${count}`;
 }
 
 function ZoneCard({ zone, index, canManage, onFocus, onEdit, onDelete }) {
