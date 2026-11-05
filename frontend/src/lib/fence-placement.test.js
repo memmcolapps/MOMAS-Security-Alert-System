@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   bufferRing,
   circleAroundAssets,
+  grownRing,
+  offsetRings,
   circleToPolygon,
   polygonAroundAssets,
   polygonSelfIntersects,
@@ -246,4 +248,49 @@ test("shape conversion rejects incomplete input", () => {
   assert.equal(circleToPolygon(LAT, LON, 0), null);
   assert.equal(circleToPolygon(null, null, 400), null);
   assert.equal(polygonToCircle([]), null);
+});
+
+/** Worst gap between where an alarm line is drawn and where the engine fires, along every edge. */
+function worstLineError(rings, zone, distance, inward) {
+  let worst = 0;
+  for (const ring of rings) {
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i];
+      const b = ring[(i + 1) % ring.length];
+      for (const f of [0, 0.5]) {
+        const lon = a[0] + (b[0] - a[0]) * f;
+        const lat = a[1] + (b[1] - a[1]) * f;
+        const inside = pointInPolygon(lat, lon, zone);
+        const signed = (inside ? -1 : 1) * distanceToBoundary(lat, lon, zone);
+        worst = Math.max(worst, Math.abs((inward ? -signed : signed) - distance));
+      }
+    }
+  }
+  return worst;
+}
+
+// An L: the shape that used to draw its 2 km line 500 m out of place.
+const L_ZONE = ringOf(at(0, 0), at(600, 0), at(600, 150), at(150, 150), at(150, 600), at(0, 600));
+
+test("alarm lines on a shape with an inward bend sit where the engine fires", () => {
+  for (const distance of [30, 200, 500, 2000]) {
+    const rings = offsetRings(L_ZONE, distance);
+    assert.ok(rings, `no line at ${distance} m`);
+    const error = worstLineError(rings, L_ZONE, distance, false);
+    assert.ok(error <= Math.max(0.5, distance * 0.003), `${distance} m line off by ${error.toFixed(1)} m`);
+  }
+});
+
+test("inward alarm lines are exact, and absent when the zone is too narrow", () => {
+  const rings = offsetRings(L_ZONE, 50, true);
+  assert.ok(rings);
+  assert.ok(worstLineError(rings, L_ZONE, 50, true) <= 0.5);
+  // The arms are 150 m wide, so nowhere is 100 m from every edge.
+  assert.equal(offsetRings(L_ZONE, 100, true), null);
+});
+
+test("a border grown by a margin keeps that margin all the way round", () => {
+  const grown = grownRing(L_ZONE, 250);
+  assert.ok(grown);
+  assert.ok(worstLineError([grown], L_ZONE, 250, false) <= 1);
 });

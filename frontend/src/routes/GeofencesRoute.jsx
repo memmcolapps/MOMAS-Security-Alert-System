@@ -43,12 +43,12 @@ import {
 } from "../lib/api";
 import { IMAGERY_LABEL_TILES, IMAGERY_ROAD_TILES, LABELLED_BASEMAPS, SATELLITE_TILES, vectorBasemapLayer } from "../lib/basemaps";
 import {
-  bufferRing,
   circleAroundAssets,
   formatDistance,
-  insetRing,
+  grownRing,
   insideZone,
   metresBetween,
+  offsetRings,
   polygonSelfIntersects,
   simplifyRing,
 } from "../lib/fence-placement";
@@ -107,7 +107,8 @@ function nextStep(steps) {
   const last = steps[steps.length - 1];
   const level = QUIET_FIRST.find((item) => LEVEL_RANK[item] > LEVEL_RANK[last.level]);
   if (!level) return null;
-  const distance = Number(last.distance_m) < 200 ? 200 : Math.round((Number(last.distance_m) * 2.5) / 50) * 50;
+  // Measured from the zone's edge, so small steps: 100 m, then 250 m.
+  const distance = Number(last.distance_m) < 100 ? 100 : Math.round((Number(last.distance_m) * 2.5) / 50) * 50;
   return { level, distance_m: Math.min(MAX_STEP_M, distance) };
 }
 
@@ -678,27 +679,56 @@ function ZoneMap({
   }, [zone]);
 
   // One dashed line per alarm step of the focused card, in that step's colour,
-  // where it actually fires: outside the shape for "must stay inside", inside
-  // it for "must not enter". The same offset works for every kind of shape.
+  // exactly where it fires: outside the shape for "must stay inside", inside
+  // it for "must not enter". A circle's lines are drawn at once; a shape's are
+  // worked out a moment after it stops changing, since a long border can take
+  // a noticeable fraction of a second and dragging a corner must stay smooth.
   useEffect(() => {
     const layer = layers.current.alarm;
-    if (!layer) return;
-    layer.clearLayers();
-    if (!editing || !focusRule || !isPlaced(zone) || drawing) return;
-    const crossed = zone.shape_type === "polygon" && polygonSelfIntersects(zone.points);
-    for (const step of focusRule.steps) {
-      const distance = Number(step.distance_m) || 0;
-      if (!(distance > 0)) continue;
-      const style = { color: LEVEL_STYLES[step.level].dot, weight: 2, dashArray: "6 6", fill: false, interactive: false };
-      if (zone.shape_type === "circle") {
-        const radius = Number(zone.radius_m) + (focusRule.trigger === "enter" ? -distance : distance);
-        if (radius > 0) L.circle([zone.center_lat, zone.center_lon], { ...style, radius }).addTo(layer);
-        continue;
-      }
-      if (crossed) return;
-      const ring = focusRule.trigger === "enter" ? insetRing(zone.points, distance) : bufferRing(zone.points, distance);
-      if (ring) L.polygon(ring.map(([lon, lat]) => [lat, lon]), style).addTo(layer);
+    if (!layer) return undefined;
+    if (!editing || !focusRule || !isPlaced(zone) || drawing) {
+      layer.clearLayers();
+      return undefined;
     }
+    const styleFor = (step) => ({ color: LEVEL_STYLES[step.level].dot, weight: 2, dashArray: "6 6", fill: false, interactive: false });
+    // Each line says what it is and how far from the edge, at its top.
+    const label = (step, lat, lon) =>
+      L.marker([lat, lon], {
+        interactive: false,
+        keyboard: false,
+        icon: L.divIcon({
+          className: "",
+          iconSize: [0, 0],
+          html: `<span style="position:absolute;transform:translate(-50%,-115%);white-space:nowrap;padding:1px 6px;border-radius:9999px;background:rgba(0,0,0,.75);color:${LEVEL_STYLES[step.level].dot};font:700 10px system-ui;box-shadow:0 1px 3px rgba(0,0,0,.5)">${LEVEL_STYLES[step.level].label} · ${formatDistance(Number(step.distance_m))}</span>`,
+        }),
+      }).addTo(layer);
+    const steps = focusRule.steps.filter((step) => Number(step.distance_m) > 0);
+    if (zone.shape_type === "circle") {
+      layer.clearLayers();
+      for (const step of steps) {
+        const distance = Number(step.distance_m);
+        const radius = Number(zone.radius_m) + (focusRule.trigger === "enter" ? -distance : distance);
+        if (!(radius > 0)) continue;
+        L.circle([zone.center_lat, zone.center_lon], { ...styleFor(step), radius }).addTo(layer);
+        label(step, Number(zone.center_lat) + radius / 111_320, Number(zone.center_lon));
+      }
+      return undefined;
+    }
+    if (polygonSelfIntersects(zone.points)) {
+      layer.clearLayers();
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      layer.clearLayers();
+      for (const step of steps) {
+        const rings = cachedOffset(zone.points, Number(step.distance_m), focusRule.trigger === "enter");
+        if (!rings) continue;
+        L.polygon(rings.map((ring) => ring.map(([lon, lat]) => [lat, lon])), styleFor(step)).addTo(layer);
+        const top = rings[0].reduce((best, point) => (point[1] > best[1] ? point : best), rings[0][0]);
+        label(step, top[1], top[0]);
+      }
+    }, 120);
+    return () => window.clearTimeout(timer);
   }, [editing, focusRule, zone, drawing]);
 
   // Who the rules watch, coloured by the server's verdict.
@@ -755,6 +785,18 @@ function ZoneMap({
       </div>
     </div>
   );
+}
+
+// Alarm lines already worked out, so switching cards or steps back and forth
+// redraws at once.
+const offsetCache = new Map();
+function cachedOffset(points, distance, inward) {
+  const key = `${inward ? "in" : "out"}|${distance}|${points.join(";")}`;
+  if (offsetCache.has(key)) return offsetCache.get(key);
+  const rings = offsetRings(points, distance, inward);
+  if (offsetCache.size > 60) offsetCache.delete(offsetCache.keys().next().value);
+  offsetCache.set(key, rings);
+  return rings;
 }
 
 function viewRadius(map) {
@@ -852,21 +894,22 @@ function PlaceSearch({ onPick }) {
   );
 }
 
-// Sizes said the way people say them. A circle is one of these unless someone
-// drags it to something else.
+// Sizes said the way people say them, by how wide the thing is from one side
+// to the other. They used to be radii, so "Building" drew a circle 100 m
+// across. A circle is one of these unless someone drags it to another size.
 const SIZES = [
-  { label: "Building", radius: 50 },
-  { label: "Compound", radius: 150 },
-  { label: "Street block", radius: 300 },
-  { label: "Neighbourhood", radius: 1000 },
-  { label: "Town", radius: 5000 },
-];
-const DEFAULT_RADIUS = 150;
+  { label: "Building", across: 30 },
+  { label: "Compound", across: 100 },
+  { label: "Street block", across: 250 },
+  { label: "Neighbourhood", across: 1000 },
+  { label: "Town", across: 5000 },
+].map((size) => ({ ...size, radius: size.across / 2 }));
+const DEFAULT_RADIUS = SIZES[1].radius;
 
-/** A place with no outline gets a circle about the size its kind suggests. */
+/** A place with no outline gets a circle about as wide as its kind suggests. */
 function radiusForKind(kind) {
-  if (["City", "Local government"].includes(kind)) return 5000;
-  if (["Town", "Village", "Area", "Airport", "Military", "Barracks", "University"].includes(kind)) return 1000;
+  if (["City", "Local government"].includes(kind)) return SIZES[4].radius;
+  if (["Town", "Village", "Area", "Airport", "Military", "Barracks", "University"].includes(kind)) return SIZES[3].radius;
   return DEFAULT_RADIUS;
 }
 
@@ -1283,7 +1326,7 @@ function AlarmSteps({ rule, onChange }) {
                     type="number"
                     value={step.distance_m}
                   />
-                  <span>m {away}</span>
+                  <span>m {away === "out" ? "past the edge" : "inside the edge"}</span>
                 </>
               ) : (
                 <span>At the edge</span>
@@ -1666,7 +1709,7 @@ export function GeofencesRoute() {
         name: trigger === "exit" ? `${radio.name} area` : "",
         center_lat: radio.lat,
         center_lon: radio.lon,
-        radius_m: trigger === "exit" ? 300 : 200,
+        radius_m: trigger === "exit" ? SIZES[2].radius : DEFAULT_RADIUS,
       },
       [rule],
     );
@@ -1748,7 +1791,7 @@ export function GeofencesRoute() {
     if (!area?.border) return;
     const at = MARGINS.indexOf(area.margin);
     const margin = MARGINS[Math.min(MARGINS.length - 1, Math.max(0, at + direction))];
-    const ring = margin ? bufferRing(area.border, margin) : area.border;
+    const ring = margin ? grownRing(area.border, margin) : area.border;
     if (!ring) return;
     setArea({ ...area, margin });
     updateZone({ points: margin ? simplifyRing(ring, 120) : ring });
@@ -1945,7 +1988,7 @@ export function GeofencesRoute() {
                                 }}
                                 type="button"
                               >
-                                {size.label}
+                                {size.label} <span className="font-normal opacity-70">{formatDistance(size.across)}</span>
                               </button>
                             ))}
                           </div>

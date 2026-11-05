@@ -14,6 +14,8 @@
 // geometry.ts). These helpers exist to depict what that engine will decide, so
 // a different constant here would put every drawn line a tenth of a percent off
 // the line the alarm actually fires on.
+import polygonClipping from "polygon-clipping";
+
 const EARTH_RADIUS_M = 6_371_008.8;
 const METRES_PER_DEGREE_LAT = (EARTH_RADIUS_M * Math.PI) / 180;
 
@@ -282,6 +284,121 @@ export function bufferRing(ring, bufferM) {
   const local = dropRepeats(toLocal(points, centre));
   if (local.length < 3) return null;
   return fromLocal(offsetRing(counterClockwise(local), Number(bufferM)), centre);
+}
+
+/**
+ * Every point exactly `distanceM` from the zone's edge: outside it, or inside
+ * it with `inward`. This is the line the engine fires on, for any shape.
+ *
+ * Shifting each edge out and joining the corners is only right for a shape
+ * with no inward bends. At an inward corner the shifted edges cross, and once
+ * the distance is large next to the bend they fold back over each other: an
+ * L-shaped zone drew its 2 km line up to 500 m from where it really is. So for
+ * those shapes the area is built the way the engine measures it - the shape,
+ * plus a strip along every edge, plus a circle on every corner - and its
+ * outline is the line.
+ *
+ * Returns outlines as `[lon, lat]` rings (open). An outer line can come with
+ * holes, such as the gap between a U's arms that is further than the distance
+ * from both. Null when there is no such line, e.g. a step deeper than the zone
+ * is wide.
+ */
+export function offsetRings(ring, distanceM, inward = false) {
+  const distance = Number(distanceM);
+  if (!Array.isArray(ring) || ring.length < 3 || !(distance > 0)) return null;
+  const points = ring.map(([lon, lat]) => ({ lat, lon }));
+  const centre = centroidOf(points);
+  const local = counterClockwise(dropRepeats(toLocal(points, centre)));
+  if (local.length < 3) return null;
+
+  // No inward bends: shifting the edges is already exact, and far cheaper.
+  if (!inward && isConvex(local)) return [fromLocal(offsetRing(local, distance), centre)];
+
+  // Detail far smaller than the distance cannot move the line by more than
+  // its own size, so a border is smoothed by at most 0.5% of the distance
+  // first. A 2 km line on a district border goes from most of a second to a
+  // few tens of milliseconds, and stays within 10 m.
+  const closed = [...local, local[0]];
+  const kept = keepIndices(closed, Math.max(0.25, distance * 0.005)).slice(0, -1);
+  const outline = kept.length >= 3 ? kept.map((i) => local[i]) : local;
+
+  // The clipping maths trips over coordinates that differ in the last few
+  // binary digits, so everything is snapped to a centimetre grid first.
+  const asPair = (p) => [Math.round(p.x * 100) / 100, Math.round(p.y * 100) / 100];
+  const shape = [[...outline, outline[0]].map(asPair)];
+  const strips = [];
+  for (let i = 0; i < outline.length; i++) {
+    const a = outline[i];
+    const b = outline[(i + 1) % outline.length];
+    const length = Math.hypot(b.x - a.x, b.y - a.y);
+    if (length > 1e-6) {
+      const nx = ((b.y - a.y) / length) * distance;
+      const ny = (-(b.x - a.x) / length) * distance;
+      const quad = [
+        { x: a.x + nx, y: a.y + ny },
+        { x: b.x + nx, y: b.y + ny },
+        { x: b.x - nx, y: b.y - ny },
+        { x: a.x - nx, y: a.y - ny },
+      ];
+      strips.push([[...quad, quad[0]].map(asPair)]);
+    }
+    const disc = fineCircle(a, distance);
+    strips.push([[...disc, disc[0]].map(asPair)]);
+  }
+
+  let area;
+  try {
+    area = inward
+      ? polygonClipping.difference(shape, polygonClipping.union(...strips))
+      : polygonClipping.union(shape, ...strips);
+  } catch {
+    return null;
+  }
+  const rings = [];
+  for (const polygon of area) {
+    for (const outline of polygon) {
+      const open = outline.slice(0, -1).map(([x, y]) => ({ x, y }));
+      if (open.length >= 3) rings.push(fromLocal(open, centre));
+    }
+  }
+  return rings.length ? rings : null;
+}
+
+/**
+ * A place's border pushed out by a margin, as one outline to save as a zone.
+ * Any hole is dropped: it only makes the zone a little bigger, never smaller.
+ */
+export function grownRing(ring, distanceM) {
+  const rings = offsetRings(ring, distanceM);
+  if (!rings) return null;
+  return rings.reduce((best, item) => (Math.abs(ringArea(item)) > Math.abs(ringArea(best)) ? item : best), rings[0]);
+}
+
+function ringArea(ring) {
+  return signedArea(ring.map(([x, y]) => ({ x, y })));
+}
+
+function isConvex(ring) {
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % ring.length];
+    const c = ring[(i + 2) % ring.length];
+    if ((b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x) < -1e-9) return false;
+  }
+  return true;
+}
+
+// Corner circles for offsetRings. Their edges sit on the true circle and their
+// points a little proud, as with arcBetween; at 64 sides that is about 0.1%,
+// two metres on a 2 km step.
+function fineCircle(centre, radius, sides = 64) {
+  const circumradius = radius / Math.cos(Math.PI / sides);
+  const points = [];
+  for (let i = 0; i < sides; i++) {
+    const angle = (i / sides) * Math.PI * 2;
+    points.push({ x: centre.x + circumradius * Math.cos(angle), y: centre.y + circumradius * Math.sin(angle) });
+  }
+  return points;
 }
 
 /**
