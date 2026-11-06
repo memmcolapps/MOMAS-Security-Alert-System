@@ -725,7 +725,7 @@ async function init() {
         created_by             INTEGER REFERENCES users(id) ON DELETE SET NULL,
         created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (geofence_id, target_type, target_id, trigger)
+        UNIQUE (geofence_id, target_type, target_id, trigger, level)
       );
       CREATE INDEX IF NOT EXISTS idx_geofence_rules_org ON geofence_rules(organization_id, active);
 
@@ -747,6 +747,25 @@ async function init() {
       ALTER TABLE operational_alerts ADD COLUMN IF NOT EXISTS trigger TEXT NOT NULL DEFAULT 'exit';
       ALTER TABLE operational_alerts ADD COLUMN IF NOT EXISTS level TEXT NOT NULL DEFAULT 'red';
       ALTER TABLE geofence_assignments ADD COLUMN IF NOT EXISTS migrated_at TIMESTAMPTZ;
+
+      -- Alarm steps: one radio may have an amber and a red rule on the same
+      -- direction, so the level is part of what makes a rule unique.
+      DO $$
+      DECLARE old_name TEXT;
+      BEGIN
+        SELECT c.conname INTO old_name
+          FROM pg_constraint c
+         WHERE c.conrelid = 'geofence_rules'::regclass AND c.contype = 'u'
+           AND (SELECT array_agg(a.attname::text ORDER BY a.attname)
+                  FROM pg_attribute a
+                 WHERE a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey))
+               = ARRAY['geofence_id','target_id','target_type','trigger'];
+        IF old_name IS NOT NULL THEN
+          EXECUTE format('ALTER TABLE geofence_rules DROP CONSTRAINT %I', old_name);
+        END IF;
+      END $$;
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_geofence_rule_step
+        ON geofence_rules(geofence_id, target_type, target_id, trigger, level);
     `);
 
     const client = await pool.connect();

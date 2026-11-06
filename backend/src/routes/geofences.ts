@@ -9,10 +9,25 @@ import {
 } from "../auth";
 import { env } from "../config";
 import * as db from "../db";
-import { breachedCounts, judgeRule, membersOf, rulesChanged } from "../geofencing/engine";
-import { fenceMetrics, ringSelfIntersects, validatePolygonGeometry } from "../geofencing/geometry";
+import {
+  breachedCounts,
+  judgeRule,
+  membersOf,
+  rulesChanged,
+} from "../geofencing/engine";
+import {
+  fenceMetrics,
+  ringSelfIntersects,
+  validatePolygonGeometry,
+} from "../geofencing/geometry";
 import { assetKey, currentAssetPositions } from "../geofencing/positions";
-import { LEVELS, TARGET_TYPES, TRIGGERS, unitAndDescendants, zoneBounds } from "../geofencing/rules";
+import {
+  LEVELS,
+  TARGET_TYPES,
+  TRIGGERS,
+  unitAndDescendants,
+  zoneBounds,
+} from "../geofencing/rules";
 import { placeBorder, suggestPlaces } from "../geofencing/borders";
 import * as store from "../geofencing/store";
 import { reverseGeocode, searchPlaces } from "../geocoder";
@@ -36,7 +51,10 @@ function canManage(c: any, unitId?: number | null) {
   const user = c.get("user");
   if (isPlatformStaff(user)) return isPlatformOperator(user);
   const membership = primaryOrganization(user);
-  return canManageOrganization(membership) || canManageUnit(membership, unitId || membership?.unit_id);
+  return (
+    canManageOrganization(membership) ||
+    canManageUnit(membership, unitId || membership?.unit_id)
+  );
 }
 
 function errorMessage(error: unknown) {
@@ -73,12 +91,16 @@ function validateZone(body: any) {
   const name = String(body.name || "").trim();
   const shapeType = body.shape_type;
   if (!name) throw new Error("Give the zone a name.");
-  if (!["circle", "polygon"].includes(shapeType)) throw new Error("A zone is a circle or a polygon.");
+  if (!["circle", "polygon"].includes(shapeType))
+    throw new Error("A zone is a circle or a polygon.");
   if (shapeType === "polygon") {
     if (ringSelfIntersects(body.geometry?.coordinates?.[0])) {
-      throw new Error("This zone crosses over itself. Drag the corners so they go round the area in order.");
+      throw new Error(
+        "This zone crosses over itself. Drag the corners so they go round the area in order.",
+      );
     }
-    if (!validatePolygonGeometry(body.geometry)) throw new Error("A polygon needs at least three corners.");
+    if (!validatePolygonGeometry(body.geometry))
+      throw new Error("A polygon needs at least three corners.");
   }
   if (
     shapeType === "circle" &&
@@ -86,7 +108,8 @@ function validateZone(body: any) {
       !Number.isFinite(Number(body.center_lon)) ||
       !Number.isFinite(Number(body.radius_m)) ||
       Number(body.radius_m) <= 0)
-  ) throw new Error("A circle needs a centre and a radius.");
+  )
+    throw new Error("A circle needs a centre and a radius.");
 
   return {
     name,
@@ -98,7 +121,11 @@ function validateZone(body: any) {
   };
 }
 
-async function loadTarget(targetType: string, targetId: string, organizationId: number) {
+async function loadTarget(
+  targetType: string,
+  targetId: string,
+  organizationId: number,
+) {
   if (targetType === "radio") return db.getDevice(targetId);
   if (targetType === "drone") return db.getDrone(Number(targetId));
   if (targetType === "channel") return db.getChannel(Number(targetId));
@@ -113,34 +140,61 @@ const MAX_STEP_M = 20_000;
  * Checks each rule's target belongs to the organization (and the caller's
  * units). A zone may watch dozens of radios, so the lookups run together.
  */
-async function validateRules(rules: any[], organizationId: number, units: number[] | null) {
+async function validateRules(
+  rules: any[],
+  organizationId: number,
+  units: number[] | null,
+) {
   const list = Array.isArray(rules) ? rules : [];
   const seen = new Set<string>();
   for (const raw of list) {
     const targetId = String(raw?.target_id ?? "").trim();
-    if (!TARGET_TYPES.includes(raw?.target_type) || !targetId) throw new Error("Each rule needs a radio to watch.");
-    if (!TRIGGERS.includes(raw.trigger)) throw new Error("Each rule must say leave or enter.");
-    if (!LEVELS.includes(raw.level)) throw new Error("Each rule needs an alarm level.");
-    const key = `${raw.target_type}:${targetId}:${raw.trigger}`;
-    if (seen.has(key)) throw new Error("The same radio is listed twice for the same direction.");
+    if (!TARGET_TYPES.includes(raw?.target_type) || !targetId)
+      throw new Error("Each rule needs a radio to watch.");
+    if (!TRIGGERS.includes(raw.trigger))
+      throw new Error("Each rule must say leave or enter.");
+    if (!LEVELS.includes(raw.level))
+      throw new Error("Each rule needs an alarm level.");
+    // A radio may have several alarm steps on one direction, one per level.
+    const key = `${raw.target_type}:${targetId}:${raw.trigger}:${raw.level}`;
+    if (seen.has(key))
+      throw new Error(
+        "The same radio has the same alarm level twice. Remove it from one of the rules.",
+      );
     seen.add(key);
   }
 
-  const found = await Promise.all(list.map((raw) => loadTarget(raw.target_type, String(raw.target_id).trim(), organizationId)));
+  const found = await Promise.all(
+    list.map((raw) =>
+      loadTarget(raw.target_type, String(raw.target_id).trim(), organizationId),
+    ),
+  );
   return list.map((raw, i) => {
     const target: any = found[i];
     if (!target || Number(target.organization_id) !== Number(organizationId)) {
-      throw new Error(`That ${raw.target_type} is not part of this organization.`);
+      throw new Error(
+        `That ${raw.target_type} is not part of this organization.`,
+      );
     }
-    if (units && !units.includes(Number(target.unit_id))) throw new Error(`That ${raw.target_type} is outside your unit.`);
+    if (units && !units.includes(Number(target.unit_id)))
+      throw new Error(`That ${raw.target_type} is outside your unit.`);
     return {
       id: raw.id ? Number(raw.id) : null,
       target_type: raw.target_type,
       target_id: String(raw.target_id).trim(),
       trigger: raw.trigger,
       level: raw.level,
-      buffer_m: Math.min(MAX_STEP_M, Math.max(0, Number(raw.buffer_m ?? env.GEOFENCE_DEFAULT_BUFFER_M) || 0)),
-      confirmations_required: Math.min(10, Math.max(1, Number(raw.confirmations_required) || env.GEOFENCE_CONFIRMATIONS)),
+      buffer_m: Math.min(
+        MAX_STEP_M,
+        Math.max(0, Number(raw.buffer_m ?? env.GEOFENCE_DEFAULT_BUFFER_M) || 0),
+      ),
+      confirmations_required: Math.min(
+        10,
+        Math.max(
+          1,
+          Number(raw.confirmations_required) || env.GEOFENCE_CONFIRMATIONS,
+        ),
+      ),
       active: raw.active !== false,
     };
   });
@@ -154,13 +208,23 @@ async function validateRules(rules: any[], organizationId: number, units: number
  */
 async function describe(zone: any, rules: any[]) {
   const membersByRule = rules.map((rule) => membersOf(rule));
-  const allMembers = [...new Map(membersByRule.flat().map((m) => [assetKey(m.asset_type, m.asset_id), m])).values()];
+  const allMembers = [
+    ...new Map(
+      membersByRule.flat().map((m) => [assetKey(m.asset_type, m.asset_id), m]),
+    ).values(),
+  ];
   const positions = await currentAssetPositions(allMembers);
 
   const verdicts = rules.map((rule, index) => {
-    const draft = { ...zone, ...rule, bounds: zoneBounds(zone, (Number(rule.buffer_m) || 0) + 5) };
+    const draft = {
+      ...zone,
+      ...rule,
+      bounds: zoneBounds(zone, (Number(rule.buffer_m) || 0) + 5),
+    };
     const members = membersByRule[index].map((member) => {
-      const position = positions.get(assetKey(member.asset_type, member.asset_id));
+      const position = positions.get(
+        assetKey(member.asset_type, member.asset_id),
+      );
       if (!position) return { ...member, state: "unknown" };
       const verdict = judgeRule(draft, position.lat, position.lon);
       return {
@@ -186,7 +250,9 @@ async function describe(zone: any, rules: any[]) {
   return {
     rules: verdicts,
     metrics,
-    place: metrics?.centre ? reverseGeocode(metrics.centre.lat, metrics.centre.lon) : null,
+    place: metrics?.centre
+      ? reverseGeocode(metrics.centre.lat, metrics.centre.lon)
+      : null,
   };
 }
 
@@ -194,7 +260,10 @@ function withBreaches(zone: any) {
   const counts = breachedCounts();
   return {
     ...zone,
-    rules: (zone.rules || []).map((rule: any) => ({ ...rule, in_breach: counts.get(Number(rule.id)) || 0 })),
+    rules: (zone.rules || []).map((rule: any) => ({
+      ...rule,
+      in_breach: counts.get(Number(rule.id)) || 0,
+    })),
   };
 }
 
@@ -210,17 +279,26 @@ router.get("/", async (c) => {
 /** Units, channels, radios and drones a rule can watch, in one request. */
 router.get("/targets", async (c) => {
   const organizationId = organizationFor(c, c.req.query("organization_id"));
-  if (!organizationId) return c.json({ units: [], channels: [], radios: [], drones: [] });
+  if (!organizationId)
+    return c.json({ units: [], channels: [], radios: [], drones: [] });
   try {
     const units = await allowedUnits(organizationId, callerUnit(c));
     const targets = await store.listTargets(organizationId, units);
     const members = (target_type: string, target_id: any) =>
-      membersOf({ target_type, target_id: String(target_id) }).map((m) => `${m.asset_type}:${m.asset_id}`);
+      membersOf({ target_type, target_id: String(target_id) }).map(
+        (m) => `${m.asset_type}:${m.asset_id}`,
+      );
     return c.json({
       // Member keys travel with each group, so the editor can light them up
       // on the map and draw around them before any zone exists.
-      units: targets.units.map((unit: any) => ({ ...unit, members: members("unit", unit.id) })),
-      channels: targets.channels.map((channel: any) => ({ ...channel, members: members("channel", channel.id) })),
+      units: targets.units.map((unit: any) => ({
+        ...unit,
+        members: members("unit", unit.id),
+      })),
+      channels: targets.channels.map((channel: any) => ({
+        ...channel,
+        members: members("channel", channel.id),
+      })),
       radios: targets.radios,
       drones: targets.drones,
     });
@@ -249,7 +327,9 @@ router.get("/places/border", async (c) => {
 });
 
 router.get("/places", (c) => {
-  return c.json({ places: searchPlaces(c.req.query("q"), Number(c.req.query("limit")) || 8) });
+  return c.json({
+    places: searchPlaces(c.req.query("q"), Number(c.req.query("limit")) || 8),
+  });
 });
 
 /** Dry run: who each draft rule would see on the wrong side right now. */
@@ -257,9 +337,14 @@ router.post("/preview", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   try {
     const organizationId = organizationFor(c, body.organization_id);
-    if (!organizationId) return c.json({ error: "Choose an organization first." }, 400);
+    if (!organizationId)
+      return c.json({ error: "Choose an organization first." }, 400);
     const zone = validateZone({ ...body, name: body.name || "Preview" });
-    const rules = await validateRules(body.rules || [], organizationId, await allowedUnits(organizationId, callerUnit(c)));
+    const rules = await validateRules(
+      body.rules || [],
+      organizationId,
+      await allowedUnits(organizationId, callerUnit(c)),
+    );
     return c.json(await describe(zone, rules));
   } catch (error) {
     return c.json({ error: errorMessage(error) }, 400);
@@ -269,14 +354,21 @@ router.post("/preview", async (c) => {
 async function saveZoneAndRules(c: any, existing: any | null) {
   const user = c.get("user");
   const body = await c.req.json().catch(() => ({}));
-  const organizationId = existing ? Number(existing.organization_id) : organizationFor(c, body.organization_id);
-  if (!organizationId) return c.json({ error: "Choose an organization first." }, 400);
+  const organizationId = existing
+    ? Number(existing.organization_id)
+    : organizationFor(c, body.organization_id);
+  if (!organizationId)
+    return c.json({ error: "Choose an organization first." }, 400);
   const unitId = existing ? existing.unit_id : callerUnit(c);
   if (!canManage(c, unitId)) return c.json({ error: "forbidden" }, 403);
 
   try {
     const zoneInput = validateZone(body);
-    const rules = await validateRules(body.rules || [], organizationId, await allowedUnits(organizationId, callerUnit(c)));
+    const rules = await validateRules(
+      body.rules || [],
+      organizationId,
+      await allowedUnits(organizationId, callerUnit(c)),
+    );
     const { zone, fresh, removed } = await store.transaction(async (client) => {
       const zone = await store.saveZone(client, {
         ...zoneInput,
@@ -286,7 +378,13 @@ async function saveZoneAndRules(c: any, existing: any | null) {
         created_by: existing?.created_by ?? user.id,
       });
       if (!zone) throw new Error("Zone not found.");
-      const synced = await store.syncRules(client, zone.id, organizationId, rules, user.id);
+      const synced = await store.syncRules(
+        client,
+        zone.id,
+        organizationId,
+        rules,
+        user.id,
+      );
       return { zone, ...synced };
     });
     // Quiet by default: nobody already on the wrong side alarms the moment
@@ -300,7 +398,10 @@ async function saveZoneAndRules(c: any, existing: any | null) {
       target_id: String(zone.id),
       metadata: { rule_count: rules.length, quieted_existing: quieted },
     });
-    return c.json({ zone: withBreaches(await store.getZone(zone.id, { organizationId })), quieted });
+    return c.json({
+      zone: withBreaches(await store.getZone(zone.id, { organizationId })),
+      quieted,
+    });
   } catch (error) {
     return c.json({ error: errorMessage(error) }, 400);
   }
@@ -321,10 +422,15 @@ router.delete("/:id", async (c) => {
   const id = Number(c.req.param("id"));
   const existing = await store.getZone(id, scope(c));
   if (!existing) return c.json({ error: "Zone not found." }, 404);
-  if (!canManage(c, existing.unit_id)) return c.json({ error: "forbidden" }, 403);
+  if (!canManage(c, existing.unit_id))
+    return c.json({ error: "forbidden" }, 403);
   try {
     await store.deleteZone(id, existing.organization_id);
-    await rulesChanged([], (existing.rules || []).map((rule: any) => Number(rule.id)), false);
+    await rulesChanged(
+      [],
+      (existing.rules || []).map((rule: any) => Number(rule.id)),
+      false,
+    );
     await db.createAuditLog({
       organization_id: existing.organization_id,
       actor_user_id: user.id,

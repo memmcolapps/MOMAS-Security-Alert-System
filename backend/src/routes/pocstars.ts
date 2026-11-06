@@ -49,7 +49,10 @@ type RecordingTicket = {
 
 const recordingTickets = new Map<string, RecordingTicket>();
 const ticketByRecording = new Map<string, string>();
-const transcodedRecordingCache = new Map<string, { data: Buffer; expiresAt: number }>();
+const transcodedRecordingCache = new Map<
+  string,
+  { data: Buffer; expiresAt: number }
+>();
 
 router.use("*", requireAuth);
 
@@ -57,11 +60,13 @@ function orgScope(c: any) {
   const user = c.get("user");
   if (!user || isPlatformStaff(user)) return {};
   const org = primaryOrganization(user);
-  return org ? {
-    organizationId: org.organization_id,
-    unitId: org.scope_level === "unit" ? org.unit_id : null,
-    assignedOnly: !canManageOrganization(org),
-  } : { organizationId: -1 };
+  return org
+    ? {
+        organizationId: org.organization_id,
+        unitId: org.scope_level === "unit" ? org.unit_id : null,
+        assignedOnly: !canManageOrganization(org),
+      }
+    : { organizationId: -1 };
 }
 
 // Every tier sees the whole radio estate; only ops and above may move it.
@@ -76,7 +81,9 @@ function canEditEstate(c: any) {
 async function ensureDeviceAccess(c: any, deviceIds: string[]) {
   if (isPlatformAdmin(c)) return true;
   const allowed = new Set(
-    (await db.listDevices(orgScope(c))).map((device: any) => String(device.device_id)),
+    (await db.listDevices(orgScope(c))).map((device: any) =>
+      String(device.device_id),
+    ),
   );
   return deviceIds.every((deviceId) => allowed.has(String(deviceId)));
 }
@@ -88,7 +95,10 @@ let sosReconcileRunning = false;
 
 const formUrlencoded = (obj: Record<string, unknown>) =>
   Object.entries(obj)
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+    .map(
+      ([key, value]) =>
+        `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`,
+    )
     .join("&");
 
 function jsonError(error: unknown) {
@@ -134,14 +144,17 @@ function basicRecordingAuthorization() {
 }
 
 function recordingFileUrl(path: string) {
-  const base = RECORDINGS_BASE.endsWith("/") ? RECORDINGS_BASE : `${RECORDINGS_BASE}/`;
+  const base = RECORDINGS_BASE.endsWith("/")
+    ? RECORDINGS_BASE
+    : `${RECORDINGS_BASE}/`;
   return new URL(String(path).replace(/^\/+/, ""), base).toString();
 }
 
 async function transcodeAmrToMp3(rawAudio: Buffer) {
-  const input = rawAudio.subarray(0, 6).toString("ascii") === "#!AMR\n"
-    ? rawAudio
-    : Buffer.concat([Buffer.from("#!AMR\n"), rawAudio]);
+  const input =
+    rawAudio.subarray(0, 6).toString("ascii") === "#!AMR\n"
+      ? rawAudio
+      : Buffer.concat([Buffer.from("#!AMR\n"), rawAudio]);
 
   return new Promise<Buffer>((resolve, reject) => {
     const process = spawn(
@@ -190,7 +203,10 @@ async function transcodeAmrToMp3(rawAudio: Buffer) {
         result.subarray(0, 3).toString("ascii") === "ID3" ||
         (result[0] === 0xff && (result[1] & 0xe0) === 0xe0);
       if (!result.length || (code !== 0 && !hasMp3Header)) {
-        const detail = Buffer.concat(errors).toString("utf8").trim().slice(0, 500);
+        const detail = Buffer.concat(errors)
+          .toString("utf8")
+          .trim()
+          .slice(0, 500);
         reject(new Error(detail || "The radio audio could not be decoded."));
         return;
       }
@@ -217,7 +233,9 @@ async function fetchAndTranscodeRecording(path: string) {
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) {
-    const error: any = new Error(`The recording server returned ${response.status}.`);
+    const error: any = new Error(
+      `The recording server returned ${response.status}.`,
+    );
     error.status = 502;
     throw error;
   }
@@ -229,7 +247,9 @@ async function fetchAndTranscodeRecording(path: string) {
   }
   const raw = Buffer.from(await response.arrayBuffer());
   if (!raw.length) {
-    const error: any = new Error("The recording server returned an empty clip.");
+    const error: any = new Error(
+      "The recording server returned an empty clip.",
+    );
     error.status = 502;
     throw error;
   }
@@ -291,7 +311,8 @@ function broadcastSse(event: string, data: unknown) {
       alert?.organization_id !== undefined &&
       client.scope.organizationId &&
       (Number(alert.organization_id) !== Number(client.scope.organizationId) ||
-        (client.scope.unitId && Number(alert.unit_id) !== Number(client.scope.unitId)))
+        (client.scope.unitId &&
+          Number(alert.unit_id) !== Number(client.scope.unitId)))
     ) {
       continue;
     }
@@ -320,7 +341,10 @@ async function fetchPocstarsSos(
     } catch (error: any) {
       lastError = error;
       lastPocstarsErr = error.message;
-      if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+      if (attempt < attempts - 1)
+        await new Promise((resolve) =>
+          setTimeout(resolve, 1000 * (attempt + 1)),
+        );
     }
   }
   throw lastError;
@@ -332,9 +356,19 @@ async function persistAndBroadcast(rows: any[]) {
     let lon = null;
     let locationRaw = null;
     try {
-      const loc = typeof row.sosLocationAt === "string" ? JSON.parse(row.sosLocationAt) : row.sosLocationAt;
+      const loc =
+        typeof row.sosLocationAt === "string"
+          ? JSON.parse(row.sosLocationAt)
+          : row.sosLocationAt;
       lat = loc?.wgs84?.lat ?? loc?.wgs84?.Lat ?? loc?.lat ?? loc?.Lat ?? null;
-      lon = loc?.wgs84?.lon ?? loc?.wgs84?.lng ?? loc?.wgs84?.Lng ?? loc?.lon ?? loc?.lng ?? loc?.Lng ?? null;
+      lon =
+        loc?.wgs84?.lon ??
+        loc?.wgs84?.lng ??
+        loc?.wgs84?.Lng ??
+        loc?.lon ??
+        loc?.lng ??
+        loc?.Lng ??
+        null;
       locationRaw = row.sosLocationAt;
     } catch {}
 
@@ -346,8 +380,19 @@ async function persistAndBroadcast(rows: any[]) {
       location_lat: lat,
       location_lon: lon,
       location_raw: locationRaw,
-      pocstars_group_id: row.sosCgId ?? row.cgId ?? row.gid ?? row.groupId ?? row.sosGroupId ?? null,
-      pocstars_group_name: row.sosCgName ?? row.cgName ?? row.groupName ?? row.sosGroupName ?? null,
+      pocstars_group_id:
+        row.sosCgId ??
+        row.cgId ??
+        row.gid ??
+        row.groupId ??
+        row.sosGroupId ??
+        null,
+      pocstars_group_name:
+        row.sosCgName ??
+        row.cgName ??
+        row.groupName ??
+        row.sosGroupName ??
+        null,
       upstream_status: Number.isFinite(Number(row.sosStatus ?? row.status))
         ? Number(row.sosStatus ?? row.status)
         : null,
@@ -369,9 +414,13 @@ async function reconcileAndBroadcast(rows: any[]) {
   // nearly all of them already match. Reading MOMAS's statuses in one query
   // and opening a locked transaction only for the rows that moved replaces a
   // few hundred sequential round trips per pass.
-  const candidates = rows.filter((row) => [1, 2].includes(Number(row.sosStatus ?? row.status)));
+  const candidates = rows.filter((row) =>
+    [1, 2].includes(Number(row.sosStatus ?? row.status)),
+  );
   if (!candidates.length) return;
-  const known = await db.sosStatusesByMsgId(candidates.map((row) => Number(row.sosMsgId)));
+  const known = await db.sosStatusesByMsgId(
+    candidates.map((row) => Number(row.sosMsgId)),
+  );
   for (const row of candidates) {
     const upstreamStatus = Number(row.sosStatus ?? row.status);
     const localStatus = known.get(Number(row.sosMsgId));
@@ -425,7 +474,12 @@ async function callPocstarsAction(action: SosAction, sosMsgId: number) {
   if (Number(data?.code) !== 200 || data?.success === false) {
     const upstreamCode = Number(data?.code);
     const error: any = new Error("The radio network rejected the update.");
-    error.status = upstreamCode === 501 ? 403 : [502, 503, 504].includes(upstreamCode) ? 409 : 502;
+    error.status =
+      upstreamCode === 501
+        ? 403
+        : [502, 503, 504].includes(upstreamCode)
+          ? 409
+          : 502;
     error.code = "alarm_radio_sync_failed";
     error.upstreamCode = Number.isFinite(upstreamCode) ? upstreamCode : null;
     // Raw vendor text is kept for the audit trail only — never rendered to operators.
@@ -437,10 +491,17 @@ async function callPocstarsAction(action: SosAction, sosMsgId: number) {
 
 async function handleSosAction(c: any, action: SosAction) {
   const sosMsgId = parseInt(c.req.param("sosMsgId"), 10);
-  if (!sosMsgId) return c.json({ error: "invalid_alarm_reference", message: "Invalid alarm reference." }, 400);
+  if (!sosMsgId)
+    return c.json(
+      { error: "invalid_alarm_reference", message: "Invalid alarm reference." },
+      400,
+    );
   if (!DISPATCHER_UID) {
     return c.json(
-      { error: "alarm_dispatch_not_configured", message: actionMessage("alarm_dispatch_not_configured") },
+      {
+        error: "alarm_dispatch_not_configured",
+        message: actionMessage("alarm_dispatch_not_configured"),
+      },
       503,
     );
   }
@@ -455,19 +516,34 @@ async function handleSosAction(c: any, action: SosAction) {
         ? body.resolution_note.trim()
         : null;
 
-  const start = await db.beginSosAction(sosMsgId, action, user?.id, orgScope(c));
+  const start = await db.beginSosAction(
+    sosMsgId,
+    action,
+    user?.id,
+    orgScope(c),
+  );
   if (start.state === "not_found") {
-    return c.json({ error: "alarm_not_found", message: actionMessage("alarm_not_found") }, 404);
+    return c.json(
+      { error: "alarm_not_found", message: actionMessage("alarm_not_found") },
+      404,
+    );
   }
   if (start.state === "syncing") {
     return c.json(
-      { error: "alarm_action_in_progress", message: actionMessage("alarm_action_in_progress"), alert: start.alert },
+      {
+        error: "alarm_action_in_progress",
+        message: actionMessage("alarm_action_in_progress"),
+        alert: start.alert,
+      },
       409,
     );
   }
   if (start.state === "invalid_status") {
     const code = INVALID_STATUS_CODES[action];
-    return c.json({ error: code, message: actionMessage(code), alert: start.alert }, 409);
+    return c.json(
+      { error: code, message: actionMessage(code), alert: start.alert },
+      409,
+    );
   }
 
   try {
@@ -490,7 +566,13 @@ async function handleSosAction(c: any, action: SosAction) {
     return c.json({ alert });
   } catch (error: any) {
     const { message, detail } = describeSyncFailure(error);
-    const alert = await db.failSosAction(sosMsgId, action, user?.id, message, detail);
+    const alert = await db.failSosAction(
+      sosMsgId,
+      action,
+      user?.id,
+      message,
+      detail,
+    );
     broadcastSse("sos_updated", alert);
     bus.emit("pocstars-alert:updated", alert);
     return c.json(
@@ -518,9 +600,15 @@ async function pollNewSos({ notifyHealth = true } = {}) {
       { timeoutMs: 4000, attempts: 1 },
     );
     await persistAndBroadcast(newData?.data?.rows || []);
-    if (notifyHealth) broadcastSse("pocstars_health", { ok: true, ts: lastPocstarsOk });
+    if (notifyHealth)
+      broadcastSse("pocstars_health", { ok: true, ts: lastPocstarsOk });
   } catch (error: any) {
-    if (notifyHealth) broadcastSse("pocstars_health", { ok: false, err: error.message, ts: Date.now() });
+    if (notifyHealth)
+      broadcastSse("pocstars_health", {
+        ok: false,
+        err: error.message,
+        ts: Date.now(),
+      });
   } finally {
     sosPollRunning = false;
   }
@@ -540,7 +628,10 @@ async function reconcileSosStatuses() {
     await reconcileAndBroadcast(processingData?.data?.rows || []);
     await reconcileAndBroadcast(resolvedData?.data?.rows || []);
   } catch (error: any) {
-    console.warn("[SOS] Status reconciliation failed:", error?.message || error);
+    console.warn(
+      "[SOS] Status reconciliation failed:",
+      error?.message || error,
+    );
   } finally {
     sosReconcileRunning = false;
   }
@@ -581,13 +672,22 @@ router.get("/radio/channels", async (c) => {
 // inventory sync copies it back over this row every cycle. So a rename goes to
 // the network first, and a rename that fails there fails here too - otherwise
 // the new name would quietly revert within minutes.
-async function renameOnNetwork(existing: any, name: unknown, companyId: number | null) {
+async function renameOnNetwork(
+  existing: any,
+  name: unknown,
+  companyId: number | null,
+) {
   const next = typeof name === "string" ? name.trim() : "";
-  if (!existing?.pocstars_managed || !next || next === existing.name) return null;
+  if (!existing?.pocstars_managed || !next || next === existing.name)
+    return null;
   const uid = Number(existing.device_id);
   if (!Number.isSafeInteger(uid) || uid <= 0) return null;
   try {
-    await provisionOnNetwork("provision.radio.rename", { uid, companyId, name: next });
+    await provisionOnNetwork("provision.radio.rename", {
+      uid,
+      companyId,
+      name: next,
+    });
     return null;
   } catch (error) {
     return error instanceof Error
@@ -600,7 +700,8 @@ router.post("/devices", async (c) => {
   const user = (c as any).get("user");
   const body = await c.req.json().catch(() => ({}));
   const { device_id, name, operator, device_type, notes, active } = body;
-  if (!device_id?.trim()) return c.json({ error: "device_id is required" }, 400);
+  if (!device_id?.trim())
+    return c.json({ error: "device_id is required" }, 400);
 
   try {
     // A radio is a physical handset allocated by the platform, so only platform
@@ -610,7 +711,11 @@ router.post("/devices", async (c) => {
     if (isPlatformOperator(user)) {
       // Platform operators can rename any radio, pooled ones included, so the
       // network write is not scoped to a company.
-      const renameError = await renameOnNetwork(await db.getDevice(device_id.trim()), name, null);
+      const renameError = await renameOnNetwork(
+        await db.getDevice(device_id.trim()),
+        name,
+        null,
+      );
       if (renameError) return c.json({ error: renameError }, 502);
       const device = await db.upsertDevice({
         device_id: device_id.trim(),
@@ -646,7 +751,8 @@ router.post("/devices", async (c) => {
     const orgId = orgScope(c).organizationId;
     const existing = await db.getDevice(device_id.trim());
     if (!existing) return c.json({ error: "Device not found" }, 404);
-    if (existing.organization_id !== orgId) return c.json({ error: "forbidden" }, 403);
+    if (existing.organization_id !== orgId)
+      return c.json({ error: "forbidden" }, 403);
 
     const organization = await db.getOrganization(Number(orgId));
     const companyId = Number(organization?.pocstars_company_id) || null;
@@ -680,17 +786,31 @@ router.delete("/devices/:device_id", async (c) => {
     if (existing.pocstars_managed) {
       const uid = Number(deviceId);
       if (!Number.isSafeInteger(uid) || uid <= 0) {
-        return c.json({ error: "That radio has no network identity to retire." }, 400);
+        return c.json(
+          { error: "That radio has no network identity to retire." },
+          400,
+        );
       }
       const companyId = existing.organization_id
-        ? Number((await db.getOrganization(Number(existing.organization_id)))?.pocstars_company_id) || null
-        : Number((await provisionOnNetwork("provision.pool", {}) as any)?.companyId) || null;
-      network = await provisionOnNetwork("provision.radio.retire", { companyId, uid });
+        ? Number(
+            (await db.getOrganization(Number(existing.organization_id)))
+              ?.pocstars_company_id,
+          ) || null
+        : Number(
+            ((await provisionOnNetwork("provision.pool", {})) as any)
+              ?.companyId,
+          ) || null;
+      network = await provisionOnNetwork("provision.radio.retire", {
+        companyId,
+        uid,
+      });
     }
     const deleted = await db.deleteDevice(deviceId);
     if (!deleted) return c.json({ error: "Device not found" }, 404);
     await db.createAuditLog({
-      organization_id: existing.organization_id ? Number(existing.organization_id) : null,
+      organization_id: existing.organization_id
+        ? Number(existing.organization_id)
+        : null,
       actor_user_id: user?.id,
       action: "radio.retire",
       target_type: "device",
@@ -718,7 +838,11 @@ router.get("/sos/log", async (c) => {
   try {
     await pollNewSos({ notifyHealth: false });
     const alerts = await db.listSosAlerts(orgScope(c), { status: "open" });
-    return c.json({ alerts, pocstarsLastOk: lastPocstarsOk, pocstarsLastErr: lastPocstarsErr });
+    return c.json({
+      alerts,
+      pocstarsLastOk: lastPocstarsOk,
+      pocstarsLastErr: lastPocstarsErr,
+    });
   } catch (error) {
     return c.json(jsonError(error), 500);
   }
@@ -766,29 +890,53 @@ router.get("/alarms/:sosMsgId", async (c) => {
   }
 });
 
-router.post("/alarms/:sosMsgId/start-response", (c) => handleSosAction(c, "process"));
+router.post("/alarms/:sosMsgId/start-response", (c) =>
+  handleSosAction(c, "process"),
+);
 router.post("/alarms/:sosMsgId/resolve", (c) => handleSosAction(c, "close"));
 router.post("/alarms/:sosMsgId/reopen", (c) => handleSosAction(c, "reopen"));
 
 router.get("/radio/recordings", async (c) => {
   const query = c.req.query();
-  const pageIndex = Math.max(1, Number.parseInt(query.pageIndex || "1", 10) || 1);
-  const pageSize = Math.min(50, Math.max(1, Number.parseInt(query.pageSize || "20", 10) || 20));
+  const pageIndex = Math.max(
+    1,
+    Number.parseInt(query.pageIndex || "1", 10) || 1,
+  );
+  const pageSize = Math.min(
+    50,
+    Math.max(1, Number.parseInt(query.pageSize || "20", 10) || 20),
+  );
   const speakerUserId = String(query.speakerUserId || "").trim();
-  const groupName = String(query.groupName || "").trim().slice(0, 200);
+  const groupName = String(query.groupName || "")
+    .trim()
+    .slice(0, 200);
   const from = /^\d{4}-\d{2}-\d{2}$/.test(query.from || "") ? query.from : "";
   const to = /^\d{4}-\d{2}-\d{2}$/.test(query.to || "") ? query.to : "";
 
   if (!DISPATCHER_UID) {
-    return c.json({ error: "radio_recordings_not_configured", message: "Radio recordings are not configured." }, 503);
+    return c.json(
+      {
+        error: "radio_recordings_not_configured",
+        message: "Radio recordings are not configured.",
+      },
+      503,
+    );
   }
   if (speakerUserId && !(await ensureDeviceAccess(c, [speakerUserId]))) {
-    return c.json({ error: "forbidden", message: "That radio is outside your operational scope." }, 403);
+    return c.json(
+      {
+        error: "forbidden",
+        message: "That radio is outside your operational scope.",
+      },
+      403,
+    );
   }
 
   try {
     const devices = await db.listDevices(orgScope(c));
-    const allowedSpeakers = new Set(devices.map((device: any) => String(device.device_id)));
+    const allowedSpeakers = new Set(
+      devices.map((device: any) => String(device.device_id)),
+    );
     const form: Record<string, unknown> = {
       pageIndex,
       pageSize,
@@ -806,13 +954,18 @@ router.get("/radio/recordings", async (c) => {
       },
     );
     if (data?.success === false || Number(data?.code) !== 200) {
-      return c.json({
-        error: "pocstars_recordings_failed",
-        message: data?.message || "No radio recordings were returned.",
-      }, 502);
+      return c.json(
+        {
+          error: "pocstars_recordings_failed",
+          message: data?.message || "No radio recordings were returned.",
+        },
+        502,
+      );
     }
 
-    const rows = Array.isArray(data?.data?.speakRecordList) ? data.data.speakRecordList : [];
+    const rows = Array.isArray(data?.data?.speakRecordList)
+      ? data.data.speakRecordList
+      : [];
     const recordings = rows
       .filter((row: any) => {
         const rowSpeaker = String(row.Rc_SpeakerUserID ?? "");
@@ -824,7 +977,8 @@ router.get("/radio/recordings", async (c) => {
         const rowSpeaker = String(row.Rc_SpeakerUserID);
         return {
           id: String(row.Rc_ID),
-          groupId: row.Rc_ChatGroupID == null ? null : String(row.Rc_ChatGroupID),
+          groupId:
+            row.Rc_ChatGroupID == null ? null : String(row.Rc_ChatGroupID),
           groupName: row.Rc_ChatGroupName || null,
           groupType: row.Rc_GroupType ?? null,
           speakerUserId: rowSpeaker,
@@ -844,10 +998,13 @@ router.get("/radio/recordings", async (c) => {
       refreshAfterMs: 3_000,
     });
   } catch (error: any) {
-    return c.json({
-      error: "pocstars_recordings_failed",
-      message: "Radio traffic is temporarily unavailable.",
-    }, statusFromAxios(error));
+    return c.json(
+      {
+        error: "pocstars_recordings_failed",
+        message: "Radio traffic is temporarily unavailable.",
+      },
+      statusFromAxios(error),
+    );
   }
 });
 
@@ -856,10 +1013,22 @@ router.get("/radio/recordings/:token/audio", async (c) => {
   const token = c.req.param("token");
   const ticket = recordingTickets.get(token);
   if (!ticket || ticket.expiresAt <= Date.now()) {
-    return c.json({ error: "recording_link_expired", message: "Refresh the radio traffic list and try again." }, 410);
+    return c.json(
+      {
+        error: "recording_link_expired",
+        message: "Refresh the radio traffic list and try again.",
+      },
+      410,
+    );
   }
   if (!(await ensureDeviceAccess(c, [ticket.speakerUserId]))) {
-    return c.json({ error: "forbidden", message: "That radio is outside your operational scope." }, 403);
+    return c.json(
+      {
+        error: "forbidden",
+        message: "That radio is outside your operational scope.",
+      },
+      403,
+    );
   }
 
   try {
@@ -875,10 +1044,13 @@ router.get("/radio/recordings/:token/audio", async (c) => {
       },
     });
   } catch (error: any) {
-    return c.json({
-      error: "pocstars_recording_playback_failed",
-      message: error?.message || "This radio clip could not be played.",
-    }, error?.status || 502);
+    return c.json(
+      {
+        error: "pocstars_recording_playback_failed",
+        message: error?.message || "This radio clip could not be played.",
+      },
+      error?.status || 502,
+    );
   }
 });
 
@@ -889,32 +1061,49 @@ router.post("/radio/messages", async (c) => {
   const message = String(body.message || "").trim();
 
   if (!deviceId) {
-    return c.json({ error: "device_required", message: "Choose a radio before sending." }, 400);
+    return c.json(
+      { error: "device_required", message: "Choose a radio before sending." },
+      400,
+    );
   }
   if (!message) {
-    return c.json({ error: "message_required", message: "Enter a message to send." }, 400);
+    return c.json(
+      { error: "message_required", message: "Enter a message to send." },
+      400,
+    );
   }
   if (Buffer.byteLength(message, "utf8") > 200) {
-    return c.json({
-      error: "message_too_long",
-      message: "Radio messages are limited to 200 bytes.",
-    }, 400);
+    return c.json(
+      {
+        error: "message_too_long",
+        message: "Radio messages are limited to 200 bytes.",
+      },
+      400,
+    );
   }
   if (!DISPATCHER_UID) {
-    return c.json({
-      error: "radio_messaging_not_configured",
-      message: "Radio messaging is not configured.",
-    }, 503);
+    return c.json(
+      {
+        error: "radio_messaging_not_configured",
+        message: "Radio messaging is not configured.",
+      },
+      503,
+    );
   }
 
   try {
     const devices = await db.listDevices(orgScope(c));
-    const device = devices.find((row: any) => String(row.device_id) === deviceId);
+    const device = devices.find(
+      (row: any) => String(row.device_id) === deviceId,
+    );
     if (!device) {
-      return c.json({
-        error: "forbidden",
-        message: "That radio is outside your operational scope.",
-      }, 403);
+      return c.json(
+        {
+          error: "forbidden",
+          message: "That radio is outside your operational scope.",
+        },
+        403,
+      );
     }
 
     const { data } = await axios.post(
@@ -940,10 +1129,16 @@ router.post("/radio/messages", async (c) => {
 
     const upstreamCode = Number(data?.code ?? data?.response?.code ?? 200);
     if (data?.success === false || upstreamCode >= 400) {
-      return c.json({
-        error: "pocstars_message_failed",
-        message: data?.message || data?.response?.message || "The radio network rejected the message.",
-      }, 502);
+      return c.json(
+        {
+          error: "pocstars_message_failed",
+          message:
+            data?.message ||
+            data?.response?.message ||
+            "The radio network rejected the message.",
+        },
+        502,
+      );
     }
 
     const deliveryId =
@@ -971,10 +1166,13 @@ router.post("/radio/messages", async (c) => {
       acceptedAt: new Date().toISOString(),
     });
   } catch (error: any) {
-    return c.json({
-      error: "pocstars_message_failed",
-      message: "The radio message could not be sent.",
-    }, statusFromAxios(error));
+    return c.json(
+      {
+        error: "pocstars_message_failed",
+        message: "The radio message could not be sent.",
+      },
+      statusFromAxios(error),
+    );
   }
 });
 
@@ -1023,14 +1221,26 @@ router.get("/locations", async (c) => {
       .join(",");
   }
   if (!uids) return c.json({ code: 200, data: [], success: true });
-  const requestedIds = uids.split(",").map((value) => value.trim()).filter(Boolean);
+  const requestedIds = uids
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
   if (!(await ensureDeviceAccess(c, requestedIds))) {
-    return c.json({ error: "One or more devices are outside your operational scope." }, 403);
+    return c.json(
+      { error: "One or more devices are outside your operational scope." },
+      403,
+    );
   }
   try {
-    return c.json(recordedLocations(requestedIds) ?? (await cachedLastLocations(requestedIds)));
+    return c.json(
+      recordedLocations(requestedIds) ??
+        (await cachedLastLocations(requestedIds)),
+    );
   } catch (error: any) {
-    return c.json({ error: "pocstars_locations_failed", message: error.message }, statusFromAxios(error));
+    return c.json(
+      { error: "pocstars_locations_failed", message: error.message },
+      statusFromAxios(error),
+    );
   }
 });
 
@@ -1038,16 +1248,26 @@ router.get("/locations", async (c) => {
 // ensureDeviceAccess, computed once so a stream can filter every batch.
 async function visibleDeviceIds(c: any): Promise<Set<string> | null> {
   if (isPlatformAdmin(c)) return null;
-  return new Set((await db.listDevices(orgScope(c))).map((device: any) => String(device.device_id)));
+  return new Set(
+    (await db.listDevices(orgScope(c))).map((device: any) =>
+      String(device.device_id),
+    ),
+  );
 }
 
 // Recent points for every radio the caller can see, so an opening map has a
 // few batches to play before the live stream delivers its first.
 router.get("/positions/recent", async (c) => {
-  const seconds = Math.min(Math.max(Number(c.req.query("seconds")) || 90, 10), 600);
+  const seconds = Math.min(
+    Math.max(Number(c.req.query("seconds")) || 90, 10),
+    600,
+  );
   try {
     const visible = await visibleDeviceIds(c);
-    const rows = await db.listRecentRadioPoints(visible ? [...visible] : null, new Date(Date.now() - seconds * 1000));
+    const rows = await db.listRecentRadioPoints(
+      visible ? [...visible] : null,
+      new Date(Date.now() - seconds * 1000),
+    );
     return c.json({
       points: rows.map((row: any) => ({
         uid: String(row.device_id),
@@ -1057,7 +1277,10 @@ router.get("/positions/recent", async (c) => {
       })),
     });
   } catch (error: any) {
-    return c.json({ error: "radio_points_failed", message: error.message }, 500);
+    return c.json(
+      { error: "radio_points_failed", message: error.message },
+      500,
+    );
   }
 });
 
@@ -1069,13 +1292,19 @@ router.get("/positions/stream", async (c) => {
   const stream = new TransformStream<Uint8Array>();
   const writer = stream.writable.getWriter();
   let visible = await visibleDeviceIds(c).catch(() => new Set<string>());
-  const write = (chunk: string) => writer.write(encoder.encode(chunk)).catch(() => cleanup());
+  const write = (chunk: string) =>
+    writer.write(encoder.encode(chunk)).catch(() => cleanup());
   const onPoints = (points: any[]) => {
-    const mine = visible ? points.filter((point) => visible!.has(String(point.uid))) : points;
-    if (mine.length) void write(`event: points\ndata: ${JSON.stringify(mine)}\n\n`);
+    const mine = visible
+      ? points.filter((point) => visible!.has(String(point.uid)))
+      : points;
+    if (mine.length)
+      void write(`event: points\ndata: ${JSON.stringify(mine)}\n\n`);
   };
   const refresh = setInterval(() => {
-    void visibleDeviceIds(c).then((next) => (visible = next)).catch(() => {});
+    void visibleDeviceIds(c)
+      .then((next) => (visible = next))
+      .catch(() => {});
   }, 60_000);
   const heartbeat = setInterval(() => void write(":heartbeat\n\n"), 25_000);
   let closed = false;
@@ -1106,11 +1335,18 @@ const REPLAY_MAX_MS = 24 * 3600_000;
 router.get("/locations/:uid/replay", async (c) => {
   const uid = c.req.param("uid");
   if (!(await ensureDeviceAccess(c, [uid]))) {
-    return c.json({ error: "That device is outside your operational scope." }, 403);
+    return c.json(
+      { error: "That device is outside your operational scope." },
+      403,
+    );
   }
   const to = new Date(c.req.query("to") || Date.now());
   const from = new Date(c.req.query("from") || to.getTime() - 3600_000);
-  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to) {
+  if (
+    Number.isNaN(from.getTime()) ||
+    Number.isNaN(to.getTime()) ||
+    from >= to
+  ) {
     return c.json({ error: "from and to must be times, from before to." }, 400);
   }
   if (to.getTime() - from.getTime() > REPLAY_MAX_MS) {
@@ -1129,7 +1365,10 @@ router.get("/locations/:uid/replay", async (c) => {
       })),
     });
   } catch (error: any) {
-    return c.json({ error: "radio_replay_failed", message: error.message }, 500);
+    return c.json(
+      { error: "radio_replay_failed", message: error.message },
+      500,
+    );
   }
 });
 
@@ -1142,7 +1381,11 @@ const FLEET_REPLAY_SPREAD_M = 60;
 router.get("/positions/replay", async (c) => {
   const to = new Date(c.req.query("to") || Date.now());
   const from = new Date(c.req.query("from") || to.getTime() - 3600_000);
-  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to) {
+  if (
+    Number.isNaN(from.getTime()) ||
+    Number.isNaN(to.getTime()) ||
+    from >= to
+  ) {
     return c.json({ error: "from and to must be times, from before to." }, 400);
   }
   if (to.getTime() - from.getTime() > REPLAY_MAX_MS) {
@@ -1152,20 +1395,33 @@ router.get("/positions/replay", async (c) => {
   const bucketSec = Math.min(30, Math.max(5, Math.round(spanSec / 3000)));
   try {
     const visible = await visibleDeviceIds(c);
-    const summary = await db.radioReplaySummary(visible ? [...visible] : null, from, to);
+    const summary = await db.radioReplaySummary(
+      visible ? [...visible] : null,
+      from,
+      to,
+    );
     const travelling = summary
       .filter((row: any) => Number(row.extent_m) >= FLEET_REPLAY_SPREAD_M)
       .map((row: any) => String(row.device_id));
     const tracks = new Map<string, number[][]>();
     if (travelling.length) {
-      for (const row of await db.radioReplayTracks(travelling, from, to, bucketSec)) {
+      for (const row of await db.radioReplayTracks(
+        travelling,
+        from,
+        to,
+        bucketSec,
+      )) {
         const uid = String(row.device_id);
         if (!tracks.has(uid)) tracks.set(uid, []);
-        tracks.get(uid)!.push([
-          Math.round((new Date(row.observed_at).getTime() - from.getTime()) / 1000),
-          Number(Number(row.lat).toFixed(6)),
-          Number(Number(row.lon).toFixed(6)),
-        ]);
+        tracks
+          .get(uid)!
+          .push([
+            Math.round(
+              (new Date(row.observed_at).getTime() - from.getTime()) / 1000,
+            ),
+            Number(Number(row.lat).toFixed(6)),
+            Number(Number(row.lon).toFixed(6)),
+          ]);
       }
     }
     return c.json({
@@ -1187,7 +1443,10 @@ router.get("/positions/replay", async (c) => {
       }),
     });
   } catch (error: any) {
-    return c.json({ error: "fleet_replay_failed", message: error.message }, 500);
+    return c.json(
+      { error: "fleet_replay_failed", message: error.message },
+      500,
+    );
   }
 });
 
@@ -1198,7 +1457,11 @@ router.get("/positions/coverage", async (c) => {
   const hours = Math.min(Math.max(Number(c.req.query("hours")) || 4, 1), 72);
   try {
     const visible = await visibleDeviceIds(c);
-    const rows = await db.radioCoverage(visible ? [...visible] : null, new Date(Date.now() - hours * 3600_000), COVERAGE_CELL_DEG);
+    const rows = await db.radioCoverage(
+      visible ? [...visible] : null,
+      new Date(Date.now() - hours * 3600_000),
+      COVERAGE_CELL_DEG,
+    );
     return c.json({
       hours,
       cellDeg: COVERAGE_CELL_DEG,
@@ -1211,7 +1474,10 @@ router.get("/positions/coverage", async (c) => {
       })),
     });
   } catch (error: any) {
-    return c.json({ error: "radio_coverage_failed", message: error.message }, 500);
+    return c.json(
+      { error: "radio_coverage_failed", message: error.message },
+      500,
+    );
   }
 });
 
@@ -1221,9 +1487,15 @@ const TRACK_MAX_MINUTES = 240;
 router.get("/locations/:uid/track", async (c) => {
   const uid = c.req.param("uid");
   if (!(await ensureDeviceAccess(c, [uid]))) {
-    return c.json({ error: "That device is outside your operational scope." }, 403);
+    return c.json(
+      { error: "That device is outside your operational scope." },
+      403,
+    );
   }
-  const minutes = Math.min(Math.max(Number(c.req.query("minutes")) || 30, 1), TRACK_MAX_MINUTES);
+  const minutes = Math.min(
+    Math.max(Number(c.req.query("minutes")) || 30, 1),
+    TRACK_MAX_MINUTES,
+  );
   try {
     const since = new Date(Date.now() - minutes * 60_000);
     const rows = await db.listRadioTrack(uid, since);
@@ -1246,16 +1518,31 @@ router.get("/locations/:uid/track", async (c) => {
 // tracked radios costs one request rather than one per tile.
 const TRACKS_MAX_RADIOS = 200;
 router.get("/locations/tracks", async (c) => {
-  const uids = [...new Set(String(c.req.query("uids") || "").split(",").map((uid) => uid.trim()).filter(Boolean))].slice(0, TRACKS_MAX_RADIOS);
+  const uids = [
+    ...new Set(
+      String(c.req.query("uids") || "")
+        .split(",")
+        .map((uid) => uid.trim())
+        .filter(Boolean),
+    ),
+  ].slice(0, TRACKS_MAX_RADIOS);
   if (!uids.length) return c.json({ minutes: 0, tracks: {} });
   if (!(await ensureDeviceAccess(c, uids))) {
-    return c.json({ error: "That device is outside your operational scope." }, 403);
+    return c.json(
+      { error: "That device is outside your operational scope." },
+      403,
+    );
   }
-  const minutes = Math.min(Math.max(Number(c.req.query("minutes")) || 30, 1), TRACK_MAX_MINUTES);
+  const minutes = Math.min(
+    Math.max(Number(c.req.query("minutes")) || 30, 1),
+    TRACK_MAX_MINUTES,
+  );
   try {
     const since = new Date(Date.now() - minutes * 60_000);
     const rows = await db.listRadioTracks(uids, since);
-    const tracks: Record<string, any[]> = Object.fromEntries(uids.map((uid) => [uid, []]));
+    const tracks: Record<string, any[]> = Object.fromEntries(
+      uids.map((uid) => [uid, []]),
+    );
     for (const row of rows) {
       tracks[String(row.device_id)]?.push({
         lat: Number(row.lat),
@@ -1266,15 +1553,22 @@ router.get("/locations/tracks", async (c) => {
     }
     return c.json({ minutes, tracks });
   } catch (error: any) {
-    return c.json({ error: "radio_tracks_failed", message: error.message }, 500);
+    return c.json(
+      { error: "radio_tracks_failed", message: error.message },
+      500,
+    );
   }
 });
 
 router.get("/history", async (c) => {
   const { uid, start, end } = c.req.query();
-  if (!uid || !start || !end) return c.json({ error: "uid, start, end required" }, 400);
+  if (!uid || !start || !end)
+    return c.json({ error: "uid, start, end required" }, 400);
   if (!(await ensureDeviceAccess(c, [uid]))) {
-    return c.json({ error: "That device is outside your operational scope." }, 403);
+    return c.json(
+      { error: "That device is outside your operational scope." },
+      403,
+    );
   }
   const startStamp = new Date(start.replace(" ", "T") + "Z").getTime();
   const endStamp = new Date(end.replace(" ", "T") + "Z").getTime();
@@ -1289,17 +1583,26 @@ router.get("/history", async (c) => {
         startDateTamp: startStamp,
         endDateTamp: endStamp,
       }),
-      { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 15000 },
+      {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        timeout: 15000,
+      },
     );
     return c.json(data);
   } catch (error: any) {
-    return c.json({ error: "pocstars_history_failed", message: error.message }, statusFromAxios(error));
+    return c.json(
+      { error: "pocstars_history_failed", message: error.message },
+      statusFromAxios(error),
+    );
   }
 });
 
 router.get("/sos", async (c) => {
   if (!isPlatformAdmin(c)) {
-    return c.json({ error: "The raw SOS feed is restricted to platform administrators." }, 403);
+    return c.json(
+      { error: "The raw SOS feed is restricted to platform administrators." },
+      403,
+    );
   }
   const query = c.req.query();
   const targetUid = query.targetUid || DEFAULT_TARGET_UID;
@@ -1316,7 +1619,10 @@ router.get("/sos", async (c) => {
     await persistAndBroadcast(rows);
     return c.json(data);
   } catch (error: any) {
-    return c.json({ error: "pocstars_sos_failed", message: error.message }, statusFromAxios(error));
+    return c.json(
+      { error: "pocstars_sos_failed", message: error.message },
+      statusFromAxios(error),
+    );
   }
 });
 
@@ -1332,7 +1638,10 @@ router.get("/sos/detail", async (c) => {
     });
     return c.json(data);
   } catch (error: any) {
-    return c.json({ error: "pocstars_sos_detail_failed", message: error.message }, statusFromAxios(error));
+    return c.json(
+      { error: "pocstars_sos_detail_failed", message: error.message },
+      statusFromAxios(error),
+    );
   }
 });
 
