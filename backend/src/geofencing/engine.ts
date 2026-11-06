@@ -4,6 +4,7 @@ import { fetchLastLocations } from "../pocstars/locations";
 import { assetKey, currentAssetPositions } from "./positions";
 import {
   classify,
+  ruleReachM,
   inBounds,
   loudestPerStep,
   ruleMembers,
@@ -35,7 +36,12 @@ type MemoryState = RuleState & { last_observed_ms: number };
 const INDEX_REFRESH_MS = 60_000;
 let rulesByAsset = new Map<string, IndexedRule[]>();
 let rulesById = new Map<number, IndexedRule>();
-let membership: Membership = { radioUnit: new Map(), droneUnit: new Map(), channelRadios: new Map(), unitChildren: new Map() };
+let membership: Membership = {
+  radioUnit: new Map(),
+  droneUnit: new Map(),
+  channelRadios: new Map(),
+  unitChildren: new Map(),
+};
 let assetNames = new Map<string, string>();
 let refreshing: Promise<void> | null = null;
 
@@ -47,17 +53,34 @@ let radioPolling = false;
 let started = false;
 
 async function buildIndex() {
-  const [rules, raw] = await Promise.all([store.loadActiveRules(), store.loadMembership()]);
+  const [rules, raw] = await Promise.all([
+    store.loadActiveRules(),
+    store.loadMembership(),
+  ]);
   const assetOrg = new Map<string, string>();
   const names = new Map<string, string>();
-  const next: Membership = { radioUnit: new Map(), droneUnit: new Map(), channelRadios: new Map(), unitChildren: new Map() };
+  const next: Membership = {
+    radioUnit: new Map(),
+    droneUnit: new Map(),
+    channelRadios: new Map(),
+    unitChildren: new Map(),
+  };
   for (const device of raw.devices) {
-    next.radioUnit.set(String(device.device_id), device.unit_id == null ? null : String(device.unit_id));
+    next.radioUnit.set(
+      String(device.device_id),
+      device.unit_id == null ? null : String(device.unit_id),
+    );
     assetOrg.set(`radio:${device.device_id}`, String(device.organization_id));
-    names.set(`radio:${device.device_id}`, device.name || `Radio ${device.device_id}`);
+    names.set(
+      `radio:${device.device_id}`,
+      device.name || `Radio ${device.device_id}`,
+    );
   }
   for (const drone of raw.drones) {
-    next.droneUnit.set(String(drone.sysid), drone.unit_id == null ? null : String(drone.unit_id));
+    next.droneUnit.set(
+      String(drone.sysid),
+      drone.unit_id == null ? null : String(drone.unit_id),
+    );
     assetOrg.set(`drone:${drone.sysid}`, String(drone.organization_id));
     names.set(`drone:${drone.sysid}`, drone.name || `Drone ${drone.sysid}`);
   }
@@ -76,7 +99,11 @@ async function buildIndex() {
   const byAsset = new Map<string, IndexedRule[]>();
   const byId = new Map<number, IndexedRule>();
   for (const rule of rules) {
-    const indexed = { ...rule, id: Number(rule.id), bounds: zoneBounds(rule, (Number(rule.buffer_m) || 0) + 5) };
+    const indexed = {
+      ...rule,
+      id: Number(rule.id),
+      bounds: zoneBounds(rule, ruleReachM(rule.trigger, rule.buffer_m)),
+    };
     byId.set(indexed.id, indexed);
     for (const key of ruleMembers(rule, next)) {
       // A rule only ever watches its own organization's assets.
@@ -95,7 +122,12 @@ async function buildIndex() {
 export function refreshIndex() {
   if (!refreshing) {
     refreshing = buildIndex()
-      .catch((error) => console.error("[Geofence] rule index refresh failed:", error?.message || error))
+      .catch((error) =>
+        console.error(
+          "[Geofence] rule index refresh failed:",
+          error?.message || error,
+        ),
+      )
       .finally(() => {
         refreshing = null;
       });
@@ -104,14 +136,26 @@ export function refreshIndex() {
 }
 
 /** Which side of a rule a position is on, with the exact distance only when it matters. */
-function judge(rule: IndexedRule, lat: number, lon: number): { side: Side; distanceM: number } {
+function judge(
+  rule: IndexedRule,
+  lat: number,
+  lon: number,
+): { side: Side; distanceM: number } {
   // Nowhere near the zone: clearly outside, which is a breach for "must stay
   // inside" and safe for "must not enter". Most fixes take this path.
   if (!inBounds(rule.bounds, lat, lon)) {
     if (rule.trigger === "enter") return { side: "safe", distanceM: 0 };
-    return classify("exit", rule.buffer_m, signedDistanceMetres(rule, lat, lon));
+    return classify(
+      "exit",
+      rule.buffer_m,
+      signedDistanceMetres(rule, lat, lon),
+    );
   }
-  return classify(rule.trigger, rule.buffer_m, signedDistanceMetres(rule, lat, lon));
+  return classify(
+    rule.trigger,
+    rule.buffer_m,
+    signedDistanceMetres(rule, lat, lon),
+  );
 }
 
 async function evaluatePosition(position: PositionUpdate) {
@@ -119,12 +163,24 @@ async function evaluatePosition(position: PositionUpdate) {
   const lon = Number(position.lon);
   const observedAt = new Date(position.observed_at);
   const observedMs = observedAt.getTime();
-  if (!Number.isFinite(lat) || !Number.isFinite(lon) || (lat === 0 && lon === 0) || Number.isNaN(observedMs)) return;
+  if (
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lon) ||
+    (lat === 0 && lon === 0) ||
+    Number.isNaN(observedMs)
+  )
+    return;
 
   const key = assetKey(position.asset_type, String(position.asset_id));
   const rules = rulesByAsset.get(key);
   if (!rules?.length) return;
-  const normalized = { ...position, asset_id: String(position.asset_id), lat, lon, observed_at: observedAt };
+  const normalized = {
+    ...position,
+    asset_id: String(position.asset_id),
+    lat,
+    lon,
+    observed_at: observedAt,
+  };
 
   // Stepped alarms on one zone (Yellow at the edge, Amber further out, Red
   // further still) are separate rules. A radio that crosses several steps in
@@ -137,7 +193,11 @@ async function evaluatePosition(position: PositionUpdate) {
     if (previous && observedMs <= previous.last_observed_ms) continue;
 
     const verdict = judge(rule, lat, lon);
-    const result = step(previous, verdict.side, rule.confirmations_required || env.GEOFENCE_CONFIRMATIONS);
+    const result = step(
+      previous,
+      verdict.side,
+      rule.confirmations_required || env.GEOFENCE_CONFIRMATIONS,
+    );
     states.set(sk, { ...result.state, last_observed_ms: observedMs });
 
     if (result.changed) {
@@ -161,7 +221,11 @@ async function evaluatePosition(position: PositionUpdate) {
   }
 
   for (const { rule, distanceM } of loudestPerStep(breaches)) {
-    const alert = await store.createRuleAlert(rule, normalized, Math.round(distanceM));
+    const alert = await store.createRuleAlert(
+      rule,
+      normalized,
+      Math.round(distanceM),
+    );
     if (!alert) continue;
     bus.emit("operational-alert:new", alert);
     // The quieter step this radio already alarmed on is now old news.
@@ -169,7 +233,6 @@ async function evaluatePosition(position: PositionUpdate) {
     escalated.forEach((lower) => bus.emit("operational-alert:updated", lower));
   }
 }
-
 
 /** Direct entry point for deterministic integration tests and trusted ingest. */
 export async function evaluatePositionNow(position: PositionUpdate) {
@@ -184,7 +247,12 @@ export function queuePosition(position: PositionUpdate) {
   const next = previous
     .catch(() => {})
     .then(() => evaluatePosition(position))
-    .catch((error) => console.error(`[Geofence] ${key} evaluation failed:`, error?.message || error))
+    .catch((error) =>
+      console.error(
+        `[Geofence] ${key} evaluation failed:`,
+        error?.message || error,
+      ),
+    )
     .finally(() => {
       if (queues.get(key) === next) queues.delete(key);
     });
@@ -195,7 +263,11 @@ export function queuePosition(position: PositionUpdate) {
 export function membersOf(rule: { target_type: string; target_id: string }) {
   return ruleMembers(rule, membership).map((key) => {
     const [asset_type, ...rest] = key.split(":");
-    return { asset_type, asset_id: rest.join(":"), name: assetNames.get(key) || key };
+    return {
+      asset_type,
+      asset_id: rest.join(":"),
+      name: assetNames.get(key) || key,
+    };
   });
 }
 
@@ -205,7 +277,8 @@ export function breachedCounts() {
   for (const [key, state] of states) {
     if (!state.in_breach) continue;
     const ruleId = Number(key.split("|")[0]);
-    if (rulesById.has(ruleId)) counts.set(ruleId, (counts.get(ruleId) || 0) + 1);
+    if (rulesById.has(ruleId))
+      counts.set(ruleId, (counts.get(ruleId) || 0) + 1);
   }
   return counts;
 }
@@ -221,7 +294,11 @@ export { judge as judgeRule };
  * does not ring the moment it is saved. It alarms normally the next time it
  * crosses. Without it, those assets alarm on their next fixes.
  */
-export async function rulesChanged(freshIds: number[], removedIds: number[], quiet: boolean) {
+export async function rulesChanged(
+  freshIds: number[],
+  removedIds: number[],
+  quiet: boolean,
+) {
   const dropped = new Set([...freshIds, ...removedIds].map(Number));
   for (const key of [...states.keys()]) {
     if (dropped.has(Number(key.split("|")[0]))) states.delete(key);
@@ -236,17 +313,24 @@ export async function rulesChanged(freshIds: number[], removedIds: number[], qui
     const members = membersOf(rule);
     const positions = await currentAssetPositions(members);
     for (const member of members) {
-      const position = positions.get(assetKey(member.asset_type, member.asset_id));
+      const position = positions.get(
+        assetKey(member.asset_type, member.asset_id),
+      );
       if (!position) continue;
       const verdict = judge(rule, position.lat, position.lon);
       if (verdict.side !== "violating") continue;
-      const observed = position.observed_at ? new Date(position.observed_at) : new Date();
+      const observed = position.observed_at
+        ? new Date(position.observed_at)
+        : new Date();
       const needed = Math.max(1, Number(rule.confirmations_required) || 1);
-      states.set(stateKey(rule.id, assetKey(member.asset_type, member.asset_id)), {
-        in_breach: true,
-        breach_count: needed,
-        last_observed_ms: observed.getTime(),
-      });
+      states.set(
+        stateKey(rule.id, assetKey(member.asset_type, member.asset_id)),
+        {
+          in_breach: true,
+          breach_count: needed,
+          last_observed_ms: observed.getTime(),
+        },
+      );
       await store.saveRuleState({
         rule_id: rule.id,
         asset_type: member.asset_type,
@@ -268,7 +352,9 @@ async function pollRadios() {
   if (radioPolling) return;
   radioPolling = true;
   try {
-    const uids = [...rulesByAsset.keys()].filter((key) => key.startsWith("radio:")).map((key) => key.slice(6));
+    const uids = [...rulesByAsset.keys()]
+      .filter((key) => key.startsWith("radio:"))
+      .map((key) => key.slice(6));
     if (!uids.length) return;
     const response = await fetchLastLocations(uids);
     const rows = Array.isArray(response?.data) ? response.data : [];
@@ -283,7 +369,10 @@ async function pollRadios() {
       });
     }
   } catch (error: any) {
-    console.warn("[Geofence] radio location poll failed:", error?.message || error);
+    console.warn(
+      "[Geofence] radio location poll failed:",
+      error?.message || error,
+    );
   } finally {
     radioPolling = false;
   }
@@ -291,11 +380,19 @@ async function pollRadios() {
 
 async function loadStates() {
   for (const row of await store.loadRuleStates()) {
-    states.set(stateKey(Number(row.rule_id), assetKey(row.asset_type, String(row.asset_id))), {
-      in_breach: Boolean(row.in_breach),
-      breach_count: Number(row.breach_count) || 0,
-      last_observed_ms: row.last_observed_at ? new Date(row.last_observed_at).getTime() : 0,
-    });
+    states.set(
+      stateKey(
+        Number(row.rule_id),
+        assetKey(row.asset_type, String(row.asset_id)),
+      ),
+      {
+        in_breach: Boolean(row.in_breach),
+        breach_count: Number(row.breach_count) || 0,
+        last_observed_ms: row.last_observed_at
+          ? new Date(row.last_observed_at).getTime()
+          : 0,
+      },
+    );
   }
 }
 
@@ -311,10 +408,14 @@ export async function startGeofenceMonitor() {
   // Drones, and radios via the shared recorder, arrive on the bus as they land.
   bus.on("position:update", queuePosition);
   if (env.RADIO_TRACK_ENABLE) {
-    console.log("[Geofence] monitoring enabled; radio fixes from the shared position recorder");
+    console.log(
+      "[Geofence] monitoring enabled; radio fixes from the shared position recorder",
+    );
     return;
   }
   void pollRadios();
   setInterval(() => void pollRadios(), env.GEOFENCE_RADIO_POLL_SEC * 1000);
-  console.log(`[Geofence] monitoring enabled; radio poll every ${env.GEOFENCE_RADIO_POLL_SEC}s`);
+  console.log(
+    `[Geofence] monitoring enabled; radio poll every ${env.GEOFENCE_RADIO_POLL_SEC}s`,
+  );
 }

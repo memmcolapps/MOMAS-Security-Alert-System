@@ -52,6 +52,7 @@ import {
   simplifyRing,
 } from "../lib/fence-placement";
 import { isPlatformOperator, isPlatformStaff } from "../lib/platform-roles";
+import { addZoneName, hideZoneNamesWhenFar, zoneColour } from "../lib/zone-colours";
 import { drawZoneSteps, zoneSteps } from "../lib/zone-steps";
 
 // A zone is only a place. Each rule on it says who it watches, whether leaving
@@ -79,9 +80,8 @@ function newRule(patch = {}) {
     key: `new-${ruleSeq}`,
     targets: [],
     trigger: "exit",
-    // The first step sits at the edge, held off it by the GPS drift allowance.
-    steps: [{ level: "amber", distance_m: 30 }],
-    confirmations_required: 3,
+    steps: [firstStep(patch.trigger || "exit")],
+    confirmations_required: 1,
     active: true,
     saved: {},
     ...patch,
@@ -89,27 +89,57 @@ function newRule(patch = {}) {
 }
 
 const LEVEL_RANK = { yellow: 0, amber: 1, red: 2 };
-const QUIET_FIRST = [...LEVELS].sort((a, b) => LEVEL_RANK[a] - LEVEL_RANK[b]);
 const MAX_STEP_M = 20_000;
 
-/** Steps must get louder as they go out; anything that no longer does is dropped. */
-function keepRising(steps) {
+// Steps are listed from the edge outwards. Going out, a keep-in zone's steps
+// get louder (a radio further away is more lost); a no-go zone's get quieter
+// (a radio further away is less of a worry), so Red sits at its edge.
+const outwardRank = (trigger, level) => (trigger === "enter" ? -LEVEL_RANK[level] : LEVEL_RANK[level]);
+const OUTWARD_LEVELS = {
+  exit: [...LEVELS].sort((a, b) => outwardRank("exit", a) - outwardRank("exit", b)),
+  enter: [...LEVELS].sort((a, b) => outwardRank("enter", a) - outwardRank("enter", b)),
+};
+const levelsOutward = (trigger) => OUTWARD_LEVELS[trigger] || OUTWARD_LEVELS.exit;
+
+/**
+ * The step at the edge. A keep-in zone's is held 30 m out, off GPS drift; a
+ * no-go zone's is the edge itself, since being inside is the alarm.
+ */
+function firstStep(trigger) {
+  return trigger === "enter" ? { level: "red", distance_m: 0 } : { level: "amber", distance_m: 30 };
+}
+
+/** Keeps only steps in the right order going out; anything that no longer is, is dropped. */
+function keepInOrder(steps, trigger) {
   const kept = [];
   for (const step of steps) {
     const previous = kept[kept.length - 1];
-    if (!previous || LEVEL_RANK[step.level] > LEVEL_RANK[previous.level]) kept.push(step);
+    if (!previous || outwardRank(trigger, step.level) > outwardRank(trigger, previous.level)) kept.push(step);
   }
   return kept;
 }
 
-/** The next, louder step and a sensible distance for it. */
-function nextStep(steps) {
+/** The next step out and a sensible distance for it. */
+function nextStep(steps, trigger) {
   const last = steps[steps.length - 1];
-  const level = QUIET_FIRST.find((item) => LEVEL_RANK[item] > LEVEL_RANK[last.level]);
+  const level = levelsOutward(trigger).find((item) => outwardRank(trigger, item) > outwardRank(trigger, last.level));
   if (!level) return null;
   // Measured from the zone's edge, so small steps: 100 m, then 250 m.
   const distance = Number(last.distance_m) < 100 ? 100 : Math.round((Number(last.distance_m) * 2.5) / 50) * 50;
   return { level, distance_m: Math.min(MAX_STEP_M, distance) };
+}
+
+/**
+ * Switching a card between "must stay inside" and "must not enter" keeps its
+ * distances and turns the levels round: Yellow, Amber, Red out from a keep-in
+ * edge becomes Red, Amber, Yellow out from a no-go edge.
+ */
+function stepsForTrigger(steps, from, to) {
+  if (from === to) return steps;
+  return steps.map((step, index) => ({
+    level: steps[steps.length - 1 - index].level,
+    distance_m: index === 0 && Number(step.distance_m) === firstStep(from).distance_m ? firstStep(to).distance_m : step.distance_m,
+  }));
 }
 
 const savedKey = (target, trigger, level) => `${target.target_type}:${target.target_id}:${trigger}:${level}`;
@@ -199,7 +229,10 @@ function cardsFromRules(rules) {
   }
   const cards = new Map();
   for (const entry of perTarget.values()) {
-    const steps = keepRising([...entry.steps].sort((a, b) => a.distance_m - b.distance_m || LEVEL_RANK[a.level] - LEVEL_RANK[b.level]));
+    const steps = keepInOrder(
+      [...entry.steps].sort((a, b) => a.distance_m - b.distance_m || outwardRank(entry.trigger, a.level) - outwardRank(entry.trigger, b.level)),
+      entry.trigger,
+    );
     const signature = [entry.trigger, ...entry.tuning, steps.map((step) => `${step.level}@${step.distance_m}`).join(",")].join("|");
     const card = cards.get(signature);
     if (card) {
@@ -363,6 +396,7 @@ function ZoneMap({
     layers.current.alarm = L.layerGroup().addTo(map);
     layers.current.members = L.layerGroup().addTo(map);
     mapRef.current = map;
+    hideZoneNamesWhenFar(map);
 
     // Circle: press where the centre goes and drag out the radius. A plain
     // click drops a circle sized to the view, for touch screens and trackpads.
@@ -506,7 +540,8 @@ function ZoneMap({
     };
   }, [basemap]);
 
-  // Every other zone, faint, so a new one is drawn knowing what is already there.
+  // Every zone in its own colour and with its name, so neighbours are told
+  // apart. A no-go zone keeps a dashed edge. While editing, the others go faint.
   useEffect(() => {
     const layer = layers.current.zones;
     if (!layer) return;
@@ -514,11 +549,12 @@ function ZoneMap({
     for (const other of zones) {
       if (editing && Number(other.id) === Number(zone.id)) continue;
       const look = TRIGGER_LOOK[zoneKind(other.rules)];
+      const colour = zoneColour(other);
       const style = {
-        color: look?.stroke || "#94a3b8",
-        weight: 1.5,
+        color: colour,
+        weight: 2,
         dashArray: look?.dash || null,
-        fillColor: look?.stroke || "#475569",
+        fillColor: colour,
         fillOpacity: editing ? 0.04 : 0.1,
         opacity: editing ? 0.6 : 1,
         interactive: !editing,
@@ -528,6 +564,7 @@ function ZoneMap({
           ? L.circle([Number(other.center_lat), Number(other.center_lon)], { ...style, radius: Number(other.radius_m) })
           : L.polygon((other.geometry?.coordinates?.[0] || []).map(([lon, lat]) => [lat, lon]), style);
       shape.bindTooltip(look ? `${other.name} · ${look.zone}` : other.name).addTo(layer);
+      if (!editing) addZoneName(layer, other, colour);
       // Browsing: each zone's alarm lines too. While editing they would
       // crowd the one being drawn, so other zones show their edge only.
       if (!editing) drawZoneSteps(layer, other, zoneSteps(other.rules), { name: other.name });
@@ -874,6 +911,7 @@ const SIZES = [
   { label: "Neighbourhood", across: 1000 },
   { label: "Town", across: 5000 },
 ].map((size) => ({ ...size, radius: size.across / 2 }));
+const MAX_RADIUS_M = 50_000;
 const DEFAULT_RADIUS = SIZES[1].radius;
 
 /** A place with no outline gets a circle about as wide as its kind suggests. */
@@ -1225,8 +1263,9 @@ function verdictText(rule, verdict) {
   if (!rule.targets.length || !verdict) return null;
   const { summary, members } = verdict;
   if (!summary.total) return { tone: "text-neutral-500", text: "No radios in that group yet." };
-  const okWord = rule.trigger === "exit" ? "inside" : "outside";
-  const breachWord = rule.trigger === "exit" ? "outside" : "inside";
+  // A no-go zone's steps sit outside it, so a breach may be "too close", not yet in.
+  const okWord = rule.trigger === "exit" ? "inside" : "clear";
+  const breachWord = rule.trigger === "exit" ? "outside" : "too close";
   const breached = members.filter((member) => member.state === "breach");
   const parts = summary.ok || !breached.length ? [`${summary.ok} of ${summary.total} ${okWord}`] : [];
   if (breached.length) {
@@ -1241,18 +1280,19 @@ function verdictText(rule, verdict) {
 
 /**
  * The alarm as steps out from the edge. Pick how loud it is at the edge, then
- * optionally a louder one further out, and the loudest further still.
+ * optionally more steps further out: louder for a keep-in zone, quieter early
+ * warnings for a no-go zone.
  */
 function AlarmSteps({ rule, onChange }) {
-  const away = rule.trigger === "exit" ? "out" : "inside";
-  const setSteps = (steps) => onChange({ steps: keepRising(steps) });
+  const order = levelsOutward(rule.trigger);
+  const setSteps = (steps) => onChange({ steps: keepInOrder(steps, rule.trigger) });
   const update = (index, patch) => setSteps(rule.steps.map((step, i) => (i === index ? { ...step, ...patch } : step)));
-  const next = nextStep(rule.steps);
+  const next = nextStep(rule.steps, rule.trigger);
   return (
     <div className="mt-2 space-y-1.5">
       {rule.steps.map((step, index) => {
         const previous = rule.steps[index - 1];
-        const choices = previous ? QUIET_FIRST.filter((level) => LEVEL_RANK[level] > LEVEL_RANK[previous.level]) : QUIET_FIRST;
+        const choices = previous ? order.filter((level) => outwardRank(rule.trigger, level) > outwardRank(rule.trigger, previous.level)) : order;
         return (
           <div className="rounded-md border border-white/10 bg-black/20 p-1.5" key={index}>
             <div className="flex items-center gap-1">
@@ -1284,23 +1324,17 @@ function AlarmSteps({ rule, onChange }) {
               ) : null}
             </div>
             <div className="mt-1.5 flex items-center gap-1.5 px-0.5 text-[10px] text-neutral-400">
-              {index ? (
-                <>
-                  <span>at</span>
-                  <input
-                    aria-label={`Distance for ${LEVEL_STYLES[step.level].label}`}
-                    className="field-input w-20 py-1 text-[10px]"
-                    max={MAX_STEP_M}
-                    min="1"
-                    onChange={(event) => update(index, { distance_m: event.target.value })}
-                    type="number"
-                    value={step.distance_m}
-                  />
-                  <span>m {away === "out" ? "past the edge" : "inside the edge"}</span>
-                </>
-              ) : (
-                <span>At the edge</span>
-              )}
+              <span>at</span>
+              <input
+                aria-label={`Distance for ${LEVEL_STYLES[step.level].label}`}
+                className="field-input w-20 py-1 text-[10px]"
+                max={MAX_STEP_M}
+                min={index ? "1" : "0"}
+                onChange={(event) => update(index, { distance_m: event.target.value })}
+                type="number"
+                value={step.distance_m}
+              />
+              <span>m outside the edge</span>
               <span className="ml-auto text-[9px] text-neutral-600">{LEVEL_MEANING[step.level]}</span>
             </div>
           </div>
@@ -1312,7 +1346,7 @@ function AlarmSteps({ rule, onChange }) {
           onClick={() => setSteps([...rule.steps, next])}
           type="button"
         >
-          <Plus size={11} /> Then {LEVEL_STYLES[next.level].label} further {away === "out" ? "out" : "in"}
+          <Plus size={11} /> {rule.trigger === "enter" ? "Warn earlier:" : "Then"} {LEVEL_STYLES[next.level].label} further out
         </button>
       ) : null}
     </div>
@@ -1347,7 +1381,7 @@ function RuleCard({ rule, targets, index, verdict, focused, onFocus, onChange, o
           <button
             className={`rounded px-2 py-1.5 text-[10px] font-bold transition-colors ${rule.trigger === trigger ? "bg-white/[0.12] text-neutral-100 shadow-sm" : "text-neutral-500 hover:text-neutral-300"}`}
             key={trigger}
-            onClick={() => onChange({ trigger })}
+            onClick={() => onChange({ trigger, steps: stepsForTrigger(rule.steps, rule.trigger, trigger) })}
             type="button"
           >
             {trigger === "exit" ? "Must stay inside" : "Must not enter"}
@@ -1369,18 +1403,8 @@ function RuleCard({ rule, targets, index, verdict, focused, onFocus, onChange, o
       </button>
       {advanced ? (
         <div className="mt-2 space-y-2 rounded-md border border-white/10 bg-black/20 p-2">
-          <div className="grid grid-cols-2 gap-2">
-            <label className="text-[9px] text-neutral-500">
-              GPS drift allowed (m)
-              <input
-                className="field-input mt-1"
-                min="0"
-                onChange={(event) => onChange({ steps: rule.steps.map((step, i) => (i === 0 ? { ...step, distance_m: event.target.value } : step)) })}
-                type="number"
-                value={rule.steps[0].distance_m}
-              />
-            </label>
-            <label className="text-[9px] text-neutral-500">
+          <div>
+            <label className="block w-1/2 text-[9px] text-neutral-500">
               Readings before alarm
               <input
                 className="field-input mt-1"
@@ -1393,8 +1417,9 @@ function RuleCard({ rule, targets, index, verdict, focused, onFocus, onChange, o
             </label>
           </div>
           <p className="text-[9px] leading-relaxed text-neutral-600">
-            Each step alarms after {rule.confirmations_required} readings in a row past its line, about{" "}
-            {Number(rule.confirmations_required) * 5} seconds for a radio.
+            {Number(rule.confirmations_required) > 1
+              ? `Each step alarms after ${rule.confirmations_required} readings in a row past its line, about ${Number(rule.confirmations_required) * 5} seconds for a radio.`
+              : "Each step alarms on the first reading past its line. Raise this if GPS jitter sets off false alarms."}
           </p>
           <label className="flex items-center gap-2 text-[10px] text-neutral-400">
             <input checked={rule.active} onChange={(event) => onChange({ active: event.target.checked })} type="checkbox" />
@@ -1571,8 +1596,8 @@ export function GeofencesRoute() {
     const verdict = focusRule ? verdictByKey.get(focusRule.key) : null;
     if (verdict && placed) {
       for (const member of verdict.members) {
-        const breachWord = focusRule.trigger === "exit" ? "outside" : "inside";
-        const okWord = focusRule.trigger === "exit" ? "inside" : "outside";
+        const breachWord = focusRule.trigger === "exit" ? "outside" : "too close";
+        const okWord = focusRule.trigger === "exit" ? "inside" : "clear";
         map.set(`${member.asset_type}:${member.asset_id}`, {
           ...member,
           label:
@@ -1827,7 +1852,7 @@ export function GeofencesRoute() {
     if (crossed) return setError("The shape crosses over itself. Drag a corner to untangle it.");
     if (rules.length > 1 && rules.some((rule) => !rule.targets.length)) return setError("A rule has no radios. Choose some, or remove it.");
     const outOfOrder = rules.some((rule) => rule.steps.some((step, i) => i && !(Number(step.distance_m) > Number(rule.steps[i - 1].distance_m))));
-    if (outOfOrder) return setError("Each louder step has to be further from the edge than the one before.");
+    if (outOfOrder) return setError("Each step has to be further from the edge than the one before.");
     if (rules.some((rule) => rule.steps.some((step) => Number(step.distance_m) > MAX_STEP_M))) return setError(`Steps can be at most ${formatDistance(MAX_STEP_M)} from the edge.`);
     if (!orgId) return setError("Choose an organization.");
     saveMutation.mutate({
@@ -1958,13 +1983,25 @@ export function GeofencesRoute() {
                                 }}
                                 type="button"
                               >
-                                {size.label} <span className="font-normal opacity-70">{formatDistance(size.across)}</span>
+                                {size.label} <span className="font-normal opacity-70">{formatDistance(size.radius)}</span>
                               </button>
                             ))}
                           </div>
-                          <p className="mt-2 text-[10px] text-neutral-500">
-                            {formatDistance(Number(zone.radius_m) * 2)} across. Drag the white dot to move it, the red dot for any other size.
-                          </p>
+                          {/* Same as an alarm step: type the metres, and the words say what they are measured from. */}
+                          <div className="mt-2 flex items-center gap-1.5 text-[10px] text-neutral-400">
+                            <span>Radius</span>
+                            <input
+                              aria-label="Radius in metres"
+                              className="field-input w-24 py-1 text-[10px]"
+                              max={MAX_RADIUS_M}
+                              min="1"
+                              onChange={(event) => updateZone({ radius_m: event.target.value === "" ? "" : Math.min(MAX_RADIUS_M, Math.max(0, Number(event.target.value))) })}
+                              type="number"
+                              value={zone.radius_m === "" ? "" : Math.round(Number(zone.radius_m))}
+                            />
+                            <span>m from the centre</span>
+                          </div>
+                          <p className="mt-1.5 text-[10px] text-neutral-500">Or drag the red dot on the map. Drag the white dot to move it.</p>
                         </>
                       ) : (
                         <>
@@ -2189,7 +2226,7 @@ function zoneSummary(zone, ready, where, radios) {
     );
   }
   const inside = radios.filter((radio) => insideZone(radio, zone)).length;
-  const size = `about ${formatDistance(across)} across`;
+  const size = zone.shape_type === "circle" ? `${formatDistance(Number(zone.radius_m))} radius` : `about ${formatDistance(across)} across`;
   const first = where ? `Covers ${where}, ${size}.` : `${size[0].toUpperCase()}${size.slice(1)}.`;
   const count = inside ? `${inside} radio${inside === 1 ? "" : "s"} inside now.` : "No radios inside now.";
   return `${first} ${count}`;
@@ -2210,11 +2247,13 @@ function ZoneCard({ zone, index, canManage, onFocus, onEdit, onDelete }) {
   const kinds = [...new Set(cards.map((card) => card.trigger))].filter((trigger) => TRIGGER_LOOK[trigger]);
   return (
     <article
-      className={`group rounded-lg border border-white/10 bg-white/[0.02] p-3 transition-colors hover:border-white/20 ${kind ? `border-l-2 ${TRIGGER_LOOK[kind].accent}` : ""}`}
+      className="group rounded-lg border border-l-2 border-white/10 bg-white/[0.02] p-3 transition-colors hover:border-white/20"
+      style={{ borderLeftColor: zoneColour(zone) }}
     >
       <div className="flex items-start gap-2">
         <button className="min-w-0 flex-1 text-left" onClick={onFocus} title="Show on map" type="button">
           <span className="flex items-center gap-2">
+            <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: zoneColour(zone) }} />
             <span className="truncate text-[12px] font-bold text-neutral-100">{zone.name}</span>
             {breached ? (
               <span className="shrink-0 rounded-full bg-red-500/15 px-1.5 py-0.5 text-[9px] font-bold text-red-300">

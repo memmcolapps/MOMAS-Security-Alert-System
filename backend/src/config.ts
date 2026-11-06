@@ -59,7 +59,7 @@ const envSchema = z.object({
   GEOFENCE_ENABLE: boolFromEnv(true),
   GEOFENCE_RADIO_POLL_SEC: intFromEnv(5),
   GEOFENCE_DEFAULT_BUFFER_M: intFromEnv(30),
-  GEOFENCE_CONFIRMATIONS: intFromEnv(3),
+  GEOFENCE_CONFIRMATIONS: intFromEnv(1),
   // One shared poll of every active radio's position. It feeds the map (so
   // open tabs no longer each ask the vendor) and stores each new fix for the
   // trail behind a tracked radio.

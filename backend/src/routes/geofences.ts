@@ -26,6 +26,7 @@ import {
   TARGET_TYPES,
   TRIGGERS,
   unitAndDescendants,
+  ruleReachM,
   zoneBounds,
 } from "../geofencing/rules";
 import { placeBorder, suggestPlaces } from "../geofencing/borders";
@@ -219,7 +220,7 @@ async function describe(zone: any, rules: any[]) {
     const draft = {
       ...zone,
       ...rule,
-      bounds: zoneBounds(zone, (Number(rule.buffer_m) || 0) + 5),
+      bounds: zoneBounds(zone, ruleReachM(rule.trigger, rule.buffer_m)),
     };
     const members = membersByRule[index].map((member) => {
       const position = positions.get(

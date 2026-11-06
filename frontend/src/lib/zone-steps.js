@@ -1,7 +1,7 @@
 // A zone's alarm steps drawn on a map: one dashed line per level, in that
-// level's colour, where it fires. Outside the shape for "must stay inside",
-// inside it for "must not enter". Shared by the Geofences map and the main map
-// so both show the same lines.
+// level's colour, where it fires. Every line sits outside the shape: how far a
+// keep-in radio may stray, or a warning ring round a no-go zone. Shared by the
+// Geofences map and the main map so both show the same lines.
 
 import L from "leaflet";
 import { LEVEL_STYLES, LEVELS } from "./alarm-levels";
@@ -15,8 +15,8 @@ export function zoneSteps(rules = []) {
   const steps = new Map();
   for (const rule of rules) {
     if (rule.active === false || !LEVEL_STYLES[rule.level]) continue;
-    const distance = Number(rule.buffer_m) || 0;
-    if (!(distance > 0)) continue;
+    // 0 m is a step on the edge itself; it is drawn over the edge.
+    const distance = Math.max(0, Number(rule.buffer_m) || 0);
     const key = `${rule.trigger}|${rule.level}|${distance}`;
     if (!steps.has(key)) steps.set(key, { trigger: rule.trigger, level: rule.level, distance_m: distance });
   }
@@ -26,17 +26,19 @@ export function zoneSteps(rules = []) {
 
 // Offset lines take real work on a long border, so each is worked out once.
 const offsetCache = new Map();
-function cachedOffset(points, distance, inward) {
-  const key = `${inward ? "in" : "out"}|${distance}|${points.join(";")}`;
+function cachedOffset(points, distance) {
+  const key = `${distance}|${points.join(";")}`;
   if (offsetCache.has(key)) return offsetCache.get(key);
-  const rings = offsetRings(points, distance, inward);
+  const rings = offsetRings(points, distance);
   if (offsetCache.size > 200) offsetCache.delete(offsetCache.keys().next().value);
   offsetCache.set(key, rings);
   return rings;
 }
 
+const distanceWords = (step) => (step.distance_m > 0 ? formatDistance(step.distance_m) : "at edge");
+
 const chip = (step) =>
-  `<span style="position:absolute;transform:translate(-50%,-115%);white-space:nowrap;padding:1px 6px;border-radius:9999px;background:rgba(0,0,0,.75);color:${LEVEL_STYLES[step.level].dot};font:700 10px system-ui;box-shadow:0 1px 3px rgba(0,0,0,.5)">${LEVEL_STYLES[step.level].label} · ${formatDistance(step.distance_m)}</span>`;
+  `<span style="position:absolute;transform:translate(-50%,-115%);white-space:nowrap;padding:1px 6px;border-radius:9999px;background:rgba(0,0,0,.75);color:${LEVEL_STYLES[step.level].dot};font:700 10px system-ui;box-shadow:0 1px 3px rgba(0,0,0,.5)">${LEVEL_STYLES[step.level].label} · ${distanceWords(step)}</span>`;
 
 /**
  * Adds a zone's step lines to `layer`.
@@ -49,25 +51,24 @@ export function drawZoneSteps(layer, zone, steps, { labels = false, name = "", o
   const points = zone.points || zone.geometry?.coordinates?.[0];
   for (const step of steps) {
     const style = { color: LEVEL_STYLES[step.level].dot, weight: 2, opacity, dashArray: "6 6", fill: false, interactive: !labels };
-    const inward = step.trigger === "enter";
     let line = null;
     let top = null;
     if (zone.shape_type === "circle") {
       const lat = Number(zone.center_lat);
       const lon = Number(zone.center_lon);
-      const radius = Number(zone.radius_m) + (inward ? -step.distance_m : step.distance_m);
+      const radius = Number(zone.radius_m) + step.distance_m;
       if (!Number.isFinite(lat) || !Number.isFinite(lon) || !(radius > 0)) continue;
       line = L.circle([lat, lon], { ...style, radius });
       top = [lat + radius / 111_320, lon];
     } else {
       if (!Array.isArray(points) || points.length < 3) continue;
-      const rings = cachedOffset(points, step.distance_m, inward);
+      const rings = step.distance_m > 0 ? cachedOffset(points, step.distance_m) : [points];
       if (!rings) continue;
       line = L.polygon(rings.map((ring) => ring.map(([lon, lat]) => [lat, lon])), style);
       const peak = rings[0].reduce((best, point) => (point[1] > best[1] ? point : best), rings[0][0]);
       top = [peak[1], peak[0]];
     }
-    const words = `${LEVEL_STYLES[step.level].label} · ${formatDistance(step.distance_m)} ${inward ? "inside" : "outside"}`;
+    const words = `${LEVEL_STYLES[step.level].label} · ${step.distance_m > 0 ? `${formatDistance(step.distance_m)} outside` : "at the edge"}`;
     if (labels) {
       L.marker(top, { interactive: false, keyboard: false, icon: L.divIcon({ className: "", iconSize: [0, 0], html: chip(step) }) }).addTo(layer);
     } else {

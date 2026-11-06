@@ -1,5 +1,6 @@
 import L from "leaflet";
-import { LEVELS, LEVEL_STYLES, levelOf } from "../lib/alarm-levels";
+import { LEVELS, LEVEL_STYLES, geofenceDistance, geofenceTitle, levelOf } from "../lib/alarm-levels";
+import { addZoneName, hideZoneNamesWhenFar, zoneColour } from "../lib/zone-colours";
 import "leaflet.heat";
 import "leaflet.markercluster";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -71,7 +72,7 @@ export function sosPopup(alert) {
   const radioId = !isGeofence || alert.asset_type === "radio" ? alert.device_id : null;
   return `
     <div>
-      <div style="font-size:13px;font-weight:700;color:${isGeofence ? LEVEL_STYLES[levelOf(alert)].dot : "#ff4444"};margin-bottom:5px">${isGeofence ? (alert.trigger === "enter" ? "Entered zone" : "Left zone") : "SOS Alarm"}</div>
+      <div style="font-size:13px;font-weight:700;color:${isGeofence ? LEVEL_STYLES[levelOf(alert)].dot : "#ff4444"};margin-bottom:5px">${isGeofence ? geofenceTitle(alert) : "SOS Alarm"}</div>
       <div style="font-size:11px;color:#ccc"><strong>Device:</strong> ${escapeHtml(alert.asset_name || alert.dev_name || alert.device_name || `Device ${alert.device_id}`)}</div>
       <div style="font-size:11px;color:#ccc"><strong>UID:</strong> ${escapeHtml(alert.device_id || "—")}</div>
       ${isGeofence ? `<div style="font-size:11px;color:#ccc"><strong>Zone:</strong> ${escapeHtml(alert.geofence_name || "—")}</div>` : ""}
@@ -81,7 +82,7 @@ export function sosPopup(alert) {
           ? `${Number(alert.map_lat).toFixed(5)}, ${Number(alert.map_lon).toFixed(5)}`
           : "Unknown"
       }</div>
-      <div style="font-size:10px;color:#888">${isGeofence ? `${Math.round(Number(alert.distance_outside_m) || 0)} m ${alert.trigger === "enter" ? "inside" : "outside"}` : alert.map_location_source === "device" ? "Radio's live position" : "Where the SOS was raised"}</div>
+      <div style="font-size:10px;color:#888">${isGeofence ? geofenceDistance(alert) : alert.map_location_source === "device" ? "Radio's live position" : "Where the SOS was raised"}</div>
       ${
         !isGeofence && alert.map_location_source === "device" && Number.isFinite(Number(alert.origin_lat))
           ? `<div style="font-size:10px;color:#888">Pressed at ${Number(alert.origin_lat).toFixed(5)}, ${Number(alert.origin_lon).toFixed(5)} · ${Math.round(distanceMetres({ lat: Number(alert.origin_lat), lon: Number(alert.origin_lon) }, { lat: Number(alert.map_lat), lon: Number(alert.map_lon) }))} m away now</div>`
@@ -378,6 +379,7 @@ export function OperationsMap({
       followLayer,
     };
     mapRef.current = map;
+    hideZoneNamesWhenFar(map);
 
     // Grabbing the map means the operator wants to look somewhere else; the
     // camera stops chasing the tracked radio until they ask it to.
@@ -488,12 +490,14 @@ export function OperationsMap({
     if (!geofenceLayer) return;
     geofenceLayer.clearLayers();
     for (const fence of geofences) {
-      // A zone is live while any of its rules is; it takes the colour of the
-      // loudest one, so a red zone reads as red on the map too.
-      const level = LEVELS.find((l) => fence.rules?.some((rule) => rule.active && rule.level === l));
-      if (!level) continue;
-      const colour = LEVEL_STYLES[level].dot;
-      const style = { color: colour, weight: 2, fillColor: colour, fillOpacity: 0.08, dashArray: "6 5" };
+      // A zone shows while any of its rules is on. Its edge is its own colour,
+      // the same as on the Geofences page, so neighbouring zones are told
+      // apart; the alarm levels are the dashed step lines round it. A no-go
+      // zone's edge is dashed.
+      if (!fence.rules?.some((rule) => rule.active !== false)) continue;
+      const colour = zoneColour(fence);
+      const noGo = fence.rules.every((rule) => rule.trigger === "enter");
+      const style = { color: colour, weight: 2, fillColor: colour, fillOpacity: 0.08, dashArray: noGo ? "6 5" : null };
       let layer = null;
       if (fence.shape_type === "circle") {
         const lat = Number(fence.center_lat);
@@ -507,10 +511,11 @@ export function OperationsMap({
         if (Array.isArray(ring)) layer = L.polygon(ring.map(([lon, lat]) => [lat, lon]), style);
       }
       layer?.bindTooltip(escapeHtml(fence.name || "Geofence")).addTo(geofenceLayer);
+      if (layer) addZoneName(geofenceLayer, fence, colour);
     }
     // Each zone's alarm steps, one dashed line per level. The shape maths is
     // loaded only when there is a zone to draw, so the map itself opens fast.
-    const zones = geofences.filter((fence) => fence.rules?.some((rule) => rule.active !== false && Number(rule.buffer_m) > 0));
+    const zones = geofences.filter((fence) => fence.rules?.some((rule) => rule.active !== false));
     if (!zones.length) return undefined;
     let cancelled = false;
     import("../lib/zone-steps").then(({ drawZoneSteps, zoneSteps }) => {

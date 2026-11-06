@@ -668,3 +668,19 @@ textarea {
 .rp-quiet .rp-label {
   display: none;
 }
+
+/* Zone names on the maps: a small pill in the zone's own colour. */
+.zone-name {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  background: rgba(0, 0, 0, 0.72);
+  font: 700 11px system-ui, sans-serif;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+.zone-names-hidden .zone-name {
+  display: none;
+}

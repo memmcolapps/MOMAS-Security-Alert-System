@@ -33,7 +33,7 @@ import {
   resolveAlarm,
   startAlarmResponse,
 } from "../lib/api";
-import { isGeofenceAlarm, LEVEL_STYLES, levelOf } from "../lib/alarm-levels";
+import { geofenceDistance, geofenceTitle, isGeofenceAlarm, LEVEL_STYLES, levelOf } from "../lib/alarm-levels";
 import { isPlatformStaff } from "../lib/platform-roles";
 
 const FILTERS = [
@@ -775,7 +775,7 @@ export function AlarmsRoute() {
               {selected.source === "geofence" ? (
                 <Detail
                   label="Level"
-                  value={`${LEVEL_STYLES[levelOf(selected)].label} · ${selected.trigger === "enter" ? "entered" : "left"} · ${Math.round(Number(selected.distance_outside_m) || 0)} m past the edge`}
+                  value={`${LEVEL_STYLES[levelOf(selected)].label} · ${geofenceTitle(selected).toLowerCase()} · ${geofenceDistance(selected)}`}
                 />
               ) : null}
               <Detail label="Organization" value={selected.organization_name || "Unassigned"} />
@@ -1037,7 +1037,7 @@ function KindTag({ alert, size = 12 }) {
     return (
       <span className={`flex items-center gap-1.5 text-[10px] font-bold ${level.text}`} title={`${level.label} alarm`}>
         <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: level.dot }} />
-        <Icon size={size} /> {alert.trigger === "enter" ? "Entered zone" : "Left zone"}
+        <Icon size={size} /> {geofenceTitle(alert)}
       </span>
     );
   }

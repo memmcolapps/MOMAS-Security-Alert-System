@@ -141,91 +141,103 @@ export function stopSiren() {
   source = null;
 }
 
-// Amber: a soft two-note chime, then quiet, round again until someone answers.
-// Rendered and looped like the siren, so a background tab keeps its pace.
-const CHIME_CYCLE_SECONDS = 6;
+// The three levels are all alarms, of falling urgency:
+//   red    — the siren above, without a break, until answered.
+//   amber  — a fire-alarm style triple beep, round again every 1.5 s, until answered.
+//   yellow — a two-tone warning burst (hi-lo, twice), round again every 4 s, until answered.
+// Both are rendered like the siren, so a background tab keeps the pace.
 
-let chimeBuffer = null;
-let chimeRendering = null;
-let chimeSource = null;
-let chimeWanted = false;
-
-function addBell(offline, hz, start, level, length = 0.9) {
-  const osc = offline.createOscillator();
-  const gain = offline.createGain();
-  osc.type = "sine";
-  osc.frequency.value = hz;
-  gain.gain.setValueAtTime(0, start);
-  gain.gain.linearRampToValueAtTime(level, start + 0.02);
-  gain.gain.exponentialRampToValueAtTime(0.001, start + length);
-  osc.connect(gain);
-  gain.connect(offline.destination);
-  osc.start(start);
-  osc.stop(start + length + 0.05);
+/** A beep at one pitch: two slightly detuned square waves, for the same rasp as the siren. */
+function addBeep(offline, hz, start, length, level) {
+  addVoice(offline, "square", start, start + length, hz, hz, level);
+  addVoice(offline, "square", start, start + length, hz * 1.006, hz * 1.006, level * 0.5);
 }
 
-async function renderChime(sampleRate) {
+function renderPattern(sampleRate, seconds, draw) {
   const OfflineContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-  const offline = new OfflineContext(1, Math.ceil(CHIME_CYCLE_SECONDS * sampleRate), sampleRate);
-  addBell(offline, 880, 0, 0.45);
-  addBell(offline, 660, 0.25, 0.45);
+  const offline = new OfflineContext(1, Math.ceil(seconds * sampleRate), sampleRate);
+  draw(offline);
   return offline.startRendering();
 }
 
-function loadChime() {
-  if (chimeBuffer) return Promise.resolve(chimeBuffer);
-  if (!chimeRendering) {
-    chimeRendering = renderChime(ctx.sampleRate)
-      .then((rendered) => {
-        chimeBuffer = rendered;
-        return rendered;
-      })
-      .finally(() => {
-        chimeRendering = null;
-      });
+const AMBER_CYCLE_SECONDS = 1.5;
+const renderAmber = (sampleRate) =>
+  renderPattern(sampleRate, AMBER_CYCLE_SECONDS, (offline) => {
+    for (let i = 0; i < 3; i += 1) addBeep(offline, 1050, i * 0.24, 0.16, 0.2);
+  });
+
+// The burst takes 1.4 s; the rest of the cycle is quiet, so it is the least pressing of the three.
+const YELLOW_SECONDS = 4;
+const renderYellow = (sampleRate) =>
+  renderPattern(sampleRate, YELLOW_SECONDS, (offline) => {
+    [880, 660, 880, 660].forEach((hz, i) => addBeep(offline, hz, i * 0.36, 0.32, 0.16));
+  });
+
+const rendered = new Map();
+function loadPattern(name, render) {
+  if (!rendered.has(name)) {
+    const promise = render(ctx.sampleRate);
+    // A failed render is tried again next time instead of being remembered.
+    promise.catch(() => rendered.delete(name));
+    rendered.set(name, promise);
   }
-  return chimeRendering;
+  return rendered.get(name);
 }
 
-/** Amber: the chime repeats every few seconds until stopped. Same first-click arming as the siren. */
-export async function startChime() {
-  chimeWanted = true;
-  if (chimeSource || !ensureContext()) return;
+let amberSource = null;
+let amberWanted = false;
+
+/** Amber: the triple beep repeats until stopped. Same first-click arming as the siren. */
+export async function startAmberAlarm() {
+  amberWanted = true;
+  if (amberSource || !ensureContext()) return;
   void ctx.resume().catch(() => {});
-  const cycle = await loadChime().catch(() => null);
-  if (!cycle || !chimeWanted || chimeSource) return;
-  chimeSource = ctx.createBufferSource();
-  chimeSource.buffer = cycle;
-  chimeSource.loop = true;
-  chimeSource.connect(output);
-  chimeSource.start();
+  const cycle = await loadPattern("amber", renderAmber).catch(() => null);
+  if (!cycle || !amberWanted || amberSource) return;
+  amberSource = ctx.createBufferSource();
+  amberSource.buffer = cycle;
+  amberSource.loop = true;
+  amberSource.connect(output);
+  amberSource.start();
 }
 
-export function stopChime() {
-  chimeWanted = false;
-  if (!chimeSource) return;
+export function stopAmberAlarm() {
+  amberWanted = false;
+  if (!amberSource) return;
   try {
-    chimeSource.stop();
+    amberSource.stop();
   } catch {
     // Already stopped.
   }
-  chimeSource.disconnect();
-  chimeSource = null;
+  amberSource.disconnect();
+  amberSource = null;
 }
 
-/** Yellow: one soft, low tone when it arrives, so it is heard without alarming anyone. */
-export function playSoftTone() {
-  if (!ensureContext() || ctx.state !== "running") return;
-  const now = ctx.currentTime;
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.type = "sine";
-  osc.frequency.value = 523;
-  gain.gain.setValueAtTime(0, now);
-  gain.gain.linearRampToValueAtTime(0.25, now + 0.03);
-  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.7);
-  osc.connect(gain);
-  gain.connect(output);
-  osc.start(now);
-  osc.stop(now + 0.75);
+let yellowSource = null;
+let yellowWanted = false;
+
+/** Yellow: the hi-lo burst, round again every few seconds until stopped. */
+export async function startYellowAlarm() {
+  yellowWanted = true;
+  if (yellowSource || !ensureContext()) return;
+  void ctx.resume().catch(() => {});
+  const cycle = await loadPattern("yellow", renderYellow).catch(() => null);
+  if (!cycle || !yellowWanted || yellowSource) return;
+  yellowSource = ctx.createBufferSource();
+  yellowSource.buffer = cycle;
+  yellowSource.loop = true;
+  yellowSource.connect(output);
+  yellowSource.start();
+}
+
+export function stopYellowAlarm() {
+  yellowWanted = false;
+  if (!yellowSource) return;
+  try {
+    yellowSource.stop();
+  } catch {
+    // Already stopped.
+  }
+  yellowSource.disconnect();
+  yellowSource = null;
 }

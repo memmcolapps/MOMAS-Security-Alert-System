@@ -7,14 +7,18 @@
  *   exit  — "must stay inside": alarms once the asset is clearly outside.
  *   enter — "must not enter":   alarms once the asset is clearly inside.
  *
- * "Clearly" is the drift allowance (buffer_m). For an exit rule the alarm line
- * sits buffer_m outside the drawn shape; for an enter rule it sits buffer_m
- * inside it. Either way GPS jitter along the boundary cannot fire it.
+ * Both kinds of alarm line sit buffer_m OUTSIDE the drawn shape.
  *
- * Clearing is deliberately harder than firing: a breached asset only counts as
- * back once it is on the safe side of the drawn shape itself. Between the
- * shape and the alarm line nothing changes, so a radio parked on the line does
- * not flap between "breached" and "returned" on every fix.
+ *   exit  — the line is how far out a radio may stray. Steps further out are
+ *           louder (Yellow at the edge, Amber further out, Red further still).
+ *   enter — the line is a warning ring round a no-go zone. Steps nearer the
+ *           zone are louder (Red at the edge, Amber further out, Yellow
+ *           further still), so the alarm comes before anyone is inside.
+ *
+ * Clearing is deliberately harder than firing, so a radio parked on a line
+ * does not flap between "breached" and "returned" on every fix: an exit breach
+ * clears once back inside the drawn shape; an enter breach clears once
+ * ENTER_CLEAR_M beyond its line.
  */
 import { distanceToPolygonMetres, haversineMetres, pointInPolygon, type GeofenceShape } from "./geometry";
 
@@ -42,17 +46,31 @@ export function signedDistanceMetres(zone: GeofenceShape, lat: number, lon: numb
   return pointInPolygon(lat, lon, zone.geometry) ? -boundary : boundary;
 }
 
+/** How far back beyond its warning line a radio must be for an enter breach to clear. */
+export const ENTER_CLEAR_M = 30;
+
 /**
- * Which side of the rule this position is on, and how far past the boundary
- * it is in the direction that matters (metres outside for exit, metres inside
- * for enter; 0 when on the safe side).
+ * Which side of the rule this position is on, and how far.
+ *
+ * exit:  distanceM is metres outside the shape (0 when on the safe side).
+ * enter: distanceM is metres inside the shape; negative means still outside
+ *        by that much, as for a warning step out from the edge.
  */
 export function classify(trigger: Trigger, bufferM: number, signed: number): { side: Side; distanceM: number } {
   const buffer = Math.max(0, Number(bufferM) || 0);
-  const past = trigger === "exit" ? signed : -signed;
-  if (past > buffer) return { side: "violating", distanceM: past };
-  if (past <= 0) return { side: "safe", distanceM: 0 };
-  return { side: "edge", distanceM: past };
+  if (trigger === "enter") {
+    if (signed < buffer) return { side: "violating", distanceM: -signed };
+    if (signed > buffer + ENTER_CLEAR_M) return { side: "safe", distanceM: 0 };
+    return { side: "edge", distanceM: -signed };
+  }
+  if (signed > buffer) return { side: "violating", distanceM: signed };
+  if (signed <= 0) return { side: "safe", distanceM: 0 };
+  return { side: "edge", distanceM: signed };
+}
+
+/** How far round the shape a rule needs looking at before "nowhere near it" is safe to say. */
+export function ruleReachM(trigger: string, bufferM: number) {
+  return (Math.max(0, Number(bufferM) || 0)) + (trigger === "enter" ? ENTER_CLEAR_M : 0) + 5;
 }
 
 export type StepResult = {

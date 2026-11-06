@@ -720,7 +720,7 @@ async function init() {
         trigger                TEXT NOT NULL CHECK (trigger IN ('exit', 'enter')),
         level                  TEXT NOT NULL CHECK (level IN ('red', 'amber', 'yellow')),
         buffer_m               REAL NOT NULL DEFAULT 30,
-        confirmations_required INTEGER NOT NULL DEFAULT 3,
+        confirmations_required INTEGER NOT NULL DEFAULT 1,
         active                 BOOLEAN NOT NULL DEFAULT true,
         created_by             INTEGER REFERENCES users(id) ON DELETE SET NULL,
         created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -764,6 +764,8 @@ async function init() {
           EXECUTE format('ALTER TABLE geofence_rules DROP CONSTRAINT %I', old_name);
         END IF;
       END $$;
+      -- One reading past a line is enough by default; a rule can ask for more.
+      ALTER TABLE geofence_rules ALTER COLUMN confirmations_required SET DEFAULT 1;
       CREATE UNIQUE INDEX IF NOT EXISTS uq_geofence_rule_step
         ON geofence_rules(geofence_id, target_type, target_id, trigger, level);
     `);

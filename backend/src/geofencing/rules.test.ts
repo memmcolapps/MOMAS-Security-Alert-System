@@ -30,11 +30,26 @@ describe("rule sides", () => {
     expect(side("exit", 600)).toBe("violating");
   });
 
-  test("enter rule: violating only past the drift allowance inside", () => {
+  test("enter rule: its line is a warning ring outside the zone", () => {
+    // Edge at 500 m north; a 30 m step puts the line at 530 m.
     expect(side("enter", 2000)).toBe("safe");
-    expect(side("enter", 510)).toBe("safe");
-    expect(side("enter", 485)).toBe("edge");
+    expect(side("enter", 570)).toBe("safe");
+    expect(side("enter", 545)).toBe("edge");
+    expect(side("enter", 520)).toBe("violating");
     expect(side("enter", 300)).toBe("violating");
+  });
+
+  test("enter rule at the edge (0 m): only inside the shape alarms", () => {
+    expect(side("enter", 510, 0)).toBe("edge");
+    expect(side("enter", 490, 0)).toBe("violating");
+  });
+
+  test("enter steps: nearer the zone is past more of them", () => {
+    // Yellow 2 km out, Amber 1 km out, Red at the edge; a radio 1.5 km out.
+    const metres = 500 + 1500;
+    expect(side("enter", metres, 2000)).toBe("violating");
+    expect(side("enter", metres, 1000)).toBe("safe");
+    expect(side("enter", metres, 0)).toBe("safe");
   });
 
   test("distance is measured in the direction that matters", () => {
@@ -42,6 +57,9 @@ describe("rule sides", () => {
     const inside = at(200);
     expect(classify("exit", 30, signedDistanceMetres(base, outside.lat, outside.lon)).distanceM).toBeCloseTo(200, -1);
     expect(classify("enter", 30, signedDistanceMetres(base, inside.lat, inside.lon)).distanceM).toBeCloseTo(300, -1);
+    // Still outside: negative, the metres left to the edge.
+    const near = at(800);
+    expect(classify("enter", 1000, signedDistanceMetres(base, near.lat, near.lon)).distanceM).toBeCloseTo(-300, -1);
   });
 });
 
@@ -56,6 +74,8 @@ describe("rule state machine", () => {
   test("enter: alarms on going in, clears on leaving", () => {
     expect(run("enter", [2000, 200, 200, 200]).events).toEqual(["breach"]);
     expect(run("enter", [2000, 200, 200, 200, 2000]).events).toEqual(["breach", "clear"]);
+    // Hovering just past the line after a breach does not clear it.
+    expect(run("enter", [200, 200, 200, 545, 550, 540]).events).toEqual(["breach"]);
   });
 
   test("a fix back towards the line resets a half-counted breach", () => {
