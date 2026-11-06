@@ -508,6 +508,18 @@ export function OperationsMap({
       }
       layer?.bindTooltip(escapeHtml(fence.name || "Geofence")).addTo(geofenceLayer);
     }
+    // Each zone's alarm steps, one dashed line per level. The shape maths is
+    // loaded only when there is a zone to draw, so the map itself opens fast.
+    const zones = geofences.filter((fence) => fence.rules?.some((rule) => rule.active !== false && Number(rule.buffer_m) > 0));
+    if (!zones.length) return undefined;
+    let cancelled = false;
+    import("../lib/zone-steps").then(({ drawZoneSteps, zoneSteps }) => {
+      if (cancelled) return;
+      for (const fence of zones) drawZoneSteps(geofenceLayer, fence, zoneSteps(fence.rules), { name: escapeHtml(fence.name || "Geofence") });
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [geofences]);
 
   const keepTrackedInView = useCallback((latlng) => {

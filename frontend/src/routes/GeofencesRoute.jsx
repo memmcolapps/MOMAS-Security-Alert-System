@@ -48,11 +48,11 @@ import {
   grownRing,
   insideZone,
   metresBetween,
-  offsetRings,
   polygonSelfIntersects,
   simplifyRing,
 } from "../lib/fence-placement";
 import { isPlatformOperator, isPlatformStaff } from "../lib/platform-roles";
+import { drawZoneSteps, zoneSteps } from "../lib/zone-steps";
 
 // A zone is only a place. Each rule on it says who it watches, whether leaving
 // or entering is the problem, and how loud the alarm is.
@@ -330,7 +330,7 @@ function ZoneMap({
   editing,
   zone,
   drawing,
-  focusRule,
+  cards,
   radios,
   highlighted,
   members,
@@ -528,6 +528,9 @@ function ZoneMap({
           ? L.circle([Number(other.center_lat), Number(other.center_lon)], { ...style, radius: Number(other.radius_m) })
           : L.polygon((other.geometry?.coordinates?.[0] || []).map(([lon, lat]) => [lat, lon]), style);
       shape.bindTooltip(look ? `${other.name} · ${look.zone}` : other.name).addTo(layer);
+      // Browsing: each zone's alarm lines too. While editing they would
+      // crowd the one being drawn, so other zones show their edge only.
+      if (!editing) drawZoneSteps(layer, other, zoneSteps(other.rules), { name: other.name });
     }
   }, [zones, editing, zone.id]);
 
@@ -678,40 +681,24 @@ function ZoneMap({
     }
   }, [zone]);
 
-  // One dashed line per alarm step of the focused card, in that step's colour,
-  // exactly where it fires: outside the shape for "must stay inside", inside
-  // it for "must not enter". A circle's lines are drawn at once; a shape's are
-  // worked out a moment after it stops changing, since a long border can take
-  // a noticeable fraction of a second and dragging a corner must stay smooth.
+  // Every alarm step of every card in the draft, one dashed line per level,
+  // labelled with its level and distance. A circle's lines are drawn at once;
+  // a shape's are worked out a moment after it stops changing, since a long
+  // border can take a noticeable fraction of a second and dragging a corner
+  // must stay smooth.
   useEffect(() => {
     const layer = layers.current.alarm;
     if (!layer) return undefined;
-    if (!editing || !focusRule || !isPlaced(zone) || drawing) {
+    if (!editing || !cards?.length || !isPlaced(zone) || drawing) {
       layer.clearLayers();
       return undefined;
     }
-    const styleFor = (step) => ({ color: LEVEL_STYLES[step.level].dot, weight: 2, dashArray: "6 6", fill: false, interactive: false });
-    // Each line says what it is and how far from the edge, at its top.
-    const label = (step, lat, lon) =>
-      L.marker([lat, lon], {
-        interactive: false,
-        keyboard: false,
-        icon: L.divIcon({
-          className: "",
-          iconSize: [0, 0],
-          html: `<span style="position:absolute;transform:translate(-50%,-115%);white-space:nowrap;padding:1px 6px;border-radius:9999px;background:rgba(0,0,0,.75);color:${LEVEL_STYLES[step.level].dot};font:700 10px system-ui;box-shadow:0 1px 3px rgba(0,0,0,.5)">${LEVEL_STYLES[step.level].label} · ${formatDistance(Number(step.distance_m))}</span>`,
-        }),
-      }).addTo(layer);
-    const steps = focusRule.steps.filter((step) => Number(step.distance_m) > 0);
+    const steps = zoneSteps(
+      cards.flatMap((card) => card.steps.map((step) => ({ trigger: card.trigger, level: step.level, buffer_m: Number(step.distance_m) }))),
+    );
     if (zone.shape_type === "circle") {
       layer.clearLayers();
-      for (const step of steps) {
-        const distance = Number(step.distance_m);
-        const radius = Number(zone.radius_m) + (focusRule.trigger === "enter" ? -distance : distance);
-        if (!(radius > 0)) continue;
-        L.circle([zone.center_lat, zone.center_lon], { ...styleFor(step), radius }).addTo(layer);
-        label(step, Number(zone.center_lat) + radius / 111_320, Number(zone.center_lon));
-      }
+      drawZoneSteps(layer, zone, steps, { labels: true });
       return undefined;
     }
     if (polygonSelfIntersects(zone.points)) {
@@ -720,16 +707,10 @@ function ZoneMap({
     }
     const timer = window.setTimeout(() => {
       layer.clearLayers();
-      for (const step of steps) {
-        const rings = cachedOffset(zone.points, Number(step.distance_m), focusRule.trigger === "enter");
-        if (!rings) continue;
-        L.polygon(rings.map((ring) => ring.map(([lon, lat]) => [lat, lon])), styleFor(step)).addTo(layer);
-        const top = rings[0].reduce((best, point) => (point[1] > best[1] ? point : best), rings[0][0]);
-        label(step, top[1], top[0]);
-      }
+      drawZoneSteps(layer, zone, steps, { labels: true });
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [editing, focusRule, zone, drawing]);
+  }, [editing, cards, zone, drawing]);
 
   // Who the rules watch, coloured by the server's verdict.
   useEffect(() => {
@@ -787,17 +768,6 @@ function ZoneMap({
   );
 }
 
-// Alarm lines already worked out, so switching cards or steps back and forth
-// redraws at once.
-const offsetCache = new Map();
-function cachedOffset(points, distance, inward) {
-  const key = `${inward ? "in" : "out"}|${distance}|${points.join(";")}`;
-  if (offsetCache.has(key)) return offsetCache.get(key);
-  const rings = offsetRings(points, distance, inward);
-  if (offsetCache.size > 60) offsetCache.delete(offsetCache.keys().next().value);
-  offsetCache.set(key, rings);
-  return rings;
-}
 
 function viewRadius(map) {
   const bounds = map.getBounds();
@@ -2183,7 +2153,7 @@ export function GeofencesRoute() {
             drawing={drawing}
             editing={editing}
             fitToken={fitToken}
-            focusRule={focusRule}
+            cards={rules}
             highlighted={highlighted}
             members={members}
             onAddPoint={(point) => updateZone({ points: [...zone.points, point] })}
