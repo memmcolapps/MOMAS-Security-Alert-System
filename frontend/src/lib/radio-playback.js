@@ -1,6 +1,6 @@
 // Smooth playback of a radio's GPS points.
 //
-// Handsets take a point every 5s but upload them in batches every 15-30s. Drawn
+// Handsets take a point every 3s but upload them in batches every 15-30s. Drawn
 // as they arrive, a pin would sit still and then dart through a batch. So each
 // radio is played back a little behind real time - about one batch gap - which
 // means there is always a next point to move toward, and the pin moves through
@@ -26,7 +26,7 @@ export const PLAYBACK = {
   keepMs: 15 * 60_000,
 };
 
-// Points averaged into a still radio's resting position: about a minute at 5s.
+// Points averaged into a still radio's resting position: about 40-60 s of points.
 const STILL_WINDOW = 12;
 
 export function createTrack() {

@@ -658,17 +658,11 @@ export function OperationsMap({
         let sample = null;
         let renderT = now;
         if (track?.path.length) {
-          // An alarm is never shown late: an SOS radio sits on its newest point.
-          // Whether it is moving, and which way, still comes from playback, so
-          // a responder can see that someone in distress is on the move.
-          if (entry.sos) {
-            const newest = newestPoint(track);
-            const motion = sampleTrack(track, now - track.delayMs);
-            sample = { ...motion, lat: newest.lat, lon: newest.lon };
-          } else {
-            renderT = now - track.delayMs;
-            sample = sampleTrack(track, renderT);
-          }
+          // A radio in alarm glides on the same playback as every other radio,
+          // so its pin follows the road instead of jumping to each new batch.
+          // The faint dot still marks its newest point.
+          renderT = now - track.delayMs;
+          sample = sampleTrack(track, renderT);
         }
         entry.motion = sample;
         const target = sample ? { lat: sample.lat, lon: sample.lon } : entry.fix;
@@ -689,7 +683,7 @@ export function OperationsMap({
       if (!visual) return;
       // A faint dot on the newest point received, ahead of the pin: playback
       // shows the path, the dot shows the latest truth.
-      const newest = trackedState?.track && !trackedState.entry.sos ? newestPoint(trackedState.track) : null;
+      const newest = trackedState?.track ? newestPoint(trackedState.track) : null;
       if (newest) {
         if (!latestDot) {
           latestDot = L.circleMarker([newest.lat, newest.lon], {
@@ -744,7 +738,7 @@ export function OperationsMap({
               bearing: entry.motion?.bearing == null ? null : Math.round(entry.motion.bearing / 5) * 5,
               speedMs: entry.motion?.speedMs == null ? null : Math.round(entry.motion.speedMs * 10) / 10,
               seenMs: track?.lastArrivalMs ?? entry.fix?.seenMs ?? null,
-              behindSec: track?.path.length && !entry.sos ? Math.round(track.delayMs / 1000) : 0,
+              behindSec: track?.path.length ? Math.round(track.delayMs / 1000) : 0,
             }
           : { present: false };
         const key = JSON.stringify(next);

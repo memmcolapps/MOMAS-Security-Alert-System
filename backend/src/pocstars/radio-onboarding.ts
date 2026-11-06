@@ -27,8 +27,8 @@ export function freshRadioProvisioningPayload({
     defaultChannelId: null,
     serviceEndsAt: body.service_ends_at || "2030-01-01 00:00:00",
     gpsEnabled: body.gps_enabled !== false,
-    // 5s is what makes a moving radio track smoothly on the map; every radio on
-    // the network was moved to it on 29 Oct 2026, and the battery cost is small.
-    gpsFrequency: Number(body.gps_frequency || 5),
+    // 3s is what makes a moving radio track smoothly on the map; every radio on
+    // the network was moved to it on 6 Nov 2026 (from 5s, set 29 Oct).
+    gpsFrequency: Number(body.gps_frequency || 3),
   };
 }

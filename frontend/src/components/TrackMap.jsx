@@ -121,14 +121,9 @@ export function TrackMap({ radios, radioTracks, trails, paused, onPause, onState
         let sample = null;
         entry.renderT = now;
         if (track?.path.length) {
-          // An alarm is never shown late: an SOS radio sits on its newest point.
-          if (entry.sos) {
-            const newest = newestPoint(track);
-            sample = { lat: newest.lat, lon: newest.lon, moving: false, bearing: null, speedMs: 0 };
-          } else {
-            entry.renderT = now - track.delayMs;
-            sample = sampleTrack(track, entry.renderT);
-          }
+          // A radio in alarm glides on the same playback as every other radio.
+          entry.renderT = now - track.delayMs;
+          sample = sampleTrack(track, entry.renderT);
         }
         entry.motion = sample;
         const at = sample ? { lat: sample.lat, lon: sample.lon } : entry.fix;
@@ -156,7 +151,7 @@ export function TrackMap({ radios, radioTracks, trails, paused, onPause, onState
           entry.iconKey = iconKey;
         }
         // A faint dot on the newest point received, ahead of the pin.
-        const newest = track && !entry.sos ? newestPoint(track) : null;
+        const newest = track ? newestPoint(track) : null;
         if (newest) {
           if (!entry.dot) {
             entry.dot = L.circleMarker([newest.lat, newest.lon], {
@@ -181,7 +176,7 @@ export function TrackMap({ radios, radioTracks, trails, paused, onPause, onState
             speedMs: moving && entry.motion?.speedMs != null ? Math.round(entry.motion.speedMs * 10) / 10 : null,
             bearing: moving && bearing != null ? Math.round(bearing / 5) * 5 : null,
             seenMs: track?.lastArrivalMs ?? entry.fix?.seenMs ?? null,
-            behindSec: track?.path.length && !entry.sos ? Math.round(track.delayMs / 1000) : 0,
+            behindSec: track?.path.length ? Math.round(track.delayMs / 1000) : 0,
           };
           const key = JSON.stringify(state);
           if (key !== entry.reported) {

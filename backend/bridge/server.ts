@@ -468,7 +468,7 @@ async function handleProvisioning(
               message.serviceEndsAt || "2030-01-01 00:00:00",
             ),
             gpsEnabled: message.gpsEnabled !== false,
-            gpsFrequency: Number(message.gpsFrequency || 5),
+            gpsFrequency: Number(message.gpsFrequency || 3),
           }),
         });
       }
