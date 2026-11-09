@@ -48,7 +48,11 @@ const currentSession = () => ({ token: getAuthToken(), organizationId: getActive
 
 function RootLayout() {
   const router = useRouterState();
+  const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
   const showHeader = !["/login", "/change-password"].includes(router.location.pathname);
+  const me = meQuery.data?.user;
+  const activeMembership = me?.memberships?.find((membership) => Number(membership.organization_id) === Number(getActiveOrganizationId())) || me?.memberships?.[0];
+  const showRadio = Boolean(platformRank(me) || !activeMembership?.modules?.length || activeMembership.modules.includes("radio"));
   const chromeRef = useRef(null);
 
   // The app chrome is the header plus a radio strip that only shows while the
@@ -77,7 +81,7 @@ function RootLayout() {
           {showHeader ? (
             <div ref={chromeRef} className="fixed left-0 right-0 top-0 z-[1100]">
               <AppHeader />
-              <LiveRadioBar />
+              {showRadio ? <LiveRadioBar /> : null}
               <ConnectionBanner />
             </div>
           ) : null}
@@ -154,6 +158,26 @@ async function requirePlatform(minimum) {
   return session;
 }
 
+const enabledModules = (session) => {
+  if (platformRank(session.user)) return new Set(["radio", "drone", "osint"]);
+  const membership = session.user?.active_membership || session.user?.memberships?.find(
+    (item) => Number(item.organization_id) === Number(getActiveOrganizationId()),
+  ) || session.user?.memberships?.[0];
+  return new Set(Array.isArray(membership?.modules) && membership.modules.length
+    ? membership.modules
+    : ["radio", "drone", "osint"]);
+};
+
+function requireModule(module) {
+  return async () => {
+    const session = await requireReadySession();
+    const modules = enabledModules(session);
+    if (modules.has(module)) return session;
+    const fallback = ["radio", "drone", "osint"].find((candidate) => modules.has(candidate));
+    throw redirect({ to: fallback === "drone" ? "/drones" : fallback === "osint" ? "/osint" : "/" });
+  };
+}
+
 const requireAdmin = () => requirePlatform("support");
 const requireOwner = () => requirePlatform("admin");
 
@@ -169,7 +193,7 @@ async function requireOrgAdmin() {
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  beforeLoad: requireReadySession,
+  beforeLoad: requireModule("radio"),
   // `focus` carries an alarm key so the alarms screen can hand an alarm to the
   // operations map ("Show on operations map").
   // `track` lists the tracked radios, so a refresh keeps the split screen.
@@ -183,42 +207,42 @@ const indexRoute = createRoute({
 const replayRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/replay",
-  beforeLoad: requireReadySession,
+  beforeLoad: requireModule("radio"),
   component: page("ReplayRoute"),
 });
 
 const devicesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/devices",
-  beforeLoad: requireReadySession,
+  beforeLoad: requireModule("radio"),
   component: page("DevicesRoute"),
 });
 
 const alarmsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/alarms",
-  beforeLoad: requireReadySession,
+  beforeLoad: requireModule("radio"),
   component: page("AlarmsRoute"),
 });
 
 const dronesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/drones",
-  beforeLoad: requireReadySession,
+  beforeLoad: requireModule("drone"),
   component: page("DronesRoute"),
 });
 
 const geofencesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/geofences",
-  beforeLoad: requireReadySession,
+  beforeLoad: requireModule("radio"),
   component: page("GeofencesRoute"),
 });
 
 const osintRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/osint",
-  beforeLoad: requireReadySession,
+  beforeLoad: requireModule("osint"),
   component: page("OsintRoute"),
 });
 

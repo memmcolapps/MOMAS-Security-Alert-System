@@ -545,6 +545,7 @@ async function init() {
       END $$;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS radio_seats INTEGER NOT NULL DEFAULT 2;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS platform_radio_seats INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE organizations ADD COLUMN IF NOT EXISTS modules TEXT[] NOT NULL DEFAULT ARRAY['radio', 'drone', 'osint'];
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS pocstars_company_name TEXT;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS pocstars_dispatcher_uid TEXT;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS pocstars_last_sync_at TIMESTAMPTZ;
@@ -4682,7 +4683,7 @@ async function getUserById(id) {
 async function getMembershipsForUser(userId) {
   const { rows } = await pool.query(
     `SELECT m.organization_id, m.role, m.unit_id, m.scope_level,
-            o.name, o.slug, o.status, o.all_states,
+            o.name, o.slug, o.status, o.all_states, o.modules,
             u.name AS unit_name, u.type AS unit_type, u.state AS unit_state,
             COUNT(os.state)::int AS state_count
        FROM organization_memberships m
@@ -4690,7 +4691,7 @@ async function getMembershipsForUser(userId) {
        LEFT JOIN organization_units u ON u.id = m.unit_id
        LEFT JOIN organization_states os ON os.organization_id = o.id
       WHERE m.user_id = $1
-      GROUP BY m.organization_id, m.role, m.unit_id, m.scope_level, o.name, o.slug, o.status, o.all_states, u.name, u.type, u.state
+      GROUP BY m.organization_id, m.role, m.unit_id, m.scope_level, o.name, o.slug, o.status, o.all_states, o.modules, u.name, u.type, u.state
       ORDER BY o.name`,
     [userId],
   );
@@ -4726,14 +4727,20 @@ async function createOrganization({
   pocstars_company_name = null,
   radio_seats = 2,
   platform_radio_seats = 1,
+  modules = ["radio", "drone", "osint"],
 }) {
+  const validModules = ["radio", "drone", "osint"];
+  const selectedModules = [...new Set((Array.isArray(modules) ? modules : validModules)
+    .map((module) => String(module).toLowerCase())
+    .filter((module) => validModules.includes(module)))];
+  if (!selectedModules.length) throw new Error("Select at least one module.");
   const finalSlug = slugify(slug || name);
   const { rows } = await pool.query(
     `INSERT INTO organizations (
        name, slug, status, all_states, pocstars_company_id, pocstars_company_name,
-       radio_seats, platform_radio_seats
+       radio_seats, platform_radio_seats, modules
      )
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
      RETURNING *`,
     [
       name,
@@ -4744,6 +4751,7 @@ async function createOrganization({
       pocstars_company_name || null,
       Math.max(1, Number(radio_seats) || 2),
       Math.max(0, Number(platform_radio_seats) || 0),
+      selectedModules,
     ],
   );
   await setOrganizationStates(rows[0].id, states);
@@ -4790,6 +4798,7 @@ async function updateOrganizationAccess(id, {
   pocstars_company_name,
   radio_seats,
   platform_radio_seats,
+  modules,
 }) {
   // Promotion is the only way out of 'discovered'. Without this an operator
   // could set the status here instead and take on another operator's company
@@ -4804,6 +4813,15 @@ async function updateOrganizationAccess(id, {
     }
   }
 
+  let selectedModules;
+  if (modules !== undefined) {
+    const validModules = ["radio", "drone", "osint"];
+    selectedModules = [...new Set((Array.isArray(modules) ? modules : [])
+      .map((module) => String(module).toLowerCase())
+      .filter((module) => validModules.includes(module)))];
+    if (!selectedModules.length) throw new Error("Select at least one module.");
+  }
+
   const { rows } = await pool.query(
     `UPDATE organizations
         SET all_states = COALESCE($2, all_states),
@@ -4813,6 +4831,7 @@ async function updateOrganizationAccess(id, {
             pocstars_company_name = CASE WHEN $7::boolean THEN $8 ELSE pocstars_company_name END,
             radio_seats = COALESCE($9, radio_seats),
             platform_radio_seats = COALESCE($10, platform_radio_seats),
+            modules = COALESCE($11, modules),
             updated_at = NOW()
       WHERE id = $1
       RETURNING *`,
@@ -4829,6 +4848,7 @@ async function updateOrganizationAccess(id, {
       // outgrew its allowance had no path that did not go through the database.
       radio_seats === undefined ? null : Math.max(1, Number(radio_seats) || 1),
       platform_radio_seats === undefined ? null : Math.max(0, Number(platform_radio_seats) || 0),
+      selectedModules || null,
     ],
   );
   if (!rows[0]) return null;
@@ -5569,4 +5589,4 @@ export {
   countSosAlerts,
   allSosMsgIds,
 };
-  
+

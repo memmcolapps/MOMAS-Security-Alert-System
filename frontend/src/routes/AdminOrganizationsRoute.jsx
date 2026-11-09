@@ -24,6 +24,7 @@ const emptyOrg = {
   states: [],
   radio_seats: 2,
   platform_radio_seats: 1,
+  modules: ["radio", "drone", "osint"],
 };
 
 const isDiscovered = (org) => org?.status === "discovered";
@@ -238,10 +239,34 @@ export function AdminOrganizationsRoute() {
                 <input className="field-input" type="number" min="0" value={orgForm.platform_radio_seats} onChange={(event) => setOrgForm({ ...orgForm, platform_radio_seats: event.target.value })} />
               </Field>
             </div>
+            <fieldset className="mt-4">
+              <legend className="mb-2 text-[11px] font-bold uppercase tracking-wide text-neutral-400">Modules they can access</legend>
+              <div className="flex flex-wrap gap-2">
+                {[["radio", "Radio"], ["drone", "Drone"], ["osint", "OSINT"]].map(([value, label]) => {
+                  const checked = orgForm.modules.includes(value);
+                  return (
+                    <label key={value} className={`inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-xs ${checked ? "border-ops-red/50 bg-red-500/10 text-neutral-100" : "border-white/10 bg-white/[0.02] text-neutral-400"}`}>
+                      <input
+                        type="checkbox"
+                        className="accent-red-500"
+                        checked={checked}
+                        onChange={() => setOrgForm((current) => ({
+                          ...current,
+                          modules: checked
+                            ? current.modules.filter((module) => module !== value)
+                            : [...current.modules, value],
+                        }))}
+                      />
+                      {label}
+                    </label>
+                  );
+                })}
+              </div>
+            </fieldset>
             <StatePicker value={orgForm} onChange={setOrgForm} />
             {createMutation.error ? <p className="mt-3 text-xs text-ops-red">{createMutation.error.message}</p> : null}
             <p className="mt-3 text-[11px] text-neutral-500">Its company and console seats are created on the radio network automatically.</p>
-            <button className="mt-4 inline-flex items-center gap-2 rounded-md bg-ops-red px-4 py-2 text-xs font-bold text-black hover:opacity-85 disabled:opacity-50" disabled={createMutation.isPending || !orgForm.name.trim()}>
+            <button className="mt-4 inline-flex items-center gap-2 rounded-md bg-ops-red px-4 py-2 text-xs font-bold text-black hover:opacity-85 disabled:opacity-50" disabled={createMutation.isPending || !orgForm.name.trim() || !orgForm.modules.length}>
               <Plus size={14} /> {createMutation.isPending ? "Creating…" : "Create organization"}
             </button>
           </form>

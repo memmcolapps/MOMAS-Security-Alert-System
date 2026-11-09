@@ -55,6 +55,11 @@ router.get("/", async (c) => {
 router.post("/", requireOps, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   if (!body.name) return c.json({ error: "Enter an organization name." }, 400);
+  const availableModules = ["radio", "drone", "osint"];
+  const modules = [...new Set((Array.isArray(body.modules) ? body.modules : availableModules)
+    .map((module: unknown) => String(module).toLowerCase())
+    .filter((module: string) => availableModules.includes(module)))];
+  if (!modules.length) return c.json({ error: "Select at least one module." }, 400);
   try {
     const tenantSeats = Math.max(1, Number(body.radio_seats) || 2);
     const platformSeats = Math.max(0, Number(body.platform_radio_seats ?? 1));
@@ -68,6 +73,7 @@ router.post("/", requireOps, async (c) => {
       pocstars_company_name: body.pocstars_company_name || null,
       radio_seats: tenantSeats,
       platform_radio_seats: platformSeats,
+      modules,
     });
 
     const { radio, warning } = await provisionCompanyOnNetwork(organization);
@@ -383,6 +389,14 @@ router.put("/:id/access", requireOps, async (c) => {
   if (touchesBilling && !isPlatformOwner((c as any).get("user"))) {
     return c.json({ error: "Only a platform owner can change seat counts or the radio company." }, 403);
   }
+  let modules;
+  if (body.modules !== undefined) {
+    const availableModules = ["radio", "drone", "osint"];
+    modules = [...new Set((Array.isArray(body.modules) ? body.modules : [])
+      .map((module: unknown) => String(module).toLowerCase())
+      .filter((module: string) => availableModules.includes(module)))];
+    if (!modules.length) return c.json({ error: "Select at least one module." }, 400);
+  }
 
   try {
     const organization = await db.updateOrganizationAccess(id, {
@@ -394,6 +408,7 @@ router.put("/:id/access", requireOps, async (c) => {
       pocstars_company_name: body.pocstars_company_name,
       radio_seats: body.radio_seats,
       platform_radio_seats: body.platform_radio_seats,
+      modules,
     });
     if (!organization) return c.json({ error: "That organization could not be found." }, 404);
     return c.json({ organization });
