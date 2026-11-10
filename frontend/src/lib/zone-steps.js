@@ -17,7 +17,7 @@ export function zoneSteps(rules = []) {
     if (rule.active === false || !LEVEL_STYLES[rule.level]) continue;
     // 0 m is a step on the edge itself; it is drawn over the edge.
     const distance = Math.max(0, Number(rule.buffer_m) || 0);
-    const key = `${rule.trigger}|${rule.level}|${distance}`;
+    const key = stepKey(rule);
     if (!steps.has(key)) steps.set(key, { trigger: rule.trigger, level: rule.level, distance_m: distance });
   }
   // Quietest first, so the loudest line is drawn on top.
@@ -37,8 +37,11 @@ function cachedOffset(points, distance) {
 
 const distanceWords = (step) => (step.distance_m > 0 ? formatDistance(step.distance_m) : "at edge");
 
-const chip = (step) =>
-  `<span style="position:absolute;transform:translate(-50%,-115%);white-space:nowrap;padding:1px 6px;border-radius:9999px;background:rgba(0,0,0,.75);color:${LEVEL_STYLES[step.level].dot};font:700 10px system-ui;box-shadow:0 1px 3px rgba(0,0,0,.5)">${LEVEL_STYLES[step.level].label} · ${distanceWords(step)}</span>`;
+const chip = (step, note = "") =>
+  `<span style="position:absolute;transform:translate(-50%,-115%);white-space:nowrap;padding:1px 6px;border-radius:9999px;background:rgba(0,0,0,.75);color:${LEVEL_STYLES[step.level].dot};font:700 10px system-ui;box-shadow:0 1px 3px rgba(0,0,0,.5)">${LEVEL_STYLES[step.level].label} · ${distanceWords(step)}${note ? ` · ${note}` : ""}</span>`;
+
+/** The key that tells two steps apart, the same one zoneSteps groups by. */
+export const stepKey = (step) => `${step.trigger}|${step.level}|${Math.max(0, Number(step.buffer_m ?? step.distance_m) || 0)}`;
 
 /**
  * Adds a zone's step lines to `layer`.
@@ -46,11 +49,13 @@ const chip = (step) =>
  * `zone` is either a stored zone (geometry) or the editor's draft (points).
  * `labels` puts a "Amber · 100 m" chip at the top of each line; without it the
  * same words show on hover, which keeps a busy map readable.
+ * `style` and `className` restyle the lines (the main map uses them for a
+ * crossed step); `note` adds words to a step's chip, such as who crossed it.
  */
-export function drawZoneSteps(layer, zone, steps, { labels = false, name = "", opacity = 1 } = {}) {
+export function drawZoneSteps(layer, zone, steps, { labels = false, name = "", opacity = 1, style: extra = null, className = "", note = null } = {}) {
   const points = zone.points || zone.geometry?.coordinates?.[0];
   for (const step of steps) {
-    const style = { color: LEVEL_STYLES[step.level].dot, weight: 2, opacity, dashArray: "6 6", fill: false, interactive: !labels };
+    const style = { color: LEVEL_STYLES[step.level].dot, weight: 2, opacity, dashArray: "6 6", fill: false, interactive: !labels, className, ...extra };
     let line = null;
     let top = null;
     if (zone.shape_type === "circle") {
@@ -70,7 +75,7 @@ export function drawZoneSteps(layer, zone, steps, { labels = false, name = "", o
     }
     const words = `${LEVEL_STYLES[step.level].label} · ${step.distance_m > 0 ? `${formatDistance(step.distance_m)} outside` : "at the edge"}`;
     if (labels) {
-      L.marker(top, { interactive: false, keyboard: false, icon: L.divIcon({ className: "", iconSize: [0, 0], html: chip(step) }) }).addTo(layer);
+      L.marker(top, { interactive: false, keyboard: false, icon: L.divIcon({ className: "", iconSize: [0, 0], html: chip(step, note?.(step) || "") }) }).addTo(layer);
     } else {
       line.bindTooltip(name ? `${name} · ${words}` : words, { sticky: true });
     }

@@ -1,9 +1,9 @@
 import L from "leaflet";
-import { LEVELS, LEVEL_STYLES, geofenceDistance, geofenceTitle, levelOf } from "../lib/alarm-levels";
+import { LEVELS, LEVEL_STYLES, geofenceDistance, geofenceTitle, isGeofenceAlarm, levelOf } from "../lib/alarm-levels";
 import { addZoneName, hideZoneNamesWhenFar, zoneColour } from "../lib/zone-colours";
 import "leaflet.heat";
 import "leaflet.markercluster";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IMAGERY_LABEL_TILES, IMAGERY_ROAD_TILES, LABELLED_BASEMAPS, SATELLITE_TILES, VECTOR_STYLES, vectorBasemapLayer } from "../lib/basemaps";
 import { deviceTypeGlyph, escapeHtml, severityColors, severityLabels, typeIcons } from "../lib/domain";
 import { MOTION, distanceMetres, fixAgeSec, fixFromLocation, formatAge, trailSegments } from "../lib/radio-motion";
@@ -237,6 +237,40 @@ const NO_SOS_TRAILS = {};
 // so a responder can tell a live position from a stale one at a glance.
 const SOS_STALE_LABEL_SEC = 60;
 
+// Geofences on the main map show more the closer you look. Far out a zone is a
+// dot; then its shape; its alarm step lines show when it is hovered or clicked,
+// when zoomed in close, or always if the operator asks. A crossed step always
+// shows, lit in its alarm colour.
+const ZONE_DOT_PX = 18;
+const ZONE_STEPS_ZOOM = 14;
+const ZONE_PULSE_MS = 4000;
+
+const activeZone = (fence) => fence.rules?.some((rule) => rule.active !== false);
+
+/** A zone's box, grown by its widest step so its lines count as part of it. */
+function zoneBounds(fence) {
+  const widest = Math.max(0, ...(fence.rules || []).map((rule) => Number(rule.buffer_m) || 0));
+  if (fence.shape_type === "circle") {
+    const lat = Number(fence.center_lat);
+    const lon = Number(fence.center_lon);
+    const radius = Number(fence.radius_m);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(radius)) return null;
+    return { shape: L.latLng(lat, lon).toBounds(radius * 2), full: L.latLng(lat, lon).toBounds((radius + widest) * 2) };
+  }
+  const ring = fence.geometry?.coordinates?.[0];
+  if (!Array.isArray(ring) || ring.length < 3) return null;
+  const shape = L.latLngBounds(ring.map(([lon, lat]) => [lat, lon]));
+  const grow = widest / 111_320;
+  return { shape, full: L.latLngBounds([shape.getSouth() - grow, shape.getWest() - grow], [shape.getNorth() + grow, shape.getEast() + grow]) };
+}
+
+/** True when the zone would be only a few pixels across at this zoom. */
+function zoneTooSmall(map, bounds, zoom) {
+  const a = map.project(bounds.shape.getSouthWest(), zoom);
+  const b = map.project(bounds.shape.getNorthEast(), zoom);
+  return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) < ZONE_DOT_PX;
+}
+
 export function OperationsMap({
   incidents,
   devices,
@@ -246,6 +280,8 @@ export function OperationsMap({
   sosTrails = NO_SOS_TRAILS,
   drones = [],
   geofences = [],
+  zoneAlarms = [],
+  fenceSteps = "auto",
   activeLayers,
   basemap,
   onIncidentFocus,
@@ -281,6 +317,14 @@ export function OperationsMap({
   trackRef.current.id = trackedRadioId;
   trackRef.current.paused = trackPaused;
   trailRef.current = trail;
+  // Which zone is clicked or under the pointer, and the map's zoom and view,
+  // decide which step lines show.
+  const [zoneFocus, setZoneFocus] = useState(null);
+  const [zoneHover, setZoneHover] = useState(null);
+  const [zoneView, setZoneView] = useState({ zoom: 6, bounds: null });
+  const zoneStepsRef = useRef(null);
+  // When each crossed step was first seen, so it pulses once, not on every redraw.
+  const zonePulseRef = useRef(new Map());
 
   useEffect(() => {
     if (!mapNode.current || mapRef.current) return;
@@ -324,7 +368,10 @@ export function OperationsMap({
     const coverageRenderer = L.canvas({ padding: 0.3 });
     const sosLayer = L.layerGroup();
     const droneLayer = assetClusterGroup("drone", DRONE_SVG);
-    const geofenceLayer = L.layerGroup();
+    // Shapes and step lines apart, so hovering or panning redraws only the lines.
+    const zoneShapeLayer = L.layerGroup();
+    const zoneStepLayer = L.layerGroup();
+    const geofenceLayer = L.layerGroup([zoneStepLayer, zoneShapeLayer]);
     const followLayer = L.layerGroup();
 
     baseLayers.satellite.addTo(map);
@@ -376,10 +423,17 @@ export function OperationsMap({
       sosLayer,
       droneLayer,
       geofenceLayer,
+      zoneShapeLayer,
+      zoneStepLayer,
       followLayer,
     };
     mapRef.current = map;
     hideZoneNamesWhenFar(map);
+    const syncView = () => setZoneView({ zoom: map.getZoom(), bounds: map.getBounds() });
+    map.on("moveend", syncView);
+    syncView();
+    // A click on empty map puts a clicked zone's lines away again.
+    map.on("click", () => setZoneFocus(null));
 
     // Grabbing the map means the operator wants to look somewhere else; the
     // camera stops chasing the tracked radio until they ask it to.
@@ -485,47 +539,168 @@ export function OperationsMap({
     heatLayer.setLatLngs(heatPoints);
   }, [incidents, onIncidentFocus]);
 
-  useEffect(() => {
-    const { geofenceLayer } = layersRef.current;
-    if (!geofenceLayer) return;
-    geofenceLayer.clearLayers();
-    for (const fence of geofences) {
-      // A zone shows while any of its rules is on. Its edge is its own colour,
-      // the same as on the Geofences page, so neighbouring zones are told
-      // apart; the alarm levels are the dashed step lines round it. A no-go
-      // zone's edge is dashed.
-      if (!fence.rules?.some((rule) => rule.active !== false)) continue;
-      const colour = zoneColour(fence);
-      const noGo = fence.rules.every((rule) => rule.trigger === "enter");
-      const style = { color: colour, weight: 2, fillColor: colour, fillOpacity: 0.08, dashArray: noGo ? "6 5" : null };
-      let layer = null;
-      if (fence.shape_type === "circle") {
-        const lat = Number(fence.center_lat);
-        const lon = Number(fence.center_lon);
-        const radius = Number(fence.radius_m);
-        if (Number.isFinite(lat) && Number.isFinite(lon) && Number.isFinite(radius)) {
-          layer = L.circle([lat, lon], { ...style, radius });
-        }
-      } else {
-        const ring = fence.geometry?.coordinates?.[0];
-        if (Array.isArray(ring)) layer = L.polygon(ring.map(([lon, lat]) => [lat, lon]), style);
-      }
-      layer?.bindTooltip(escapeHtml(fence.name || "Geofence")).addTo(geofenceLayer);
-      if (layer) addZoneName(geofenceLayer, fence, colour);
+  // Live zone alarms by zone: the loudest level, and who crossed which rule.
+  const alarmByZone = useMemo(() => {
+    const byZone = new Map();
+    for (const alert of zoneAlarms) {
+      if (!isGeofenceAlarm(alert) || alert.geofence_id == null) continue;
+      const id = String(alert.geofence_id);
+      const entry = byZone.get(id) || { level: null, rules: new Map(), ids: [] };
+      entry.ids.push(alert.id ?? alert.alert_key);
+      const level = levelOf(alert);
+      if (!entry.level || LEVELS.indexOf(level) < LEVELS.indexOf(entry.level)) entry.level = level;
+      const ruleId = String(alert.rule_id ?? "");
+      const crossers = entry.rules.get(ruleId) || [];
+      crossers.push({ id: alert.id ?? alert.alert_key, name: alert.asset_name || alert.dev_name || `Device ${alert.device_id ?? alert.asset_id}` });
+      entry.rules.set(ruleId, crossers);
+      byZone.set(id, entry);
     }
-    // Each zone's alarm steps, one dashed line per level. The shape maths is
-    // loaded only when there is a zone to draw, so the map itself opens fast.
-    const zones = geofences.filter((fence) => fence.rules?.some((rule) => rule.active !== false));
-    if (!zones.length) return undefined;
+    return byZone;
+  }, [zoneAlarms]);
+
+  // True for a zone alarm seen in the last few seconds: it pulses, then stays lit.
+  const freshAlarm = useCallback((key) => {
+    const seen = zonePulseRef.current;
+    if (!seen.has(key)) {
+      if (seen.size > 500) seen.delete(seen.keys().next().value);
+      seen.set(key, Date.now());
+    }
+    return Date.now() - seen.get(key) < ZONE_PULSE_MS;
+  }, []);
+
+  // Zone shapes, or dots where a zone is too small to see.
+  useEffect(() => {
+    const map = mapRef.current;
+    const { zoneShapeLayer } = layersRef.current;
+    if (!map || !zoneShapeLayer) return;
+    zoneShapeLayer.clearLayers();
+    const zoom = zoneView.zoom;
+    for (const fence of geofences) {
+      if (!activeZone(fence)) continue;
+      const bounds = zoneBounds(fence);
+      if (!bounds) continue;
+      const id = String(fence.id);
+      const alarm = alarmByZone.get(id);
+      // A zone in alarm takes its alarm colour; calm zones keep their own.
+      const colour = alarm ? LEVEL_STYLES[alarm.level].dot : zoneColour(fence);
+      const pulse = alarm && freshAlarm(`zone:${[...alarm.ids].sort().join(",")}`) ? "zone-alarm-pulse" : "";
+      const name = escapeHtml(fence.name || "Geofence");
+      // Zone layers don't pass clicks to the map, so a click here never also unfocuses.
+      const focus = () => setZoneFocus(id);
+      if (zoneTooSmall(map, bounds, zoom)) {
+        L.circleMarker(bounds.shape.getCenter(), {
+          radius: alarm ? 7 : 5,
+          color: "#000",
+          weight: 1,
+          fillColor: colour,
+          fillOpacity: 0.95,
+          className: pulse,
+          bubblingMouseEvents: false,
+        })
+          .bindTooltip(name, { direction: "top" })
+          .on("click", () => {
+            focus();
+            map.flyToBounds(bounds.full, { padding: [40, 40], maxZoom: 17, duration: 0.8 });
+          })
+          .addTo(zoneShapeLayer);
+        continue;
+      }
+      // A no-go zone's edge is dashed.
+      const noGo = fence.rules.every((rule) => rule.trigger === "enter");
+      const style = {
+        color: colour,
+        weight: alarm ? 3 : 2,
+        fillColor: colour,
+        fillOpacity: alarm ? 0.14 : 0.08,
+        dashArray: noGo ? "6 5" : null,
+        className: pulse,
+        bubblingMouseEvents: false,
+      };
+      const layer =
+        fence.shape_type === "circle"
+          ? L.circle([Number(fence.center_lat), Number(fence.center_lon)], { ...style, radius: Number(fence.radius_m) })
+          : L.polygon(fence.geometry.coordinates[0].map(([lon, lat]) => [lat, lon]), style);
+      layer
+        .bindTooltip(name, { sticky: true })
+        .on("mouseover", () => setZoneHover(id))
+        .on("mouseout", () => setZoneHover((current) => (current === id ? null : current)))
+        .on("click", focus)
+        .addTo(zoneShapeLayer);
+      addZoneName(zoneShapeLayer, fence, colour);
+    }
+  }, [geofences, alarmByZone, zoneView.zoom, freshAlarm]);
+
+  // Step lines: a crossed step always; the rest on hover or click, close in,
+  // or always if the operator chose that.
+  useEffect(() => {
+    const map = mapRef.current;
+    const { zoneStepLayer } = layersRef.current;
+    if (!map || !zoneStepLayer) return undefined;
+    const zones = geofences.filter(activeZone);
+    if (!zones.length) {
+      zoneStepLayer.clearLayers();
+      return undefined;
+    }
+    const draw = ({ drawZoneSteps, zoneSteps, stepKey }) => {
+      zoneStepLayer.clearLayers();
+      const { zoom, bounds: view } = zoneView;
+      const close = zoom >= ZONE_STEPS_ZOOM && view;
+      for (const fence of zones) {
+        const bounds = zoneBounds(fence);
+        if (!bounds || zoneTooSmall(map, bounds, zoom)) continue;
+        const id = String(fence.id);
+        const name = escapeHtml(fence.name || "Geofence");
+        const steps = zoneSteps(fence.rules);
+        // Which steps someone has crossed, and who.
+        const alarm = alarmByZone.get(id);
+        const crossed = new Map();
+        if (alarm) {
+          for (const rule of fence.rules) {
+            const crossers = alarm.rules.get(String(rule.id));
+            if (!crossers) continue;
+            const key = stepKey(rule);
+            crossed.set(key, [...(crossed.get(key) || []), ...crossers]);
+          }
+        }
+        const picked = id === zoneFocus || id === zoneHover;
+        const showAll = fenceSteps === "always" || picked || (close && view.intersects(bounds.full));
+        if (showAll) {
+          drawZoneSteps(zoneStepLayer, fence, steps.filter((step) => !crossed.has(stepKey(step))), {
+            labels: picked,
+            name,
+            className: picked ? "zone-step-in" : "",
+          });
+        }
+        for (const step of steps) {
+          const key = stepKey(step);
+          if (!crossed.has(key)) continue;
+          const crossers = crossed.get(key);
+          const names = crossers.map((crosser) => crosser.name);
+          drawZoneSteps(zoneStepLayer, fence, [step], {
+            labels: true,
+            name,
+            style: { weight: 3, dashArray: null },
+            className: freshAlarm(`step:${crossers.map((crosser) => crosser.id).sort().join(",")}`) ? "zone-step-alarm" : "",
+            note: () => escapeHtml(names.length > 1 ? `${names[0]} +${names.length - 1}` : names[0]),
+          });
+        }
+      }
+    };
+    // The shape maths is loaded only when there is a zone to draw, so the map
+    // itself opens fast; after that it is kept, so hovering redraws at once.
+    if (zoneStepsRef.current) {
+      draw(zoneStepsRef.current);
+      return undefined;
+    }
     let cancelled = false;
-    import("../lib/zone-steps").then(({ drawZoneSteps, zoneSteps }) => {
-      if (cancelled) return;
-      for (const fence of zones) drawZoneSteps(geofenceLayer, fence, zoneSteps(fence.rules), { name: escapeHtml(fence.name || "Geofence") });
+    import("../lib/zone-steps").then((module) => {
+      zoneStepsRef.current = module;
+      if (!cancelled) draw(module);
     });
     return () => {
       cancelled = true;
     };
-  }, [geofences]);
+  }, [geofences, alarmByZone, zoneView, zoneFocus, zoneHover, fenceSteps, freshAlarm]);
 
   const keepTrackedInView = useCallback((latlng) => {
     const map = mapRef.current;

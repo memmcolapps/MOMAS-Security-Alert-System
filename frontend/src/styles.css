@@ -684,3 +684,32 @@ textarea {
 .zone-names-hidden .zone-name {
   display: none;
 }
+
+/* Main map zone lines. A zone's step lines fade in when it is hovered or
+   clicked; a crossed step, and a zone or dot in alarm, pulse a few times
+   when the alarm arrives and then stay lit. */
+.zone-step-in {
+  animation: zone-step-in 180ms ease-out;
+}
+@keyframes zone-step-in {
+  from {
+    opacity: 0;
+  }
+}
+.zone-step-alarm,
+.zone-alarm-pulse {
+  animation: zone-alarm-pulse 0.9s ease-in-out 4;
+}
+@keyframes zone-alarm-pulse {
+  50% {
+    stroke-width: 8px;
+    stroke-opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .zone-step-in,
+  .zone-step-alarm,
+  .zone-alarm-pulse {
+    animation: none;
+  }
+}

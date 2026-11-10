@@ -31,6 +31,8 @@ export function MapKey({
   onToggleLayer,
   showRadios = true,
   showIncidents = true,
+  fenceSteps = "auto",
+  onFenceSteps,
   coverageHours,
   coverageOptions = [],
   onCoverageHours,
@@ -68,6 +70,17 @@ export function MapKey({
             {label}
           </button>
         ))}
+        {activeLayers.fences && onFenceSteps ? (
+          <select
+            className="rounded border border-white/10 bg-white/5 px-1 py-0.5 text-[10px]"
+            value={fenceSteps}
+            onChange={(event) => onFenceSteps(event.target.value)}
+            title="When each geofence's alarm lines show"
+          >
+            <option value="auto">Alarm lines when needed</option>
+            <option value="always">Alarm lines always</option>
+          </select>
+        ) : null}
         {activeLayers.coverage && coverageOptions.length ? (
           <select
             className="rounded border border-white/10 bg-white/5 px-1 py-0.5 text-[10px]"

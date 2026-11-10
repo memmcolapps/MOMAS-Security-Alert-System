@@ -245,6 +245,8 @@ export function OperationsRoute() {
         : key === "fences" ? hasGeofence
         : key === "drones" ? hasDrone : true
   )));
+  // Geofence step lines: only when needed (hover, click, close in, crossed) or always.
+  const [fenceSteps, setFenceSteps] = usePersistentChoice("momas_ops_fence_steps", "auto", ["auto", "always"]);
   const [coverageHours, setCoverageHours] = usePersistentChoice("momas_ops_coverage_hours", "4", COVERAGE_HOURS);
   const [openRadios, setOpenRadios] = useState([]);
   const { target: followTarget, position: followPosition } = useFollow();
@@ -837,6 +839,8 @@ export function OperationsRoute() {
         sosTrails={hasRadio ? sosTrails : NO_TRAILS}
         drones={hasDrone ? drones : []}
         geofences={hasGeofence ? geofences : []}
+        zoneAlarms={hasGeofence ? activeAlerts : EMPTY_LIST}
+        fenceSteps={fenceSteps}
         activeLayers={visibleLayers}
         basemap={basemap}
         focusTarget={focusTarget}
@@ -998,6 +1002,8 @@ export function OperationsRoute() {
         showRadios={hasRadio}
         showIncidents={hasOsint}
         onToggleLayer={(key) => setActiveLayers((current) => ({ ...current, [key]: !current[key] }))}
+        fenceSteps={fenceSteps}
+        onFenceSteps={setFenceSteps}
         coverageHours={coverageHours}
         coverageOptions={COVERAGE_HOURS}
         onCoverageHours={setCoverageHours}
