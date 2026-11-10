@@ -84,7 +84,7 @@ export function AppHeader() {
             <NavItem to="/devices" icon={Radio} label="Devices" active={isActive("/devices")} />
           </> : null}
           {modules.has("geofence") ? <NavItem to="/geofences" icon={MapPinned} label="Geofences" active={isActive("/geofences")} /> : null}
-          {modules.has("osint") ? <NavItem to="/osint" icon={FileSearch} label="OSINT" active={isActive("/osint")} /> : null}
+          {isAdmin ? <NavItem to="/osint" icon={FileSearch} label="OSINT" active={isActive("/osint")} /> : null}
           {modules.has("drone") ? <NavItem to="/drones" icon={Plane} label="Drones" active={isActive("/drones")} /> : null}
           {/* Platform administration lives in the account menu, not here. This
               bar is operational views, and an eighth item pushed the account

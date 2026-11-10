@@ -85,6 +85,27 @@ router.use("*", async (c, next) => {
   await next();
 });
 
+// The review pipeline (raw items, review queue, source registry, source
+// performance) is platform-only. Organizations see the incidents it produces
+// on the map, never the queue itself. Support may look; ops and above act.
+const PIPELINE_PATHS = ["/items", "/review-queue", "/sources", "/analytics"];
+const pipelinePrefix = (path: string) => {
+  const sub = path.replace(/^.*?\/osint(?=\/|$)/, "");
+  return PIPELINE_PATHS.some((p) => sub === p || sub.startsWith(`${p}/`));
+};
+
+router.use("*", async (c, next) => {
+  if (!pipelinePrefix(c.req.path)) return next();
+  const user = currentUser(c);
+  if (!isPlatformStaff(user)) {
+    return c.json({ error: "Only platform staff can review the OSINT pipeline." }, 403);
+  }
+  if (c.req.method !== "GET" && !isPlatformOperator(user)) {
+    return c.json({ error: "This action needs the Operations role." }, 403);
+  }
+  await next();
+});
+
 function publishedDate(item: any) {
   const value = item.published_at || item.created_at || new Date().toISOString();
   return new Date(value).toISOString().slice(0, 10);

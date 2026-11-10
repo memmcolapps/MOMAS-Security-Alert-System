@@ -174,7 +174,7 @@ function requireModule(module) {
     const modules = enabledModules(session);
     if (modules.has(module)) return session;
     const fallback = ["radio", "drone", "osint", "geofence"].find((candidate) => modules.has(candidate));
-    throw redirect({ to: fallback === "drone" ? "/drones" : fallback === "osint" ? "/osint" : fallback === "geofence" ? "/geofences" : "/" });
+    throw redirect({ to: fallback === "drone" ? "/drones" : fallback === "geofence" ? "/geofences" : "/" });
   };
 }
 
@@ -244,7 +244,8 @@ const geofencesRoute = createRoute({
 const osintRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/osint",
-  beforeLoad: requireModule("osint"),
+  // The review pipeline is platform-only; orgs see OSINT incidents on the map.
+  beforeLoad: () => requirePlatform("support"),
   component: page("OsintRoute"),
 });
 
