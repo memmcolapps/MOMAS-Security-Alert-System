@@ -55,7 +55,7 @@ router.get("/", async (c) => {
 router.post("/", requireOps, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   if (!body.name) return c.json({ error: "Enter an organization name." }, 400);
-  const availableModules = ["radio", "drone", "osint"];
+  const availableModules = ["radio", "drone", "osint", "geofence"];
   const modules = [...new Set((Array.isArray(body.modules) ? body.modules : availableModules)
     .map((module: unknown) => String(module).toLowerCase())
     .filter((module: string) => availableModules.includes(module)))];
@@ -391,7 +391,7 @@ router.put("/:id/access", requireOps, async (c) => {
   }
   let modules;
   if (body.modules !== undefined) {
-    const availableModules = ["radio", "drone", "osint"];
+    const availableModules = ["radio", "drone", "osint", "geofence"];
     modules = [...new Set((Array.isArray(body.modules) ? body.modules : [])
       .map((module: unknown) => String(module).toLowerCase())
       .filter((module: string) => availableModules.includes(module)))];

@@ -29,6 +29,8 @@ export function MapKey({
   layers = {},
   activeLayers = {},
   onToggleLayer,
+  showRadios = true,
+  showIncidents = true,
   coverageHours,
   coverageOptions = [],
   onCoverageHours,
@@ -83,7 +85,7 @@ export function MapKey({
       </div>
       {open ? (
         <div className="mt-2 space-y-2 border-t border-white/10 pt-2">
-          <div>
+          {showRadios ? <div>
             <div className="mb-1 text-[9px] uppercase tracking-wide text-neutral-600">Radios</div>
             {RADIO_KEY.map(([status, label]) => (
               <div className="my-1 flex items-center gap-2 text-neutral-400" key={status}>
@@ -98,8 +100,8 @@ export function MapKey({
               <span className="grid h-3.5 w-3.5 place-items-center rounded-full border border-ops-green text-[7px] font-bold text-ops-green">3</span>
               Radios in one place
             </div>
-          </div>
-          <div>
+          </div> : null}
+          {showIncidents ? <div>
             <div className="mb-1 text-[9px] uppercase tracking-wide text-neutral-600">Incidents</div>
             {Object.entries(severityLabels).map(([key, label]) => (
               <div className="my-1 flex items-center gap-2 text-neutral-400" key={key}>
@@ -110,7 +112,7 @@ export function MapKey({
                 {SEVERITY_NAMES[key] || ""}
               </div>
             ))}
-          </div>
+          </div> : null}
         </div>
       ) : null}
     </section>

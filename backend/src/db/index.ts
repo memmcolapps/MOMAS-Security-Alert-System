@@ -545,7 +545,18 @@ async function init() {
       END $$;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS radio_seats INTEGER NOT NULL DEFAULT 2;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS platform_radio_seats INTEGER NOT NULL DEFAULT 1;
-      ALTER TABLE organizations ADD COLUMN IF NOT EXISTS modules TEXT[] NOT NULL DEFAULT ARRAY['radio', 'drone', 'osint'];
+      ALTER TABLE organizations ADD COLUMN IF NOT EXISTS modules TEXT[] NOT NULL DEFAULT ARRAY['radio', 'drone', 'osint', 'geofence'];
+      ALTER TABLE organizations ALTER COLUMN modules SET DEFAULT ARRAY['radio', 'drone', 'osint', 'geofence'];
+      CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE name = 'organization-geofence-module') THEN
+          UPDATE organizations
+             SET modules = array_append(COALESCE(modules, ARRAY[]::TEXT[]), 'geofence')
+           WHERE NOT ('geofence' = ANY(COALESCE(modules, ARRAY[]::TEXT[])));
+          INSERT INTO schema_migrations (name) VALUES ('organization-geofence-module');
+        END IF;
+      END $$;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS pocstars_company_name TEXT;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS pocstars_dispatcher_uid TEXT;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS pocstars_last_sync_at TIMESTAMPTZ;
@@ -4727,9 +4738,9 @@ async function createOrganization({
   pocstars_company_name = null,
   radio_seats = 2,
   platform_radio_seats = 1,
-  modules = ["radio", "drone", "osint"],
+  modules = ["radio", "drone", "osint", "geofence"],
 }) {
-  const validModules = ["radio", "drone", "osint"];
+  const validModules = ["radio", "drone", "osint", "geofence"];
   const selectedModules = [...new Set((Array.isArray(modules) ? modules : validModules)
     .map((module) => String(module).toLowerCase())
     .filter((module) => validModules.includes(module)))];
@@ -4815,7 +4826,7 @@ async function updateOrganizationAccess(id, {
 
   let selectedModules;
   if (modules !== undefined) {
-    const validModules = ["radio", "drone", "osint"];
+    const validModules = ["radio", "drone", "osint", "geofence"];
     selectedModules = [...new Set((Array.isArray(modules) ? modules : [])
       .map((module) => String(module).toLowerCase())
       .filter((module) => validModules.includes(module)))];

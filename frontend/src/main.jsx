@@ -77,7 +77,7 @@ function RootLayout() {
   return (
     <LiveRadioProvider>
       <FollowProvider>
-        <SosAlarmProvider enabled={showHeader}>
+        <SosAlarmProvider enabled={showHeader && showRadio}>
           {showHeader ? (
             <div ref={chromeRef} className="fixed left-0 right-0 top-0 z-[1100]">
               <AppHeader />
@@ -88,8 +88,8 @@ function RootLayout() {
           <Outlet />
           {/* Outlives any one page: a response runs while the operator moves
               between the map, the alarm and the radio console. */}
-          {showHeader ? <FollowBar /> : null}
-          {showHeader ? <SosAlarmBanner /> : null}
+          {showHeader && showRadio ? <FollowBar /> : null}
+          {showHeader && showRadio ? <SosAlarmBanner /> : null}
         </SosAlarmProvider>
       </FollowProvider>
     </LiveRadioProvider>
@@ -159,13 +159,13 @@ async function requirePlatform(minimum) {
 }
 
 const enabledModules = (session) => {
-  if (platformRank(session.user)) return new Set(["radio", "drone", "osint"]);
+  if (platformRank(session.user)) return new Set(["radio", "drone", "osint", "geofence"]);
   const membership = session.user?.active_membership || session.user?.memberships?.find(
     (item) => Number(item.organization_id) === Number(getActiveOrganizationId()),
   ) || session.user?.memberships?.[0];
   return new Set(Array.isArray(membership?.modules) && membership.modules.length
     ? membership.modules
-    : ["radio", "drone", "osint"]);
+    : ["radio", "drone", "osint", "geofence"]);
 };
 
 function requireModule(module) {
@@ -173,8 +173,8 @@ function requireModule(module) {
     const session = await requireReadySession();
     const modules = enabledModules(session);
     if (modules.has(module)) return session;
-    const fallback = ["radio", "drone", "osint"].find((candidate) => modules.has(candidate));
-    throw redirect({ to: fallback === "drone" ? "/drones" : fallback === "osint" ? "/osint" : "/" });
+    const fallback = ["radio", "drone", "osint", "geofence"].find((candidate) => modules.has(candidate));
+    throw redirect({ to: fallback === "drone" ? "/drones" : fallback === "osint" ? "/osint" : fallback === "geofence" ? "/geofences" : "/" });
   };
 }
 
@@ -193,7 +193,9 @@ async function requireOrgAdmin() {
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  beforeLoad: requireModule("radio"),
+  // The map can show any combination of enabled modules, including a drone
+  // or OSINT-only tenant with no radio access.
+  beforeLoad: requireReadySession,
   // `focus` carries an alarm key so the alarms screen can hand an alarm to the
   // operations map ("Show on operations map").
   // `track` lists the tracked radios, so a refresh keeps the split screen.
@@ -235,7 +237,7 @@ const dronesRoute = createRoute({
 const geofencesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/geofences",
-  beforeLoad: requireModule("radio"),
+  beforeLoad: requireModule("geofence"),
   component: page("GeofencesRoute"),
 });
 

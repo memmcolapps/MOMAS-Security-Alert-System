@@ -11,10 +11,14 @@ const FORGET_MS = 20 * 60_000;
  * Nothing here causes a re-render: the points arrive several times a second
  * across the fleet, and only the map's animation loop needs them.
  */
-export function useRadioTracks() {
+export function useRadioTracks(enabled = true) {
   const tracksRef = useRef(new Map());
 
   useEffect(() => {
+    if (!enabled) {
+      tracksRef.current.clear();
+      return undefined;
+    }
     let cancelled = false;
     const tracks = tracksRef.current;
     const ingest = (points, live) => {
@@ -60,7 +64,7 @@ export function useRadioTracks() {
       window.clearInterval(sweep);
       tracks.clear();
     };
-  }, []);
+  }, [enabled]);
 
   return tracksRef;
 }

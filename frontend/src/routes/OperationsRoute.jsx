@@ -49,7 +49,7 @@ import {
   triggerScrape,
 } from "../lib/api";
 import { config } from "../lib/app-config";
-import { isPlatformOperator } from "../lib/platform-roles";
+import { isPlatformOperator, isPlatformStaff } from "../lib/platform-roles";
 import {
   NIGERIAN_STATES,
   rangeForMode,
@@ -198,6 +198,16 @@ function usePersistentChoice(key, fallback, allowed) {
 export function OperationsRoute() {
   const queryClient = useQueryClient();
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
+  const user = meQuery.data?.user;
+  const membership = user?.active_membership || user?.memberships?.[0];
+  const enabledModules = new Set(
+    isPlatformStaff(user) ? ["radio", "drone", "osint", "geofence"]
+      : Array.isArray(membership?.modules) ? membership.modules : ["radio", "drone", "osint", "geofence"],
+  );
+  const hasRadio = enabledModules.has("radio");
+  const hasDrone = enabledModules.has("drone");
+  const hasOsint = enabledModules.has("osint");
+  const hasGeofence = enabledModules.has("geofence");
   // Collection is platform-wide and spends shared API quota, so the trigger is
   // operator work. Showing it to tenants only bought them a 403.
   const canTriggerScrape = isPlatformOperator(meQuery.data?.user);
@@ -217,6 +227,21 @@ export function OperationsRoute() {
   // the fleet list, which must agree with the pins exactly.
   const [radioStatuses, setRadioStatuses] = useState({});
   const [activeLayers, setActiveLayers] = useState({ live: true, heat: false, devices: true, drones: true, fences: true, coverage: false });
+  const visibleLayers = {
+    ...activeLayers,
+    live: hasOsint && activeLayers.live,
+    heat: hasOsint && activeLayers.heat,
+    devices: hasRadio && activeLayers.devices,
+    drones: hasDrone && activeLayers.drones,
+    fences: hasGeofence && activeLayers.fences,
+    coverage: hasRadio && activeLayers.coverage,
+  };
+  const availableLayers = Object.fromEntries(Object.entries(LAYER_LABELS).filter(([key]) => (
+    key === "live" || key === "heat" ? hasOsint
+      : key === "devices" || key === "coverage" ? hasRadio
+        : key === "fences" ? hasGeofence
+        : key === "drones" ? hasDrone : true
+  )));
   const [coverageHours, setCoverageHours] = usePersistentChoice("momas_ops_coverage_hours", "4", COVERAGE_HOURS);
   const [openRadios, setOpenRadios] = useState([]);
   const { target: followTarget, position: followPosition } = useFollow();
@@ -230,22 +255,35 @@ export function OperationsRoute() {
   const routeSearch = useSearch({ strict: false });
   const requestedFocusKey = routeSearch?.focus || null;
 
+  useEffect(() => {
+    if (!meQuery.data || hasRadio) return;
+    setTracked([]);
+    setTrackedMotion(null);
+    setReplay(null);
+    setReplayTime(null);
+    setOpenRadios([]);
+    setFocusTarget(null);
+  }, [meQuery.data, hasRadio]);
+
   const incidentQuery = useQuery({
     queryKey: ["incidents", from, to],
     queryFn: () => getIncidents({ limit: config.maxMarkers, from, to }),
     refetchInterval: config.refreshMs,
+    enabled: hasOsint,
   });
 
   const devicesQuery = useQuery({
     queryKey: ["devices"],
     queryFn: listDevices,
     refetchInterval: 60000,
+    enabled: hasRadio,
   });
 
   const locationsQuery = useQuery({
     queryKey: ["locations"],
     queryFn: () => getLocations(),
     refetchInterval: RADIO_POLL_MS,
+    enabled: hasRadio,
   });
 
   // Tracked radios. One is followed on the main map, as before; a second
@@ -254,14 +292,14 @@ export function OperationsRoute() {
   const [tracked, setTracked] = useState(() => trackedFromSearch(routeSearch?.track));
   const [trackedMotion, setTrackedMotion] = useState(null);
   // Every GPS point each radio sends, streamed; the maps play them back.
-  const radioTracks = useRadioTracks();
+  const radioTracks = useRadioTracks(hasRadio);
   const trackedRadioId = tracked.length === 1 ? tracked[0].deviceId : null;
   const trackedKey = tracked.map((item) => item.deviceId).sort().join(",");
   // Every tracked radio's trail in one request, however many there are.
   const trailsQuery = useQuery({
     queryKey: ["radio-tracks", trackedKey],
     queryFn: () => getRadioTracks(trackedKey.split(","), TRAIL_MINUTES),
-    enabled: Boolean(trackedKey),
+    enabled: Boolean(trackedKey) && hasRadio,
     refetchInterval: 10_000,
     // Adding a radio must not blank every other tile's trail while it loads.
     placeholderData: (previous) => previous,
@@ -307,7 +345,7 @@ export function OperationsRoute() {
   const replayQuery = useQuery({
     queryKey: ["radio-replay", replay?.deviceId, replay?.from, replay?.to],
     queryFn: () => getRadioReplay(replay.deviceId, replay.from, replay.to),
-    enabled: Boolean(replay),
+    enabled: Boolean(replay) && hasRadio,
     staleTime: Infinity,
   });
   const replayData = useMemo(
@@ -323,7 +361,7 @@ export function OperationsRoute() {
   const coverageQuery = useQuery({
     queryKey: ["radio-coverage", coverageHours],
     queryFn: () => getRadioCoverage(Number(coverageHours)),
-    enabled: Boolean(activeLayers.coverage),
+    enabled: Boolean(visibleLayers.coverage),
     refetchInterval: 60_000,
   });
   const stopTracking = useCallback(() => {
@@ -422,24 +460,27 @@ export function OperationsRoute() {
     // changes. The poll is the backstop for when the stream is down, and on a
     // flaky link that is exactly when an SOS matters, so it stays short.
     refetchInterval: 15_000,
+    enabled: hasRadio,
   });
 
   const dronesQuery = useQuery({
     queryKey: ["drone-positions"],
     queryFn: getDronePositions,
     refetchInterval: dronePollInterval,
+    enabled: hasDrone,
   });
 
   const geofencesQuery = useQuery({
     queryKey: ["geofences"],
     queryFn: listGeofences,
     refetchInterval: 60_000,
+    enabled: hasGeofence,
   });
 
   const evidenceQuery = useQuery({
     queryKey: ["incident-evidence", selectedIncidentId],
     queryFn: () => getIncidentEvidence(selectedIncidentId),
-    enabled: Boolean(selectedIncidentId),
+    enabled: Boolean(selectedIncidentId) && hasOsint,
   });
 
   const scrapeMutation = useMutation({
@@ -447,12 +488,12 @@ export function OperationsRoute() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["incidents"] }),
   });
 
-  const incidents = incidentQuery.data?.incidents || [];
-  const devices = devicesQuery.data?.devices || [];
-  const locations = locationsQuery.data?.data || [];
-  const allAlerts = useMemo(() => alertsQuery.data?.alerts || [], [alertsQuery.data?.alerts]);
-  const drones = dronesQuery.data?.drones || [];
-  const geofences = geofencesQuery.data?.zones || [];
+  const incidents = hasOsint ? (incidentQuery.data?.incidents || []) : [];
+  const devices = hasRadio ? (devicesQuery.data?.devices || []) : [];
+  const locations = hasRadio ? (locationsQuery.data?.data || []) : [];
+  const allAlerts = useMemo(() => hasRadio ? (alertsQuery.data?.alerts || []) : [], [alertsQuery.data?.alerts, hasRadio]);
+  const drones = hasDrone ? (dronesQuery.data?.drones || []) : [];
+  const geofences = hasGeofence ? (geofencesQuery.data?.zones || []) : [];
   const selectedIncident = useMemo(
     () =>
       evidenceQuery.data?.incident ||
@@ -542,7 +583,7 @@ export function OperationsRoute() {
     queryKey: ["sos-trails", sosRadioKey],
     queryFn: () =>
       getRadioTracks(sosRadioKey.split(","), Math.min(240, Math.max(1, Math.ceil((Date.now() - sosStartMs) / 60_000) + 1))),
-    enabled: Boolean(sosRadioKey),
+    enabled: Boolean(sosRadioKey) && hasRadio,
     refetchInterval: 10_000,
     placeholderData: (previous) => previous,
   });
@@ -785,35 +826,35 @@ export function OperationsRoute() {
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-ops-bg text-neutral-200">
       <OperationsMap
-        incidents={visibleIncidents}
+        incidents={hasOsint ? visibleIncidents : []}
         devices={devices}
         locations={locations}
-        sosAlerts={activeAlerts}
-        sosRadioIds={sosRadioIds}
-        sosTrails={sosTrails}
-        drones={drones}
-        geofences={geofences}
-        activeLayers={activeLayers}
+        sosAlerts={hasRadio ? activeAlerts : []}
+        sosRadioIds={hasRadio ? sosRadioIds : new Set()}
+        sosTrails={hasRadio ? sosTrails : NO_TRAILS}
+        drones={hasDrone ? drones : []}
+        geofences={hasGeofence ? geofences : []}
+        activeLayers={visibleLayers}
         basemap={basemap}
         focusTarget={focusTarget}
         onIncidentFocus={(incident) => setSelectedIncidentId(incident.id)}
         onRadioSelect={openRadioCard}
-        followLine={followTarget && followPosition ? { from: followPosition, to: followTarget } : null}
-        trackedRadioId={trackedRadioId}
-        trackPaused={Boolean(trackedRadioId && tracked[0].paused)}
-        trail={(trackedRadioId && trails[trackedRadioId]) || EMPTY_TRAIL}
-        radioTracks={radioTracks}
+        followLine={hasRadio && followTarget && followPosition ? { from: followPosition, to: followTarget } : null}
+        trackedRadioId={hasRadio ? trackedRadioId : null}
+        trackPaused={Boolean(hasRadio && trackedRadioId && tracked[0].paused)}
+        trail={(hasRadio && trackedRadioId && trails[trackedRadioId]) || EMPTY_TRAIL}
+        radioTracks={hasRadio ? radioTracks : null}
         radioFilter={radioFilter}
         onRadioStatuses={setRadioStatuses}
-        replay={replayData}
-        replayTime={replayTime}
-        coverage={activeLayers.coverage ? coverageQuery.data : null}
+        replay={hasRadio ? replayData : null}
+        replayTime={hasRadio ? replayTime : null}
+        coverage={visibleLayers.coverage ? coverageQuery.data : null}
         onTrackRadio={trackRadio}
         onTrackPause={pauseTracking}
         onTrackedMotion={reportTrackedMotion}
       />
 
-      {replay ? (
+      {hasRadio && replay ? (
         <ReplayPanel
           device={deviceRegistry.get(replay.deviceId) || { device_id: replay.deviceId }}
           choice={replay.choice}
@@ -827,7 +868,7 @@ export function OperationsRoute() {
         />
       ) : null}
 
-      {trackedRadioId ? (
+      {hasRadio && trackedRadioId ? (
         <TrackingStrip
           device={deviceRegistry.get(trackedRadioId) || { device_id: trackedRadioId }}
           location={latestDeviceLocations.get(trackedRadioId)}
@@ -840,7 +881,7 @@ export function OperationsRoute() {
         />
       ) : null}
 
-      {gridActive ? (
+      {hasRadio && gridActive ? (
         <TrackGrid
           // Changes whenever an alarm banner appears, goes or changes, so the
           // grid can move down out from under it.
@@ -850,7 +891,7 @@ export function OperationsRoute() {
           style={{
             top: "calc(var(--ops-chrome) + 0.75rem)",
             bottom: "0.75rem",
-            left: activeLayers.devices ? "calc(4rem + 280px + 0.75rem)" : "0.75rem",
+            left: visibleLayers.devices ? "calc(4rem + 280px + 0.75rem)" : "0.75rem",
             right: panelOpen ? "calc(380px + 2.5rem)" : "2.5rem",
           }}
           tracked={tracked}
@@ -877,7 +918,7 @@ export function OperationsRoute() {
         />
       ) : null}
 
-      {openRadios.map((card, index) => {
+      {hasRadio ? openRadios.map((card, index) => {
         const device = deviceRegistry.get(card.deviceId) || card.fallback;
         if (!device) return null;
         return (
@@ -900,7 +941,7 @@ export function OperationsRoute() {
             onReplay={() => startReplay(card.deviceId)}
           />
         );
-      })}
+      }) : null}
 
       {liveMode ? (
         <section className="glass-panel absolute left-1/2 top-[calc(var(--ops-chrome)+0.75rem)] z-[1000] flex -translate-x-1/2 items-center gap-3 rounded-md border border-ops-red/40 px-3 py-2 text-[11px] text-neutral-200">
@@ -927,7 +968,7 @@ export function OperationsRoute() {
         </section>
       ) : null}
 
-      {activeLayers.devices ? (
+      {visibleLayers.devices ? (
         <RadioFleetPanel
           devices={devices}
           statuses={radioStatuses}
@@ -938,9 +979,9 @@ export function OperationsRoute() {
           onOpen={openRadioCard}
           open={fleetOpen}
           onToggle={() => setFleetOpen((value) => !value)}
-          header={<LiveMonitoring stats={stats} total={incidents.length} />}
+          header={hasOsint ? <LiveMonitoring stats={stats} total={incidents.length} /> : null}
         />
-      ) : (
+      ) : hasOsint ? (
         <section className="glass-panel absolute left-16 top-[calc(var(--ops-chrome)+0.75rem)] z-[1000] rounded-md px-3 py-2">
           <LiveMonitoring stats={stats} total={incidents.length} />
         </section>
@@ -949,8 +990,10 @@ export function OperationsRoute() {
       <MapKey
         basemap={basemap}
         onBasemap={setBasemap}
-        layers={LAYER_LABELS}
-        activeLayers={activeLayers}
+        layers={availableLayers}
+        activeLayers={visibleLayers}
+        showRadios={hasRadio}
+        showIncidents={hasOsint}
         onToggleLayer={(key) => setActiveLayers((current) => ({ ...current, [key]: !current[key] }))}
         coverageHours={coverageHours}
         coverageOptions={COVERAGE_HOURS}
@@ -960,7 +1003,7 @@ export function OperationsRoute() {
         className={`absolute top-[calc(var(--ops-chrome)+0.75rem)] hidden ${gridActive ? "" : "lg:block"} ${panelOpen ? "right-[400px]" : "right-5"}`}
       />
 
-      <aside
+      {hasOsint ? <aside
         className={`glass-panel absolute right-0 top-[var(--ops-chrome)] z-[1000] flex h-[calc(100vh-var(--ops-chrome))] w-[380px] max-w-[calc(100vw-32px)] flex-col border-r-0 transition-transform ${
           panelOpen ? "translate-x-0" : "translate-x-full"
         }`}
@@ -1068,9 +1111,9 @@ export function OperationsRoute() {
             ) : null}
           </div>
         ) : null}
-      </aside>
+      </aside> : null}
 
-      {selectedIncident ? (
+      {hasOsint && selectedIncident ? (
         <IncidentEvidenceDrawer
           evidence={evidenceQuery.data?.evidence || []}
           incident={selectedIncident}
@@ -1079,14 +1122,14 @@ export function OperationsRoute() {
         />
       ) : null}
 
-      <button
+      {hasOsint ? <button
         className={`glass-panel absolute top-1/2 z-[1001] flex h-12 w-7 -translate-y-1/2 items-center justify-center rounded-l-md text-ops-red transition-[right] ${
           panelOpen ? "right-[380px]" : "right-0"
         }`}
         onClick={() => setPanelOpen(!panelOpen)}
       >
         {panelOpen ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
-      </button>
+      </button> : null}
 
       {activeAlerts.length ? (
         <section

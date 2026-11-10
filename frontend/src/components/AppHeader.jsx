@@ -22,7 +22,7 @@ export function AppHeader() {
   const memberships = user?.memberships || [];
   const org = user?.active_membership || memberships.find((membership) => String(membership.organization_id) === String(getActiveOrganizationId())) || memberships[0] || null;
   const canManageOrg = isAdmin || ["org_owner", "org_admin", "unit_admin", "admin"].includes(org?.role);
-  const modules = new Set(isAdmin ? ["radio", "drone", "osint"] : (org?.modules?.length ? org.modules : ["radio", "drone", "osint"]));
+  const modules = new Set(isAdmin ? ["radio", "drone", "osint", "geofence"] : (org?.modules?.length ? org.modules : ["radio", "drone", "osint", "geofence"]));
   const accessSummary = org
     ? org.all_states
       ? "all states"
@@ -77,13 +77,13 @@ export function AppHeader() {
         ) : null}
 
         <nav className="flex items-center gap-1 text-[11px] font-bold">
+          <NavItem to="/" icon={Map} label="Map" active={path === "/"} />
           {modules.has("radio") ? <>
-            <NavItem to="/" icon={Map} label="Map" active={path === "/"} />
             <NavItem to="/replay" icon={History} label="Replay" active={isActive("/replay")} />
             <NavItem to="/alarms" icon={Siren} label="Alarms" active={isActive("/alarms")} />
             <NavItem to="/devices" icon={Radio} label="Devices" active={isActive("/devices")} />
-            <NavItem to="/geofences" icon={MapPinned} label="Geofences" active={isActive("/geofences")} />
           </> : null}
+          {modules.has("geofence") ? <NavItem to="/geofences" icon={MapPinned} label="Geofences" active={isActive("/geofences")} /> : null}
           {modules.has("osint") ? <NavItem to="/osint" icon={FileSearch} label="OSINT" active={isActive("/osint")} /> : null}
           {modules.has("drone") ? <NavItem to="/drones" icon={Plane} label="Drones" active={isActive("/drones")} /> : null}
           {/* Platform administration lives in the account menu, not here. This
