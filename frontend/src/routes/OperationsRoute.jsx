@@ -85,6 +85,9 @@ const COVERAGE_HOURS = ["1", "4", "12", "24"];
 
 // Stable, so an idle map is not handed a "new" empty trail on every render.
 const EMPTY_TRAIL = [];
+// One shared empty list, so a disabled module or a loading query does not
+// hand the memos below a new array on every render.
+const EMPTY_LIST = [];
 const NO_TRAILS = {};
 
 // A radio's own SOS, as against a geofence alarm about some other asset.
@@ -488,12 +491,12 @@ export function OperationsRoute() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["incidents"] }),
   });
 
-  const incidents = hasOsint ? (incidentQuery.data?.incidents || []) : [];
-  const devices = hasRadio ? (devicesQuery.data?.devices || []) : [];
-  const locations = hasRadio ? (locationsQuery.data?.data || []) : [];
-  const allAlerts = useMemo(() => hasRadio ? (alertsQuery.data?.alerts || []) : [], [alertsQuery.data?.alerts, hasRadio]);
-  const drones = hasDrone ? (dronesQuery.data?.drones || []) : [];
-  const geofences = hasGeofence ? (geofencesQuery.data?.zones || []) : [];
+  const incidents = (hasOsint && incidentQuery.data?.incidents) || EMPTY_LIST;
+  const devices = (hasRadio && devicesQuery.data?.devices) || EMPTY_LIST;
+  const locations = (hasRadio && locationsQuery.data?.data) || EMPTY_LIST;
+  const allAlerts = (hasRadio && alertsQuery.data?.alerts) || EMPTY_LIST;
+  const drones = (hasDrone && dronesQuery.data?.drones) || EMPTY_LIST;
+  const geofences = (hasGeofence && geofencesQuery.data?.zones) || EMPTY_LIST;
   const selectedIncident = useMemo(
     () =>
       evidenceQuery.data?.incident ||
@@ -985,7 +988,7 @@ export function OperationsRoute() {
         <section className="glass-panel absolute left-16 top-[calc(var(--ops-chrome)+0.75rem)] z-[1000] rounded-md px-3 py-2">
           <LiveMonitoring stats={stats} total={incidents.length} />
         </section>
-      )}
+      ) : null}
 
       <MapKey
         basemap={basemap}
