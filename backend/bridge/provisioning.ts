@@ -1007,6 +1007,31 @@ export class PocstarsProvisioning {
     }));
   }
 
+  // The current state of particular alarms, whoever they were sent to. MOMAS
+  // asks about every alarm it still shows as open: one answered or closed in
+  // another company's own dispatcher console never appears in 583's records,
+  // so this is the only way MOMAS learns about it. Same field names as the
+  // records page, so MOMAS reconciles both the same way.
+  async sosAlarmStatuses(sosMsgIds: number[]) {
+    if (!sosMsgIds.length) return [];
+    const [rows]: any = await this.pool.query(
+      `SELECT sos_msg_id AS sosMsgId, sos_status AS sosStatus,
+              sos_process_time_stamp AS sosPtamp, sos_end_time_stamp AS sosEtamp,
+              sos_processor_id AS sosProcessorId, sos_processor_name AS sosProcessorName
+         FROM tb_sos_alarm_message
+        WHERE sos_msg_id IN (?)`,
+      [sosMsgIds],
+    );
+    return rows.map((row: any) => ({
+      sosMsgId: Number(row.sosMsgId),
+      sosStatus: Number(row.sosStatus),
+      sosPtamp: row.sosPtamp === null ? null : Number(row.sosPtamp),
+      sosEtamp: row.sosEtamp === null ? null : Number(row.sosEtamp),
+      sosProcessorId: row.sosProcessorId === null ? null : Number(row.sosProcessorId),
+      sosProcessorName: row.sosProcessorName ?? null,
+    }));
+  }
+
   // The whole inventory read in one call: the same two queries listGroups and
   // listRadios run, but for every company at once. The inventory sync used to
   // ask company by company, and each ask is a round trip over the reverse

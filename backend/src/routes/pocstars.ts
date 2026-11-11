@@ -16,7 +16,7 @@ import * as db from "../db";
 import { bus } from "../events";
 import { fetchLastLocations } from "../pocstars/locations";
 import { recordedLocations } from "../pocstars/position-recorder";
-import { startSosPush } from "../pocstars/sos-push";
+import { readSosStatuses, startSosPush } from "../pocstars/sos-push";
 import { count } from "../metrics";
 import { alertListenerCount } from "./alerts";
 import { provisionOnNetwork } from "../pocstars/live-gateway";
@@ -637,12 +637,22 @@ async function reconcileSosStatuses() {
   if (sosReconcileRunning) return;
   sosReconcileRunning = true;
   try {
-    const [processingData, resolvedData] = await Promise.all([
+    // 583's pages only list alarms sent to 583. Alarms from other companies,
+    // or from a radio in a private call, are answered and closed in consoles
+    // MOMAS never hears from, so their state is read straight from the radio
+    // network's database as well. Independent reads, so they run together.
+    // The vendor pages cross the internet and time out on this link now and
+    // then; that must not hold back the direct read, so each stands alone.
+    const [processing, resolved, direct] = await Promise.allSettled([
       fetchPocstarsSos(DEFAULT_TARGET_UID, { status: 1, pageSize: 200 }),
       fetchPocstarsSos(DEFAULT_TARGET_UID, { status: 2, pageSize: 200 }),
+      db.openSosMsgIds().then((ids) => readSosStatuses(ids)),
     ]);
-    await reconcileAndBroadcast(processingData?.data?.rows || []);
-    await reconcileAndBroadcast(resolvedData?.data?.rows || []);
+    if (direct.status === "fulfilled" && direct.value) await reconcileAndBroadcast(direct.value);
+    if (processing.status === "fulfilled") await reconcileAndBroadcast(processing.value?.data?.rows || []);
+    if (resolved.status === "fulfilled") await reconcileAndBroadcast(resolved.value?.data?.rows || []);
+    const failed = [processing, resolved].find((result) => result.status === "rejected") as PromiseRejectedResult | undefined;
+    if (failed) throw failed.reason;
     count("sos.reconcile.ok");
   } catch (error: any) {
     count("sos.reconcile.fail");

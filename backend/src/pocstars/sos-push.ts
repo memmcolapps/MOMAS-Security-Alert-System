@@ -45,6 +45,25 @@ export function sosPushStatus() {
   };
 }
 
+/**
+ * The radio network's current state of these alarms, read from its database
+ * over the open push link. Null when the link is down or the bridge is too
+ * old to answer, so the caller simply tries again next round.
+ */
+export async function readSosStatuses(sosMsgIds: number[]) {
+  const client = state.client;
+  if (!client || !sosMsgIds.length) return null;
+  try {
+    return (await client.provision("provision.sos.statuses", { sosMsgIds })) as any[];
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.startsWith("Unknown provisioning command")) {
+      console.warn("[SOS] reading alarm statuses from the bridge failed:", message);
+    }
+    return null;
+  }
+}
+
 export function startSosPush(handler: SosHandler) {
   if (!liveRadioConfigured() || state.handler) return;
   state.handler = handler;

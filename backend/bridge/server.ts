@@ -489,6 +489,20 @@ async function handleProvisioning(
           result: companyIds.map((id) => ({ companyId: id, ...byCompany.get(id) })),
         });
       }
+      case "provision.sos.statuses": {
+        const ids = Array.isArray(message.sosMsgIds)
+          ? [...new Set(message.sosMsgIds.map(Number))].filter(
+              (id) => Number.isSafeInteger(id) && id > 0,
+            )
+          : [];
+        if (ids.length > 1000) return fail("provision.sos.statuses takes at most 1000 alarm ids.");
+        return send(ws, {
+          type: "provision.result",
+          requestId,
+          ok: true,
+          result: await provisioning.sosAlarmStatuses(ids as number[]),
+        });
+      }
       case "provision.radios": {
         return send(ws, {
           type: "provision.result",

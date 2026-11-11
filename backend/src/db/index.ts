@@ -2476,6 +2476,15 @@ async function sosStatusesByMsgId(sosMsgIds: number[]) {
   return statuses;
 }
 
+/** Alarms MOMAS still shows as open or in progress, newest first. */
+async function openSosMsgIds(limit = 1000) {
+  const { rows } = await pool.query(
+    `SELECT sos_msg_id FROM sos_alerts WHERE status < 2 ORDER BY triggered_at DESC LIMIT $1`,
+    [limit],
+  );
+  return rows.map((row) => Number(row.sos_msg_id));
+}
+
 async function reconcileSosAlert({
   sos_msg_id,
   upstream_status,
@@ -5637,6 +5646,7 @@ export {
   getSosAlert,
   reconcileSosAlert,
   sosStatusesByMsgId,
+  openSosMsgIds,
   beginSosAction,
   completeSosAction,
   failSosAction,

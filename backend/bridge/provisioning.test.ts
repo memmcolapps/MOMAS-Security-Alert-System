@@ -155,3 +155,33 @@ describe("listInventory", () => {
     expect(queries).toHaveLength(0);
   });
 });
+
+describe("reading alarm statuses", () => {
+  test("returns an alarm closed in another company's console, in the records page's shape", async () => {
+    const asked: unknown[][] = [];
+    const provisioning = new PocstarsProvisioning({
+      host: "127.0.0.1", port: 3306, user: "test", password: "test", database: "test",
+    });
+    (provisioning as any).pool = {
+      query: async (_sql: string, args: unknown[]) => {
+        asked.push(args);
+        // Alarm 183: Ministry of Steel's own dispatcher (588) closed it.
+        return [[{ sosMsgId: "183", sosStatus: "2", sosPtamp: "1776861927382", sosEtamp: "1776861944717", sosProcessorId: "588", sosProcessorName: "dp1@MMSD.TSY" },
+                 { sosMsgId: "301", sosStatus: "0", sosPtamp: null, sosEtamp: null, sosProcessorId: null, sosProcessorName: null }], []];
+      },
+    };
+    const rows = await provisioning.sosAlarmStatuses([183, 301]);
+    expect(asked[0]).toEqual([[183, 301]]);
+    expect(rows[0]).toEqual({ sosMsgId: 183, sosStatus: 2, sosPtamp: 1776861927382, sosEtamp: 1776861944717, sosProcessorId: 588, sosProcessorName: "dp1@MMSD.TSY" });
+    expect(rows[1].sosStatus).toBe(0);
+    expect(rows[1].sosEtamp).toBeNull();
+  });
+
+  test("asks nothing for an empty list", async () => {
+    const provisioning = new PocstarsProvisioning({
+      host: "127.0.0.1", port: 3306, user: "test", password: "test", database: "test",
+    });
+    (provisioning as any).pool = { query: async () => { throw new Error("should not query"); } };
+    expect(await provisioning.sosAlarmStatuses([])).toEqual([]);
+  });
+});
