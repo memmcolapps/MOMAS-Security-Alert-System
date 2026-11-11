@@ -9,6 +9,7 @@ type TokenPayload = {
   email: string;
   platform_role: string;
   exp: number;
+  iat?: number;
 };
 
 const base64url = (value: Buffer | string) =>
@@ -18,11 +19,13 @@ const base64url = (value: Buffer | string) =>
     .replace(/\+/g, "-")
     .replace(/\//g, "_");
 
-function signToken(payload: Omit<TokenPayload, "exp">, ttlSeconds = 7 * 24 * 60 * 60) {
+function signToken(payload: Omit<TokenPayload, "exp" | "iat">, ttlSeconds = 7 * 24 * 60 * 60) {
   const header = { alg: "HS256", typ: "JWT" };
+  const issuedAt = Math.floor(Date.now() / 1000);
   const body: TokenPayload = {
     ...payload,
-    exp: Math.floor(Date.now() / 1000) + ttlSeconds,
+    iat: issuedAt,
+    exp: issuedAt + ttlSeconds,
   };
   const encodedHeader = base64url(JSON.stringify(header));
   const encodedBody = base64url(JSON.stringify(body));
@@ -105,11 +108,27 @@ function loadIdentity(userId: number) {
   });
 }
 
+// Streams, the live radio socket and audio players, which a browser opens
+// without letting the page set headers.
+const URL_TOKEN_PATHS = /\/(events|positions\/stream|radio\/live|radio\/recordings\/[^/]+\/audio)$/;
+
+/** True while the account behind a long-lived connection may still use it. */
+async function isUserStillActive(userId: number) {
+  const identity = await loadIdentity(userId);
+  return Boolean(identity && identity.user.status === "active");
+}
+
 async function currentUserFromRequest(c: Context) {
   const auth = c.req.header("authorization") || "";
   // EventSource (used by the OSINT live alert stream) cannot set headers, so we
   // accept the token and active org via query params as a fallback for SSE.
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : c.req.query("access_token") || "";
+  // Only those few routes take it from the URL; a token there ends up in proxy
+  // logs, so every other route needs the header.
+  const token = auth.startsWith("Bearer ")
+    ? auth.slice(7)
+    : URL_TOKEN_PATHS.test(c.req.path)
+      ? c.req.query("access_token") || ""
+      : "";
   if (!token) return null;
   const checked = checkToken(token);
   if ("reason" in checked) {
@@ -120,7 +139,11 @@ async function currentUserFromRequest(c: Context) {
   const payload = checked.payload;
   const identity = await loadIdentity(payload.sub);
   if (!identity || identity.user.status !== "active") return null;
-  const { user, memberships } = identity;
+  // A password change ends every session signed in before it.
+  const validAfter = identity.user.sessions_valid_after ? new Date(identity.user.sessions_valid_after).getTime() : 0;
+  if (validAfter && (payload.iat ?? 0) < Math.floor(validAfter / 1000)) return null;
+  const { sessions_valid_after: _validAfter, ...user } = identity.user;
+  const { memberships } = identity;
   const requestedOrganizationId = Number(c.req.header("x-organization-id") || c.req.query("organization_id") || "");
   const activeMembership =
     memberships.find((membership) => Number(membership.organization_id) === requestedOrganizationId) ||
@@ -273,6 +296,103 @@ function canManageUnit(membership: any, unitId?: number | null) {
   return true;
 }
 
+// How much each organization role may do. A manager can only hand out or touch
+// roles below their own, so nobody can promote themselves or a friend past
+// where they stand. Owners are the exception: they may appoint other owners.
+const ORG_ROLE_RANK: Record<string, number> = {
+  viewer: 0,
+  operator: 1,
+  unit_admin: 2,
+  org_admin: 3,
+  admin: 3,
+  org_owner: 4,
+};
+
+function orgRoleRank(role: unknown) {
+  return ORG_ROLE_RANK[String(role || "")] ?? -1;
+}
+
+function managesOnlyOneUnit(membership: any) {
+  return membership?.role === "unit_admin" || (membership?.scope_level === "unit" && membership?.unit_id);
+}
+
+/**
+ * Why `actor` may not add, change or remove a member, or null when they may.
+ * `target` is the member's current membership (null for someone new), `next`
+ * the membership asked for (null when removing). Platform staff skip this.
+ */
+function orgMemberChangeError({
+  actor,
+  actorUserId,
+  targetUserId = null,
+  target = null,
+  next = null,
+}: {
+  actor: any;
+  actorUserId: number;
+  targetUserId?: number | null;
+  target?: { role: string; unit_id?: number | null } | null;
+  next?: { role: string; unit_id?: number | null } | null;
+}): string | null {
+  const actorRank = orgRoleRank(actor?.role);
+  const isOwner = actor?.role === "org_owner";
+  if (targetUserId != null && Number(targetUserId) === Number(actorUserId)) {
+    return "You cannot change or remove your own access. Ask another admin.";
+  }
+  if (target) {
+    if (!isOwner && orgRoleRank(target.role) >= actorRank) {
+      return "You can only change members whose role is below yours.";
+    }
+    if (managesOnlyOneUnit(actor) && Number(target.unit_id) !== Number(actor.unit_id)) {
+      return "You can only change members of your own unit.";
+    }
+  }
+  if (next) {
+    const nextRank = orgRoleRank(next.role);
+    if (isOwner ? nextRank > actorRank : nextRank >= actorRank) {
+      return "You can only give roles below your own.";
+    }
+    if (managesOnlyOneUnit(actor) && Number(next.unit_id) !== Number(actor.unit_id)) {
+      return "You can only add members to your own unit.";
+    }
+  }
+  return null;
+}
+
+/**
+ * True when the user may act (answer alarms, message or rename radios), not
+ * just watch. Viewers watch. Platform support watches; ops and admin act.
+ */
+function canOperate(user: any) {
+  if (!user) return false;
+  if (isPlatformStaff(user)) return platformRank(user) >= PLATFORM_RANK.ops;
+  return orgRoleRank(primaryOrganization(user)?.role) >= ORG_ROLE_RANK.operator;
+}
+
+// Route guard for actions. Runs after requireAuth, which sets the user.
+async function requireOperator(c: Context, next: Next) {
+  if (!canOperate(c.get("user"))) {
+    return c.json({ error: "forbidden", message: "Your role can view this but not change it." }, 403);
+  }
+  await next();
+}
+
+// Route guard for a module the platform switches on per company (drone,
+// geofence, ...). The UI hides a module that is off; this stops its API too.
+// No modules listed means all of them, as the UI reads it.
+function requireModule(module: string) {
+  return async (c: Context, next: Next) => {
+    const user = c.get("user");
+    if (!isPlatformStaff(user)) {
+      const modules = primaryOrganization(user)?.modules;
+      if (Array.isArray(modules) && modules.length && !modules.includes(module)) {
+        return c.json({ error: "forbidden", message: "This module is not turned on for your organization." }, 403);
+      }
+    }
+    await next();
+  };
+}
+
 async function scopeForUser(user: any) {
   if (!user || isPlatformStaff(user)) {
     return { allStates: true, allowedStates: [], organizationId: null, unitId: null };
@@ -332,6 +452,12 @@ export {
   canManageOrganization,
   canManageUnit,
   normalizeOrgRole,
+  orgMemberChangeError,
+  managesOnlyOneUnit,
+  canOperate,
+  requireOperator,
+  requireModule,
+  isUserStillActive,
   normalizePlatformRole,
   platformRank,
   isPlatformStaff,

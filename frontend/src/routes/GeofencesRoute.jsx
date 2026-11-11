@@ -42,6 +42,7 @@ import {
   suggestPlaces,
 } from "../lib/api";
 import { IMAGERY_LABEL_TILES, IMAGERY_ROAD_TILES, LABELLED_BASEMAPS, SATELLITE_TILES, vectorBasemapLayer } from "../lib/basemaps";
+import { escapeHtml } from "../lib/domain";
 import {
   circleAroundAssets,
   formatDistance,
@@ -563,11 +564,12 @@ function ZoneMap({
         other.shape_type === "circle"
           ? L.circle([Number(other.center_lat), Number(other.center_lon)], { ...style, radius: Number(other.radius_m) })
           : L.polygon((other.geometry?.coordinates?.[0] || []).map(([lon, lat]) => [lat, lon]), style);
-      shape.bindTooltip(look ? `${other.name} · ${look.zone}` : other.name).addTo(layer);
+      const safeName = escapeHtml(other.name);
+      shape.bindTooltip(look ? `${safeName} · ${escapeHtml(look.zone)}` : safeName).addTo(layer);
       if (!editing) addZoneName(layer, other, colour);
       // Browsing: each zone's alarm lines too. While editing they would
       // crowd the one being drawn, so other zones show their edge only.
-      if (!editing) drawZoneSteps(layer, other, zoneSteps(other.rules), { name: other.name });
+      if (!editing) drawZoneSteps(layer, other, zoneSteps(other.rules), { name: safeName });
     }
   }, [zones, editing, zone.id]);
 
@@ -588,7 +590,7 @@ function ZoneMap({
         fillOpacity: lit ? 1 : 0.75,
         interactive: !quiet,
         bubblingMouseEvents: false,
-      }).bindTooltip(radio.name);
+      }).bindTooltip(escapeHtml(radio.name));
       if (!quiet) marker.bindPopup(() => radioPopup(mapRef.current, radio, editing, handlers), { closeButton: false, offset: [0, -2] });
       marker.addTo(layer);
     }
@@ -766,7 +768,7 @@ function ZoneMap({
         interactive: !drawing,
         bubblingMouseEvents: false,
       })
-        .bindTooltip(`${member.name} · ${member.label}`)
+        .bindTooltip(`${escapeHtml(member.name)} · ${escapeHtml(member.label)}`)
         .addTo(layer);
     }
   }, [members, drawing]);

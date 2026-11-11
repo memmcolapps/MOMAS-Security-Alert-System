@@ -54,6 +54,7 @@ import {
   NIGERIAN_STATES,
   rangeForMode,
   relativeDate,
+  safeUrl,
   severityColors,
   severityLabels,
   todayISO,
@@ -1297,8 +1298,8 @@ function IncidentEvidenceDrawer({ incident, evidence, loading, onClose }) {
               ) : null}
               <div className="mt-2 flex items-center justify-between text-[10px] text-neutral-600">
                 <span>{item.published_at ? relativeDate(item.published_at) : "No publish date"}</span>
-                {item.source_url ? (
-                  <a className="inline-flex items-center gap-1 text-ops-red hover:text-red-300" href={item.source_url} target="_blank" rel="noreferrer">
+                {safeUrl(item.source_url) ? (
+                  <a className="inline-flex items-center gap-1 text-ops-red hover:text-red-300" href={safeUrl(item.source_url)} target="_blank" rel="noreferrer">
                     Source <ExternalLink size={11} />
                   </a>
                 ) : null}

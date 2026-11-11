@@ -98,6 +98,7 @@ export function ReplayMap({ fleet, time: t, focusId, trailMode, hiddenIds, showS
     if (!fleet) return;
     for (const radio of fleet.movers) {
       const name = names(radio.uid);
+      const safeName = escapeHtml(name);
       const click = () => onFocusRef.current(radio.uid);
       const future = L.polyline(wholeRoute(radio.path), {
         renderer: layers.renderer,
@@ -109,11 +110,11 @@ export function ReplayMap({ fleet, time: t, focusId, trailMode, hiddenIds, showS
         dashArray: "5 7",
       })
         .on("click", click)
-        .bindTooltip(name, { sticky: true, direction: "top" });
+        .bindTooltip(safeName, { sticky: true, direction: "top" });
       const done = L.polyline([], { renderer: layers.renderer, color: radio.colour, weight: 4, opacity: 0.95, interactive: false });
       const head = L.marker([radio.path[0].lat, radio.path[0].lon], { icon: headIcon(radio.colour, name), zIndexOffset: 1000 })
         .on("click", click)
-        .bindTooltip(name, { direction: "top", offset: [0, -10] });
+        .bindTooltip(safeName, { direction: "top", offset: [0, -10] });
       entriesRef.current.set(radio.uid, { radio, future, done, head, state: null });
     }
     for (const radio of fleet.still) {

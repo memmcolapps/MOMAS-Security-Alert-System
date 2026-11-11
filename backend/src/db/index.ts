@@ -520,6 +520,7 @@ async function init() {
       ALTER TABLE organization_memberships ADD COLUMN IF NOT EXISTS unit_id INTEGER;
       ALTER TABLE organization_memberships ADD COLUMN IF NOT EXISTS scope_level TEXT NOT NULL DEFAULT 'organization';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS sessions_valid_after TIMESTAMPTZ;
       ALTER TABLE organization_units ALTER COLUMN type DROP NOT NULL;
       ALTER TABLE organization_units ALTER COLUMN type DROP DEFAULT;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS pocstars_company_id TEXT;
@@ -4727,7 +4728,7 @@ async function getUserByEmail(email) {
 }
 
 async function getUserById(id) {
-  const { rows } = await pool.query("SELECT id, email, name, platform_role, must_change_password, status, created_at FROM users WHERE id = $1", [id]);
+  const { rows } = await pool.query("SELECT id, email, name, platform_role, must_change_password, status, created_at, sessions_valid_after FROM users WHERE id = $1", [id]);
   return rows[0] ?? null;
 }
 
@@ -5080,6 +5081,9 @@ async function setOrganizationStates(organizationId, states = []) {
 // from the VPS bootstrap and never passed through here - an invited admin would
 // otherwise keep the password whoever invited them had typed.
 async function createUser({ email, name, password, platform_role = "none", must_change_password = true }) {
+  if (String(password || "").length < 8) {
+    throw new Error("Enter a temporary password of at least 8 characters.");
+  }
   const password_hash = await (Bun as any).password.hash(password, {
     algorithm: "bcrypt",
     cost: 10,
@@ -5102,6 +5106,7 @@ async function updateUserPassword(userId, password) {
     `UPDATE users
         SET password_hash = $2,
             must_change_password = false,
+            sessions_valid_after = NOW(),
             updated_at = NOW()
       WHERE id = $1
       RETURNING id, email, name, platform_role, must_change_password, status, created_at`,

@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { WSContext, WSEvents } from "hono/ws";
-import { canManageOrganization, isPlatformStaff, primaryOrganization } from "../auth";
+import { canManageOrganization, canOperate, isPlatformStaff, isUserStillActive, primaryOrganization } from "../auth";
 import { env } from "../config";
 import * as db from "../db";
 import { PocstarsBridgeClient } from "./bridge-client";
@@ -791,7 +791,14 @@ async function endPtt(session: ActiveSession) {
 
 export function liveRadioWebSocket(c: Context): WSEvents {
   const user = c.get("user");
+  // Viewers may listen in, but not call radios or talk.
+  const mayTalk = canOperate(user);
   let session: ActiveSession | null = null;
+  let accountCheck: ReturnType<typeof setInterval> | null = null;
+  const stopAccountCheck = () => {
+    if (accountCheck) clearInterval(accountCheck);
+    accountCheck = null;
+  };
   return {
     onOpen: (_event, ws) => {
       // Capacity is per organization now, so it is reported when a session is
@@ -800,6 +807,17 @@ export function liveRadioWebSocket(c: Context): WSEvents {
         type: "ready",
         configured: liveRadioConfigured(),
       });
+      // A socket outlives the sign-in check that opened it, so a disabled
+      // account is cut off here within a minute.
+      accountCheck = setInterval(async () => {
+        if (await isUserStillActive(Number(user?.id)).catch(() => true)) return;
+        stopAccountCheck();
+        if (session) await cleanup(session, "account_disabled");
+        session = null;
+        try {
+          ws.close(4003, "account_disabled");
+        } catch {}
+      }, 60_000);
     },
     onMessage: async (event, ws) => {
       if (typeof event.data !== "string") {
@@ -822,6 +840,10 @@ export function liveRadioWebSocket(c: Context): WSEvents {
         message = JSON.parse(event.data);
       } catch {
         send(ws, { type: "error", code: "invalid_message", message: "Invalid live-radio command." });
+        return;
+      }
+      if (!mayTalk && ["call.start", "group.start", "ptt.start", "ptt.takeover"].includes(message.type)) {
+        send(ws, { type: "error", code: "forbidden", message: "Your role can listen but not call or talk." });
         return;
       }
       if (message.type === "call.start") {
@@ -851,10 +873,12 @@ export function liveRadioWebSocket(c: Context): WSEvents {
       }
     },
     onClose: () => {
+      stopAccountCheck();
       if (session) void cleanup(session, "socket_closed");
       session = null;
     },
     onError: () => {
+      stopAccountCheck();
       if (session) void cleanup(session, "socket_error");
       session = null;
     },

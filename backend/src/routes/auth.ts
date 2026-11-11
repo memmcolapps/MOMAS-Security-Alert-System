@@ -1,9 +1,17 @@
 import { Hono } from "hono";
 import { requireAuth, signToken } from "../auth";
 import * as db from "../db";
+import { loginGuard } from "../login-guard";
 import { clientIp, count, securityEvent } from "../metrics";
 
 const router = new Hono();
+
+// A real bcrypt hash of a random password, made once, used for unknown emails.
+let dummy: Promise<string> | null = null;
+function dummyHash() {
+  dummy ||= (Bun as any).password.hash(crypto.randomUUID(), { algorithm: "bcrypt", cost: 10 });
+  return dummy as Promise<string>;
+}
 
 router.post("/login", async (c) => {
   const body = await c.req.json().catch(() => ({}));
@@ -11,14 +19,24 @@ router.post("/login", async (c) => {
   const password = String(body.password || "");
   if (!email || !password) return c.json({ error: "email and password are required" }, 400);
 
+  const ip = clientIp(c);
+  const wait = loginGuard.retryAfter(email, ip);
+  if (wait) {
+    securityEvent("login_failed", { ip, email, path: c.req.path });
+    c.header("Retry-After", String(wait));
+    return c.json({ error: `Too many sign-in attempts. Try again in ${Math.ceil(wait / 60)} minutes.` }, 429);
+  }
   const refuse = () => {
-    securityEvent("login_failed", { ip: clientIp(c), email, path: c.req.path });
+    loginGuard.failed(email, ip);
+    securityEvent("login_failed", { ip, email, path: c.req.path });
     return c.json({ error: "invalid credentials" }, 401);
   };
   const user = await db.getUserByEmail(email);
-  if (!user || user.status !== "active") return refuse();
-  const ok = await (Bun as any).password.verify(password, user.password_hash);
-  if (!ok) return refuse();
+  // An unknown email still pays for a password check, so the response time
+  // does not reveal which emails have accounts.
+  const ok = await (Bun as any).password.verify(password, user?.password_hash || (await dummyHash()));
+  if (!user || user.status !== "active" || !ok) return refuse();
+  loginGuard.succeeded(email);
   count("auth.login_ok");
 
   const memberships = await db.getMembershipsForUser(user.id);
@@ -62,7 +80,11 @@ router.post("/change-password", requireAuth, async (c) => {
 
   const updated = await db.updateUserPassword(currentUser.id, newPassword);
   const memberships = await db.getMembershipsForUser(currentUser.id);
+  // Changing the password signs out every other session, so this one gets a
+  // fresh token to stay signed in.
+  const token = signToken({ sub: updated.id, email: updated.email, platform_role: updated.platform_role });
   return c.json({
+    token,
     user: {
       ...updated,
       memberships,

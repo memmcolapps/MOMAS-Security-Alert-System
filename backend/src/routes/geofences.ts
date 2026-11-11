@@ -6,6 +6,7 @@ import {
   isPlatformStaff,
   primaryOrganization,
   requireAuth,
+  requireModule,
 } from "../auth";
 import { env } from "../config";
 import * as db from "../db";
@@ -35,6 +36,7 @@ import { reverseGeocode, searchPlaces } from "../geocoder";
 
 const router = new Hono();
 router.use("*", requireAuth);
+router.use("*", requireModule("geofence"));
 
 function scope(c: any) {
   const user = c.get("user");

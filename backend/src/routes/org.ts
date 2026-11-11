@@ -3,7 +3,9 @@ import {
   canManageOrganization,
   canManageUnit,
   isPlatformStaff,
+  managesOnlyOneUnit,
   normalizeOrgRole,
+  orgMemberChangeError,
   primaryOrganization,
   requireOrgManager,
 } from "../auth";
@@ -52,6 +54,24 @@ function membership(c: any) {
   return c.get("membership");
 }
 
+// The member's current place in this organization, or null if they have none.
+async function currentMembership(organizationId: number, email: string) {
+  const user = await db.getUserByEmail(email);
+  if (!user) return null;
+  const row = (await db.getMembershipsForUser(user.id)).find(
+    (entry: any) => Number(entry.organization_id) === Number(organizationId),
+  );
+  return row ? { ...row, user_id: user.id } : null;
+}
+
+// A unit id sent by the browser must name a unit of this organization, or
+// a record could be tied to another tenant's unit.
+async function unitOutsideOrganization(organizationId: number, unitId: unknown) {
+  if (unitId === null || unitId === undefined || unitId === "") return false;
+  return !(await db.getOrganizationUnit(organizationId, Number(unitId)));
+}
+const UNIT_NOT_FOUND = { error: "That unit could not be found in this organization." };
+
 function unitScoped(c: any) {
   const current = membership(c);
   return !isPlatformAdmin(c) && current?.scope_level === "unit" && current?.unit_id ? Number(current.unit_id) : null;
@@ -88,16 +108,33 @@ router.post("/users", async (c) => {
   if (!canManageUnit(membership(c), body.unit_id ? Number(body.unit_id) : null) && !isPlatformAdmin(c)) {
     return c.json({ error: "You can only add users to units you are allowed to manage." }, 403);
   }
+  if (await unitOutsideOrganization(organizationId, body.unit_id)) return c.json(UNIT_NOT_FOUND, 400);
   try {
     const role = normalizeOrgRole(body.role, "viewer");
+    const unitId = body.unit_id ? Number(body.unit_id) : null;
+    // A manager of one unit can only place people in that unit.
+    const scopeLevel = !isPlatformAdmin(c) && managesOnlyOneUnit(membership(c))
+      ? "unit"
+      : body.scope_level || (unitId ? "unit" : "organization");
+    if (!isPlatformAdmin(c)) {
+      const existing = await currentMembership(organizationId, String(body.email));
+      const refusal = orgMemberChangeError({
+        actor: membership(c),
+        actorUserId: actor(c),
+        targetUserId: existing?.user_id ?? null,
+        target: existing,
+        next: { role, unit_id: unitId },
+      });
+      if (refusal) return c.json({ error: refusal }, 403);
+    }
     const user = await db.upsertOrganizationUser({
       organization_id: organizationId,
       email: body.email,
       name: body.name,
       password: body.password,
       role,
-      unit_id: body.unit_id || null,
-      scope_level: body.scope_level || (body.unit_id ? "unit" : "organization"),
+      unit_id: unitId,
+      scope_level: scopeLevel,
       allowCrossOrganization: isPlatformAdmin(c),
     });
     await db.createAuditLog({
@@ -118,6 +155,14 @@ router.post("/users", async (c) => {
 router.delete("/users/:user_id", async (c) => {
   const organizationId = organizationIdFor(c);
   const userId = Number(c.req.param("user_id"));
+  if (!isPlatformAdmin(c)) {
+    const existing = (await db.getMembershipsForUser(userId)).find(
+      (row: any) => Number(row.organization_id) === Number(organizationId),
+    );
+    if (!existing) return c.json({ error: "That user is not a member of this organization." }, 404);
+    const refusal = orgMemberChangeError({ actor: membership(c), actorUserId: actor(c), targetUserId: userId, target: existing });
+    if (refusal) return c.json({ error: refusal }, 403);
+  }
   const removed = await db.removeOrganizationUser(organizationId, userId);
   if (!removed) return c.json({ error: "That user is not a member of this organization." }, 404);
   await db.createAuditLog({
@@ -385,6 +430,7 @@ router.post("/units", async (c) => {
   if (!isPlatformAdmin(c) && !canManageOrganization(membership(c))) {
     return c.json({ error: "Only organization admins can create new units." }, 403);
   }
+  if (await unitOutsideOrganization(organizationId, body.parent_unit_id)) return c.json(UNIT_NOT_FOUND, 400);
   try {
     const unit = await db.createOrganizationUnit({
       organization_id: organizationId,
@@ -415,6 +461,7 @@ router.put("/units/:unit_id", async (c) => {
   const unitId = Number(c.req.param("unit_id"));
   if (!canManageUnit(membership(c), unitId) && !isPlatformAdmin(c)) return c.json({ error: "You can only update units you are allowed to manage." }, 403);
   const body = await c.req.json().catch(() => ({}));
+  if (await unitOutsideOrganization(organizationId, body.parent_unit_id)) return c.json(UNIT_NOT_FOUND, 400);
   try {
     // Whitelist the fields a tenant owns. Radio-network identifiers are never
     // accepted from an organization: a unit carrying a vendor group id is
@@ -465,6 +512,7 @@ router.post("/devices/:device_id/unit", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const unitId = body.unit_id ? Number(body.unit_id) : null;
   if (!canManageUnit(membership(c), unitId) && !isPlatformAdmin(c)) return c.json({ error: "You can only assign devices to units you are allowed to manage." }, 403);
+  if (await unitOutsideOrganization(organizationId, unitId)) return c.json(UNIT_NOT_FOUND, 400);
   const device = await db.assignDeviceToUnit(c.req.param("device_id"), organizationId, unitId);
   if (!device) return c.json({ error: "That device is not assigned to this organization." }, 404);
   await db.createAuditLog({

@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { isPlatformStaff, primaryOrganization, requireAuth } from "../auth";
+import { isPlatformStaff, primaryOrganization, requireAuth, requireOperator } from "../auth";
 import { env } from "../config";
 import * as db from "../db";
 import { bus } from "../events";
@@ -181,7 +181,7 @@ function actionNote(body: any) {
   return String(raw || "").trim();
 }
 
-router.post("/geofence/:id/start-response", async (c) => {
+router.post("/geofence/:id/start-response", requireOperator, async (c) => {
   const user: any = (c as any).get("user");
   const id = Number(c.req.param("id"));
   if (!Number.isInteger(id)) return c.json({ error: "invalid_alarm_reference", message: "Invalid alarm reference." }, 400);
@@ -193,7 +193,7 @@ router.post("/geofence/:id/start-response", async (c) => {
   return c.json({ alert: normalizeGeofence(alert) });
 });
 
-router.post("/geofence/:id/resolve", async (c) => {
+router.post("/geofence/:id/resolve", requireOperator, async (c) => {
   const user: any = (c as any).get("user");
   const id = Number(c.req.param("id"));
   if (!Number.isInteger(id)) return c.json({ error: "invalid_alarm_reference", message: "Invalid alarm reference." }, 400);
@@ -206,7 +206,7 @@ router.post("/geofence/:id/resolve", async (c) => {
   return c.json({ alert: normalizeGeofence(alert) });
 });
 
-router.post("/geofence/:id/reopen", async (c) => {
+router.post("/geofence/:id/reopen", requireOperator, async (c) => {
   const user: any = (c as any).get("user");
   const id = Number(c.req.param("id"));
   if (!Number.isInteger(id)) return c.json({ error: "invalid_alarm_reference", message: "Invalid alarm reference." }, 400);

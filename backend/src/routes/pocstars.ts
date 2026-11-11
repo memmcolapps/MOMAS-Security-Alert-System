@@ -9,6 +9,7 @@ import {
   isPlatformStaff,
   primaryOrganization,
   requireAuth,
+  requireOperator,
 } from "../auth";
 import { env } from "../config";
 import * as db from "../db";
@@ -717,7 +718,7 @@ async function renameOnNetwork(
   }
 }
 
-router.post("/devices", async (c) => {
+router.post("/devices", requireOperator, async (c) => {
   const user = (c as any).get("user");
   const body = await c.req.json().catch(() => ({}));
   const { device_id, name, operator, device_type, notes, active } = body;
@@ -869,11 +870,11 @@ router.get("/sos/log", async (c) => {
   }
 });
 
-router.post("/sos/:sosMsgId/acknowledge", async (c) => {
+router.post("/sos/:sosMsgId/acknowledge", requireOperator, async (c) => {
   return handleSosAction(c, "process");
 });
 
-router.post("/sos/:sosMsgId/resolve", async (c) => {
+router.post("/sos/:sosMsgId/resolve", requireOperator, async (c) => {
   return handleSosAction(c, "close");
 });
 
@@ -911,11 +912,11 @@ router.get("/alarms/:sosMsgId", async (c) => {
   }
 });
 
-router.post("/alarms/:sosMsgId/start-response", (c) =>
+router.post("/alarms/:sosMsgId/start-response", requireOperator, (c) =>
   handleSosAction(c, "process"),
 );
-router.post("/alarms/:sosMsgId/resolve", (c) => handleSosAction(c, "close"));
-router.post("/alarms/:sosMsgId/reopen", (c) => handleSosAction(c, "reopen"));
+router.post("/alarms/:sosMsgId/resolve", requireOperator, (c) => handleSosAction(c, "close"));
+router.post("/alarms/:sosMsgId/reopen", requireOperator, (c) => handleSosAction(c, "reopen"));
 
 router.get("/radio/recordings", async (c) => {
   const query = c.req.query();
@@ -1075,7 +1076,7 @@ router.get("/radio/recordings/:token/audio", async (c) => {
   }
 });
 
-router.post("/radio/messages", async (c) => {
+router.post("/radio/messages", requireOperator, async (c) => {
   const user = (c as any).get("user");
   const body = await c.req.json().catch(() => ({}));
   const deviceId = String(body.device_id || "").trim();

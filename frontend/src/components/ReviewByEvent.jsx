@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, ExternalLink, Newspaper, RefreshCw, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { approveReviewEvent, dismissReviewEvent, getReviewQueue } from "../lib/api";
+import { safeUrl } from "../lib/domain";
 
 // Reasons a reviewer gives most often, so approving rarely needs typing. The
 // first fits an event several outlets carried and is chosen for those.
@@ -210,8 +211,8 @@ export function ReviewByEvent({ notify }) {
                     <span className="w-28 shrink-0 truncate font-bold text-neutral-400">{report.source}</span>
                     <span className="min-w-0 flex-1 truncate text-neutral-300">{report.title}</span>
                     <span className={`shrink-0 tabular-nums ${scoreTone(report.score)}`}>{report.score}%</span>
-                    {report.url ? (
-                      <a href={report.url} target="_blank" rel="noreferrer" onClick={(click) => click.stopPropagation()} className="shrink-0 text-neutral-500 hover:text-neutral-200" aria-label="Open the article">
+                    {safeUrl(report.url) ? (
+                      <a href={safeUrl(report.url)} target="_blank" rel="noreferrer" onClick={(click) => click.stopPropagation()} className="shrink-0 text-neutral-500 hover:text-neutral-200" aria-label="Open the article">
                         <ExternalLink size={11} />
                       </a>
                     ) : null}

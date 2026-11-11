@@ -394,6 +394,21 @@ export function getListenerStatus() {
   };
 }
 
+// Who may send drone data. "::ffff:1.2.3.4" is how an IPv4 sender can appear.
+const plainAddress = (addr: string | undefined | null) => String(addr || "").replace(/^::ffff:/, "");
+const allowedSenders = new Set(
+  env.MAVLINK_ALLOWED_IPS.split(",").map((entry) => plainAddress(entry.trim())).filter(Boolean),
+);
+function senderAllowed(addr: string | undefined | null) {
+  return allowedSenders.size === 0 || allowedSenders.has(plainAddress(addr));
+}
+let refusedLogged = 0;
+function logRefused(kind: string, addr: string | undefined | null) {
+  // A scanner can hammer the port; a few lines say enough.
+  if (refusedLogged++ < 20) console.warn(`[MAVLink] refused ${kind} from ${addr || "unknown"}`);
+}
+const peerCount = () => parsers.size + udpPeers.size;
+
 /** Start the TCP listener. Safe to call once at startup. */
 export function startMavlinkListener() {
   if (!env.MAVLINK_ENABLE) {
@@ -410,6 +425,16 @@ export function startMavlinkListener() {
       port: env.MAVLINK_TCP_PORT,
       socket: {
         open(socket: any) {
+          if (!senderAllowed(socket.remoteAddress)) {
+            logRefused("TCP connection", socket.remoteAddress);
+            socket.end();
+            return;
+          }
+          if (peerCount() >= env.MAVLINK_MAX_PEERS) {
+            logRefused("TCP connection (too many open)", socket.remoteAddress);
+            socket.end();
+            return;
+          }
           parsers.set(socket, new FrameParser(handleMessage));
           console.log(`[MAVLink] connection opened from ${socket.remoteAddress || "unknown"}`);
         },
@@ -446,6 +471,8 @@ export function startMavlinkListener() {
             const key = `${addr}:${_port}`;
             let peer = udpPeers.get(key);
             if (!peer) {
+              if (!senderAllowed(addr)) return logRefused("UDP data", addr);
+              if (peerCount() >= env.MAVLINK_MAX_PEERS) return logRefused("UDP data (too many open)", addr);
               peer = { parser: new FrameParser(handleMessage), lastSeen: 0 };
               udpPeers.set(key, peer);
               console.log(`[MAVLink] UDP stream started from ${key}`);

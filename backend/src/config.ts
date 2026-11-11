@@ -32,7 +32,8 @@ const envSchema = z.object({
     .url()
     .default("http://recordfile.epailnigeria.com"),
   POCSTARS_RECORDINGS_USERNAME: z.string().default("aud"),
-  POCSTARS_RECORDINGS_PASSWORD: z.string().default("l231sItal"),
+  // Secret: set it in the env file only. Empty means recordings will not play.
+  POCSTARS_RECORDINGS_PASSWORD: z.string().default(""),
   POCSTARS_TARGET_UID: z.string().default("583"),
   // How often the radio network is asked for new SOS alarms. The request is a
   // single small page, and every second here is a second an operator waits.
@@ -49,6 +50,11 @@ const envSchema = z.object({
   MAVLINK_ENABLE: boolFromEnv(true),
   MAVLINK_TCP_HOST: z.string().default("0.0.0.0"),
   MAVLINK_TCP_PORT: intFromEnv(5760),
+  // Comma-separated addresses allowed to send drone data. Empty lets anyone
+  // send, as before; set it to the ground stations' addresses to close that.
+  MAVLINK_ALLOWED_IPS: z.string().default(""),
+  // Most drone connections (TCP and UDP together) held at once.
+  MAVLINK_MAX_PEERS: intFromEnv(32),
   DRONE_STALE_SEC: intFromEnv(30),
   DRONE_FORGET_SEC: intFromEnv(3600),
   // How often live drone telemetry is flushed to the DB so a last-seen

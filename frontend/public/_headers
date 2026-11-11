@@ -1,0 +1,8 @@
+# Netlify response headers. Same browser protections as vercel.json and the
+# backend: only the app's own scripts may run, and the app cannot be framed.
+/*
+  Content-Security-Policy: script-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Referrer-Policy: strict-origin-when-cross-origin
+  Strict-Transport-Security: max-age=15552000

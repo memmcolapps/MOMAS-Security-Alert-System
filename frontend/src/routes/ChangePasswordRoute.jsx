@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { KeyRound, Save } from "lucide-react";
 import { useState } from "react";
-import { changePassword } from "../lib/api";
+import { changePassword, setAuthToken } from "../lib/api";
 
 export function ChangePasswordRoute() {
   const navigate = useNavigate();
@@ -12,7 +12,9 @@ export function ChangePasswordRoute() {
 
   const mutation = useMutation({
     mutationFn: changePassword,
-    onSuccess: async () => {
+    onSuccess: async (result) => {
+      // The change signs out older sessions, this one included, so keep the new token.
+      if (result?.token) setAuthToken(result.token);
       await queryClient.invalidateQueries({ queryKey: ["me"] });
       navigate({ to: "/" });
     },

@@ -15,6 +15,7 @@ import {
   isPlatformStaff,
   primaryOrganization,
   requireAuth,
+  requireModule,
 } from "../auth";
 import * as db from "../db";
 import { getDronePositions, getListenerStatus } from "../drones/mavlink-listener";
@@ -22,6 +23,7 @@ import { getDronePositions, getListenerStatus } from "../drones/mavlink-listener
 const router = new Hono();
 
 router.use("*", requireAuth);
+router.use("*", requireModule("drone"));
 
 function jsonError(error: unknown) {
   return { error: error instanceof Error ? error.message : String(error) };

@@ -23,6 +23,7 @@ const {
   isPlatformOwner,
   normalizePlatformRole,
   requirePlatform,
+  orgMemberChangeError,
 } = await import("./auth");
 
 function seedUser(id: number, platform_role: string, overrides: Record<string, unknown> = {}) {
@@ -187,5 +188,43 @@ describe("requirePlatform", () => {
       expect(reached).toBe(false);
       expect(result().status).toBe(401);
     }
+  });
+});
+
+describe("orgMemberChangeError", () => {
+  const owner = { role: "org_owner", unit_id: null, scope_level: "organization" };
+  const orgAdmin = { role: "org_admin", unit_id: null, scope_level: "organization" };
+  const unitAdmin = { role: "unit_admin", unit_id: 7, scope_level: "unit" };
+  const check = (actor: any, rest: Record<string, unknown>) => orgMemberChangeError({ actor, actorUserId: 1, ...rest });
+
+  test("a unit admin cannot promote themselves to owner", () => {
+    expect(check(unitAdmin, { targetUserId: 1, target: unitAdmin, next: { role: "org_owner", unit_id: 7 } })).not.toBeNull();
+  });
+
+  test("a unit admin cannot hand out a role at or above their own", () => {
+    expect(check(unitAdmin, { next: { role: "unit_admin", unit_id: 7 } })).not.toBeNull();
+    expect(check(unitAdmin, { next: { role: "org_admin", unit_id: 7 } })).not.toBeNull();
+    expect(check(unitAdmin, { next: { role: "operator", unit_id: 7 } })).toBeNull();
+  });
+
+  test("a unit admin stays inside their unit", () => {
+    expect(check(unitAdmin, { next: { role: "viewer", unit_id: 8 } })).not.toBeNull();
+    expect(check(unitAdmin, { targetUserId: 5, target: { role: "viewer", unit_id: 8 } })).not.toBeNull();
+  });
+
+  test("nobody can remove or change the owner unless they are an owner", () => {
+    expect(check(orgAdmin, { targetUserId: 5, target: owner })).not.toBeNull();
+    expect(check(unitAdmin, { targetUserId: 5, target: { role: "org_owner", unit_id: 7 } })).not.toBeNull();
+  });
+
+  test("an org admin manages roles below theirs", () => {
+    expect(check(orgAdmin, { next: { role: "org_admin", unit_id: null } })).not.toBeNull();
+    expect(check(orgAdmin, { next: { role: "unit_admin", unit_id: 3 } })).toBeNull();
+    expect(check(orgAdmin, { targetUserId: 5, target: { role: "operator", unit_id: 3 } })).toBeNull();
+  });
+
+  test("an owner can appoint another owner but not change themselves", () => {
+    expect(check(owner, { next: { role: "org_owner", unit_id: null } })).toBeNull();
+    expect(check(owner, { targetUserId: 1, target: owner, next: { role: "viewer", unit_id: null } })).not.toBeNull();
   });
 });

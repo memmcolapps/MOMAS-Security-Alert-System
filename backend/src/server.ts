@@ -29,7 +29,7 @@ import {
 } from "./scrapers/telegram-mtproto";
 import { compress } from "hono/compress";
 import { cors } from "hono/cors";
-import { invalidateAuthCache, requireAuth } from "./auth";
+import { invalidateAuthCache, isPlatformStaff, optionalAuth, requireAuth } from "./auth";
 import { liveRadioWebSocket } from "./pocstars/live-gateway";
 import { sosPushStatus } from "./pocstars/sos-push";
 import { positionPushStatus } from "./pocstars/position-push";
@@ -91,6 +91,38 @@ if (typeof CompressionStream === "function") {
   console.warn("[Startup] CompressionStream unavailable in this Bun; API responses go uncompressed");
 }
 
+// Browser protections. The script policy only lets the app's own files run,
+// so a name or headline that sneaks HTML onto a page still cannot run code.
+// Styles, images and connections are left open: map tiles and the API live
+// on other hosts.
+const CONTENT_POLICY = [
+  "script-src 'self'",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "frame-ancestors 'self'",
+].join("; ");
+app.use("*", async (c, next) => {
+  await next();
+  c.header("Content-Security-Policy", CONTENT_POLICY);
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("X-Frame-Options", "SAMEORIGIN");
+  c.header("Referrer-Policy", "strict-origin-when-cross-origin");
+});
+
+// Database errors name tables and columns. They are logged here and replaced
+// with a plain message before they reach the browser.
+const DATABASE_ERROR = /relation "|column "|syntax error|violates|duplicate key|invalid input syntax|ECONNREFUSED|connection terminated|out of range for type/i;
+app.use("/api/*", async (c, next) => {
+  await next();
+  if (c.res.status < 500 || !(c.res.headers.get("content-type") || "").includes("application/json")) return;
+  const body: any = await c.res.clone().json().catch(() => null);
+  const message = typeof body?.error === "string" ? body.error : typeof body?.message === "string" ? body.message : "";
+  if (!DATABASE_ERROR.test(message)) return;
+  console.error(`[API] ${c.req.method} ${c.req.path} failed:`, message);
+  c.res = c.json({ error: "Something went wrong on the server. Try again shortly." }, c.res.status as any);
+});
+
 // Auth lookups are cached for a few seconds (see auth.ts). Any write through
 // the API may have changed a user, a membership or an organization's states,
 // so it drops that cache once the handler has finished.
@@ -122,7 +154,12 @@ app.get("/api/config", (c) =>
   }),
 );
 
-app.get("/api/health", async (c) => {
+app.get("/api/health", optionalAuth, async (c) => {
+  // Anyone may ask whether the server is up. The detail (feeds, models, radio
+  // links, error text) is for platform staff.
+  if (!isPlatformStaff((c as any).get("user"))) {
+    return c.json({ status: "ok", runtime: "bun", time: new Date().toISOString() });
+  }
   const osint = await db.getOsintPipelineHealth().catch((error) => ({
     error: error instanceof Error ? error.message : "Health query failed",
   }));

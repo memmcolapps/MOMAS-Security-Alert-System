@@ -5,7 +5,7 @@ import "leaflet.heat";
 import "leaflet.markercluster";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IMAGERY_LABEL_TILES, IMAGERY_ROAD_TILES, LABELLED_BASEMAPS, SATELLITE_TILES, VECTOR_STYLES, vectorBasemapLayer } from "../lib/basemaps";
-import { deviceTypeGlyph, escapeHtml, severityColors, severityLabels, typeIcons } from "../lib/domain";
+import { deviceTypeGlyph, escapeHtml, safeUrl, severityColors, severityLabels, typeIcons } from "../lib/domain";
 import { MOTION, distanceMetres, fixAgeSec, fixFromLocation, formatAge, trailSegments } from "../lib/radio-motion";
 import { newestPoint, sampleTrack } from "../lib/radio-playback";
 import { replayPosition } from "../lib/radio-replay";
@@ -33,8 +33,9 @@ export function incidentPopup(incident) {
   const color = severityColors[incident.severity] || severityColors.BLUE;
   const killed = incident.fatalities ?? incident.killed ?? 0;
   const abducted = incident.victims ?? incident.abducted ?? 0;
-  const source = incident.source_url
-    ? `<a href="${escapeHtml(incident.source_url)}" target="_blank" rel="noreferrer" style="color:${color}">Open source</a>`
+  const sourceUrl = safeUrl(incident.source_url);
+  const source = sourceUrl
+    ? `<a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noreferrer" style="color:${color}">Open source</a>`
     : escapeHtml(incident.source || "Source unavailable");
 
   return `
@@ -42,8 +43,8 @@ export function incidentPopup(incident) {
       <div style="font-size:13px;font-weight:700;color:${color};margin-bottom:5px">${escapeHtml(incident.title || incident.type || "Incident")}</div>
       <div style="font-size:11px;color:#ccc"><strong>Where:</strong> ${escapeHtml([incident.location, incident.state].filter(Boolean).join(", ") || "Nigeria")}</div>
       <div style="font-size:11px;color:#ccc"><strong>When:</strong> ${escapeHtml(incident.date || incident.created_at || "")}</div>
-      <div style="font-size:11px;color:#ccc"><strong>Severity:</strong> ${severityLabels[incident.severity] || incident.severity || "BLUE"}</div>
-      <div style="font-size:11px;color:#ccc"><strong>Impact:</strong> ${killed} killed · ${abducted} abducted/victims</div>
+      <div style="font-size:11px;color:#ccc"><strong>Severity:</strong> ${escapeHtml(severityLabels[incident.severity] || incident.severity || "BLUE")}</div>
+      <div style="font-size:11px;color:#ccc"><strong>Impact:</strong> ${escapeHtml(killed)} killed · ${escapeHtml(abducted)} abducted/victims</div>
       <div style="margin-top:7px;padding-top:7px;border-top:1px solid rgba(255,255,255,.08);font-size:11px;color:#888">${escapeHtml(incident.description || "")}</div>
       <div style="margin-top:7px;font-size:10px">${source}</div>
     </div>
@@ -526,7 +527,7 @@ export function OperationsMap({
       const color = severityColors[incident.severity] || severityColors.BLUE;
       const icon = L.divIcon({
         className: "",
-        html: `<div class="live-marker sev-${incident.severity || "BLUE"}"></div>`,
+        html: `<div class="live-marker sev-${escapeHtml(incident.severity || "BLUE")}"></div>`,
         iconSize: [16, 16],
         iconAnchor: [8, 8],
       });

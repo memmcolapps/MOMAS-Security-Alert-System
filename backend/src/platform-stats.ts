@@ -124,10 +124,10 @@ function postureChecks(users: any) {
     {
       id: "recordings_password",
       label: "Recording server password",
-      state: process.env.POCSTARS_RECORDINGS_PASSWORD ? "ok" : "warn",
-      detail: process.env.POCSTARS_RECORDINGS_PASSWORD
+      state: env.POCSTARS_RECORDINGS_PASSWORD ? "ok" : "bad",
+      detail: env.POCSTARS_RECORDINGS_PASSWORD
         ? "Set on this server."
-        : "Not set on this server, so the default written in the code is in use.",
+        : "Not set on this server, so radio recordings will not play.",
     },
   ];
   if (bridgeOn) {

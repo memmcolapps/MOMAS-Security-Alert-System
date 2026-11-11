@@ -14,6 +14,8 @@ import { scrapeTelegram } from "../scrapers/telegram";
 type SseClient = {
   write: (chunk: string) => Promise<void>;
   close: () => Promise<void>;
+  // Which incidents this viewer may see, the same rule as the incident list.
+  sees: (row: any) => boolean;
 };
 
 const router = new Hono();
@@ -60,12 +62,13 @@ async function incidentReportMarkdown(incident: any) {
   ].filter(Boolean).join("\n");
 }
 
-function sseResponse(signal: AbortSignal, clients: Set<SseClient>) {
+function sseResponse(signal: AbortSignal, clients: Set<SseClient>, sees: SseClient["sees"]) {
   const stream = new TransformStream<Uint8Array>();
   const writer = stream.writable.getWriter();
   const client: SseClient = {
     write: (chunk) => writer.write(encoder.encode(chunk)),
     close: () => writer.close(),
+    sees,
   };
   clients.add(client);
   void client.write(":ok\n\n");
@@ -95,6 +98,7 @@ function sseResponse(signal: AbortSignal, clients: Set<SseClient>) {
 bus.on("incident:new", (row) => {
   const message = `event: incident_new\ndata: ${JSON.stringify(row)}\n\n`;
   for (const client of sseClients) {
+    if (!client.sees(row)) continue;
     void client.write(message).catch(() => {
       sseClients.delete(client);
     });
@@ -151,7 +155,11 @@ async function runManualScrape(daysBack: number) {
   }
 }
 
-router.get("/events", (c) => sseResponse(c.req.raw.signal, sseClients));
+router.get("/events", async (c) => {
+  const scope = await scopeForUser((c as any).get("user"));
+  const states = new Set((scope.allowedStates || []).filter(Boolean));
+  return sseResponse(c.req.raw.signal, sseClients, (row) => scope.allStates || states.has(row?.state));
+});
 
 router.get("/", async (c) => {
   try {
