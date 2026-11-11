@@ -16,6 +16,8 @@ import { bus } from "../events";
 import { fetchLastLocations } from "../pocstars/locations";
 import { recordedLocations } from "../pocstars/position-recorder";
 import { startSosPush } from "../pocstars/sos-push";
+import { count } from "../metrics";
+import { alertListenerCount } from "./alerts";
 import { provisionOnNetwork } from "../pocstars/live-gateway";
 import { actionMessage, describeSyncFailure } from "../pocstars/messages";
 
@@ -350,7 +352,7 @@ async function fetchPocstarsSos(
   throw lastError;
 }
 
-async function persistAndBroadcast(rows: any[]) {
+async function persistAndBroadcast(rows: any[], via: "push" | "poll" = "poll") {
   for (const row of rows) {
     let lat = null;
     let lon = null;
@@ -396,10 +398,15 @@ async function persistAndBroadcast(rows: any[]) {
       upstream_status: Number.isFinite(Number(row.sosStatus ?? row.status))
         ? Number(row.sosStatus ?? row.status)
         : null,
+      received_via: via,
     });
     if (inserted) {
+      // Counted before sending, so the number is who was connected when the
+      // alarm landed. It is written after, off the alarm's path.
+      const consoles = alertListenerCount(inserted);
       broadcastSse("sos_new", inserted);
       bus.emit("pocstars-alert:new", inserted);
+      void db.noteSosConsoles(inserted.id, consoles).catch(() => {});
     }
   }
 }
@@ -593,16 +600,20 @@ async function handleSosAction(c: any, action: SosAction) {
 async function pollNewSos({ notifyHealth = true } = {}) {
   if (sosPollRunning) return;
   sosPollRunning = true;
+  const started = Date.now();
   try {
     const newData = await fetchPocstarsSos(
       DEFAULT_TARGET_UID,
       { status: 0, pageSize: 50 },
       { timeoutMs: 4000, attempts: 1 },
     );
+    const answeredInMs = Date.now() - started;
     await persistAndBroadcast(newData?.data?.rows || []);
+    count("sos.poll.ok", 1, answeredInMs);
     if (notifyHealth)
       broadcastSse("pocstars_health", { ok: true, ts: lastPocstarsOk });
   } catch (error: any) {
+    count("sos.poll.fail");
     if (notifyHealth)
       broadcastSse("pocstars_health", {
         ok: false,
@@ -627,7 +638,9 @@ async function reconcileSosStatuses() {
     ]);
     await reconcileAndBroadcast(processingData?.data?.rows || []);
     await reconcileAndBroadcast(resolvedData?.data?.rows || []);
+    count("sos.reconcile.ok");
   } catch (error: any) {
+    count("sos.reconcile.fail");
     console.warn(
       "[SOS] Status reconciliation failed:",
       error?.message || error,
@@ -648,7 +661,15 @@ setInterval(() => {
 // The fast path: the bridge on the POCSTARS host pushes alarms as it sees them.
 // The poll above keeps running regardless and is what covers the bridge or its
 // tunnel being down.
-startSosPush(persistAndBroadcast);
+startSosPush((rows) => persistAndBroadcast(rows, "push"));
+
+/** When the radio network last answered the alarm poll, for the stats page. */
+export function sosPollStatus() {
+  return {
+    lastOkAt: lastPocstarsOk ? new Date(lastPocstarsOk).toISOString() : null,
+    lastError: lastPocstarsErr,
+  };
+}
 
 router.get("/devices", async (c) => {
   try {

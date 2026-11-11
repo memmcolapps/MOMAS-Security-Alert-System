@@ -290,6 +290,10 @@ export function removeOrganizationUser(orgId, userId) {
   });
 }
 
+export function getPlatformStats(range = "7d") {
+  return request(`/api/platform/stats?range=${encodeURIComponent(range)}`);
+}
+
 export function getPlatformStaff() {
   return request("/api/platform/staff");
 }

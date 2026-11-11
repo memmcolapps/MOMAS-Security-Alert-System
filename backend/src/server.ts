@@ -35,6 +35,8 @@ import { sosPushStatus } from "./pocstars/sos-push";
 import { positionPushStatus } from "./pocstars/position-push";
 import { heartbeatPushStatus, startHeartbeatPush } from "./pocstars/heartbeat-push";
 import { checkClassifierModels, getClassifierHealth } from "./classifier";
+import { observeRequest, startMetrics } from "./metrics";
+import platformStatsRouter from "./routes/platform-stats";
 
 const app = new Hono();
 const PORT = env.PORT;
@@ -72,6 +74,14 @@ app.onError((error, c) => {
   return c.json({ error: "Internal server error" }, 500);
 });
 
+// One count per finished request, for the platform stats page. Registered
+// first so it sees the final status, including what onError produced.
+app.use("*", async (c, next) => {
+  const started = performance.now();
+  await next();
+  observeRequest(c, performance.now() - started);
+});
+
 // Older Bun releases have no CompressionStream, and there the middleware would
 // throw on every response, so it is skipped rather than trusted. SSE is
 // never compressed (Hono excludes text/event-stream), which keeps it live.
@@ -96,6 +106,7 @@ app.route("/api/drones", dronesRouter);
 app.route("/api/auth", authRouter);
 app.route("/api/organizations", organizationsRouter);
 app.route("/api/platform/staff", platformStaffRouter);
+app.route("/api/platform/stats", platformStatsRouter);
 app.route("/api/org", orgRouter);
 app.route("/api/osint", osintRouter);
 app.route("/api/geofences", geofencesRouter);
@@ -220,6 +231,7 @@ try {
 ║  Server  : http://localhost:${PORT}             ║
 ╚══════════════════════════════════════════════╝`);
 
+  startMetrics();
   void startGeofenceMonitor();
   startMavlinkListener();
   void startRadioPositionRecorder();

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { requireAuth, signToken } from "../auth";
 import * as db from "../db";
+import { clientIp, count, securityEvent } from "../metrics";
 
 const router = new Hono();
 
@@ -10,10 +11,15 @@ router.post("/login", async (c) => {
   const password = String(body.password || "");
   if (!email || !password) return c.json({ error: "email and password are required" }, 400);
 
+  const refuse = () => {
+    securityEvent("login_failed", { ip: clientIp(c), email, path: c.req.path });
+    return c.json({ error: "invalid credentials" }, 401);
+  };
   const user = await db.getUserByEmail(email);
-  if (!user || user.status !== "active") return c.json({ error: "invalid credentials" }, 401);
+  if (!user || user.status !== "active") return refuse();
   const ok = await (Bun as any).password.verify(password, user.password_hash);
-  if (!ok) return c.json({ error: "invalid credentials" }, 401);
+  if (!ok) return refuse();
+  count("auth.login_ok");
 
   const memberships = await db.getMembershipsForUser(user.id);
   const safeUser = {

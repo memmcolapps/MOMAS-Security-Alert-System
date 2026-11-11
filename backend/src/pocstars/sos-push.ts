@@ -10,6 +10,7 @@
 // same idempotent insert, so whichever lands first wins and the other is a
 // no-op. Losing this session therefore costs speed, never alarms.
 import { env } from "../config";
+import { count, watchLink } from "../metrics";
 import { PocstarsBridgeClient } from "./bridge-client";
 import { liveRadioConfigured } from "./live-gateway";
 
@@ -48,6 +49,7 @@ export function startSosPush(handler: SosHandler) {
   if (!liveRadioConfigured() || state.handler) return;
   state.handler = handler;
   state.stopped = false;
+  watchLink("push.sos", () => (state.stopped ? null : Boolean(state.client)));
   void connect();
 }
 
@@ -68,6 +70,7 @@ function stopLiveness() {
 
 function scheduleReconnect(reason: string) {
   if (state.stopped || state.timer) return;
+  count("push.sos.drop");
   const delay = state.backoffMs;
   state.lastError = reason;
   console.warn(`[SOS] bridge push down (${reason}), retrying in ${Math.round(delay / 1000)}s`);

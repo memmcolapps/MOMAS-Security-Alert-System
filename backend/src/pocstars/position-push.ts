@@ -9,6 +9,7 @@
 // On reconnect it asks for everything since the last point it received, so a
 // dropped tunnel leaves no hole in a radio's trail.
 import { env } from "../config";
+import { count, watchLink } from "../metrics";
 import { PocstarsBridgeClient } from "./bridge-client";
 import { liveRadioConfigured } from "./live-gateway";
 
@@ -53,6 +54,7 @@ export function positionPushLive(withinMs = 90_000) {
 export function startPositionPush(handler: PositionHandler) {
   if (!liveRadioConfigured() || state.handler) return;
   state.handler = handler;
+  watchLink("push.position", () => Boolean(state.client));
   void connect();
 }
 
@@ -63,6 +65,7 @@ function stopLiveness() {
 
 function scheduleReconnect(reason: string) {
   if (state.timer) return;
+  count("push.position.drop");
   const delay = state.backoffMs;
   state.lastError = reason;
   console.warn(`[Positions] bridge push down (${reason}), retrying in ${Math.round(delay / 1000)}s`);

@@ -170,4 +170,22 @@ describe("requirePlatform", () => {
     });
     expect(reached).toBe(false);
   });
+
+  test("refuses a malformed or tampered token instead of crashing", async () => {
+    // A signature of the wrong length used to throw inside the comparison and
+    // surface as a 500. Each of these must be a plain 401.
+    const owner = seedUser(9, "admin");
+    const good = signToken({ sub: 9, email: owner.email, platform_role: "admin" });
+    const [header, body, signature] = good.split(".");
+    const forgedBody = Buffer.from(JSON.stringify({ sub: 9, platform_role: "admin", exp: 9999999999 })).toString("base64url");
+    for (const token of [`${header}.${body}.short`, `${header}.${forgedBody}.${signature}`, "a.b.c", `${header}.!!!.${signature}`]) {
+      const { ctx, result } = contextFor(token);
+      let reached = false;
+      await requirePlatform("support")(ctx, async () => {
+        reached = true;
+      });
+      expect(reached).toBe(false);
+      expect(result().status).toBe(401);
+    }
+  });
 });

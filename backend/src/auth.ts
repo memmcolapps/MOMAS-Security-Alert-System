@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { Context, Next } from "hono";
 import { env } from "./config";
 import * as db from "./db";
+import { clientIp, count, securityEvent } from "./metrics";
 
 type TokenPayload = {
   sub: number;
@@ -32,19 +33,38 @@ function signToken(payload: Omit<TokenPayload, "exp">, ttlSeconds = 7 * 24 * 60 
   return `${encodedHeader}.${encodedBody}.${base64url(signature)}`;
 }
 
-function verifyToken(token: string): TokenPayload | null {
+// "expired" is an ordinary session running out. "invalid" is a token this
+// server never signed, which nobody gets by accident.
+type TokenCheck = { payload: TokenPayload } | { payload: null; reason: "invalid" | "expired" };
+
+function checkToken(token: string): TokenCheck {
+  const invalid = { payload: null, reason: "invalid" } as const;
   const [encodedHeader, encodedBody, signature] = token.split(".");
-  if (!encodedHeader || !encodedBody || !signature) return null;
-  const expected = base64url(
-    crypto
-      .createHmac("sha256", env.AUTH_JWT_SECRET)
-      .update(`${encodedHeader}.${encodedBody}`)
-      .digest(),
+  if (!encodedHeader || !encodedBody || !signature) return invalid;
+  const expected = Buffer.from(
+    base64url(
+      crypto
+        .createHmac("sha256", env.AUTH_JWT_SECRET)
+        .update(`${encodedHeader}.${encodedBody}`)
+        .digest(),
+    ),
   );
-  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
-  const payload = JSON.parse(Buffer.from(encodedBody, "base64url").toString("utf8"));
-  if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
-  return payload;
+  const given = Buffer.from(signature);
+  // timingSafeEqual throws on a length mismatch, which used to turn a
+  // malformed token into a 500 instead of a refusal.
+  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return invalid;
+  let payload: TokenPayload;
+  try {
+    payload = JSON.parse(Buffer.from(encodedBody, "base64url").toString("utf8"));
+  } catch {
+    return invalid;
+  }
+  if (!payload?.exp || payload.exp < Math.floor(Date.now() / 1000)) return { payload: null, reason: "expired" };
+  return { payload };
+}
+
+function verifyToken(token: string): TokenPayload | null {
+  return checkToken(token).payload;
 }
 
 // Every authenticated request used to spend two or three sequential database
@@ -91,8 +111,13 @@ async function currentUserFromRequest(c: Context) {
   // accept the token and active org via query params as a fallback for SSE.
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : c.req.query("access_token") || "";
   if (!token) return null;
-  const payload = verifyToken(token);
-  if (!payload) return null;
+  const checked = checkToken(token);
+  if ("reason" in checked) {
+    if (checked.reason === "expired") count("auth.token_expired");
+    else securityEvent("bad_token", { ip: clientIp(c), path: c.req.path });
+    return null;
+  }
+  const payload = checked.payload;
   const identity = await loadIdentity(payload.sub);
   if (!identity || identity.user.status !== "active") return null;
   const { user, memberships } = identity;

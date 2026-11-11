@@ -717,6 +717,39 @@ async function init() {
     console.warn("[DB] SOS migration note:", err.message);
   }
 
+  // Measurement for the platform stats page. received_via says which path
+  // delivered an alarm first (bridge push or the poll); consoles_at_receipt is
+  // how many open consoles it was sent to at that moment - zero means the alarm
+  // was stored but nobody was looking. platform_metrics holds hourly counts
+  // (see metrics.ts) and security_events the detail behind rejected requests.
+  try {
+    await pool.query(`
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS received_via TEXT;
+      ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS consoles_at_receipt INTEGER;
+      CREATE INDEX IF NOT EXISTS idx_sos_created ON sos_alerts(created_at);
+      CREATE INDEX IF NOT EXISTS idx_sos_events_created ON sos_alert_events(created_at);
+      CREATE INDEX IF NOT EXISTS idx_scrape_logs_created ON scrape_logs(created_at);
+      CREATE TABLE IF NOT EXISTS platform_metrics (
+        bucket   TIMESTAMPTZ NOT NULL,
+        key      TEXT NOT NULL,
+        count    BIGINT NOT NULL DEFAULT 0,
+        total_ms BIGINT NOT NULL DEFAULT 0,
+        PRIMARY KEY (bucket, key)
+      );
+      CREATE TABLE IF NOT EXISTS security_events (
+        id         BIGSERIAL PRIMARY KEY,
+        type       TEXT NOT NULL,
+        ip         TEXT,
+        email      TEXT,
+        path       TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_security_events_created ON security_events(created_at);
+    `);
+  } catch (err) {
+    console.warn("[DB] Stats migration note:", err.message);
+  }
+
   // Geofences split into zones and rules. A zone (the geofences row) is only a
   // place; a rule says who it watches, whether leaving or entering alarms, and
   // how loud. Each old fence becomes one "must stay inside" rule per asset it
@@ -2354,19 +2387,20 @@ async function insertSosAlert({
   pocstars_group_id = null,
   pocstars_group_name = null,
   upstream_status = null,
-}) {
+  received_via = null,
+}: any) {
   const { rows } = await pool.query(
     `INSERT INTO sos_alerts (
        sos_msg_id, device_id, device_name, triggered_at,
        location_lat, location_lon, location_raw,
        organization_id, unit_id, pocstars_group_id, pocstars_group_name,
-       upstream_status
+       upstream_status, received_via
      )
      VALUES (
        $1,$2,$3,$4,$5,$6,$7,
        (SELECT organization_id FROM devices WHERE device_id=$2),
        (SELECT unit_id FROM devices WHERE device_id=$2),
-       $8,$9,$10
+       $8,$9,$10,$11
      )
      ON CONFLICT (sos_msg_id) DO UPDATE
        SET device_name = COALESCE(EXCLUDED.device_name, sos_alerts.device_name),
@@ -2395,6 +2429,7 @@ async function insertSosAlert({
       pocstars_group_id ? String(pocstars_group_id) : null,
       pocstars_group_name || null,
       upstream_status ?? null,
+      received_via,
     ],
   );
   if (!rows[0]?.inserted) return null; // duplicate or location backfill
@@ -2411,6 +2446,11 @@ async function insertSosAlert({
     ],
   );
   return getSosAlert(rows[0].sos_msg_id);
+}
+
+/** How many open consoles a new alarm was sent to. Zero means nobody saw it arrive. */
+async function noteSosConsoles(sosAlertId: number, consoles: number) {
+  await pool.query(`UPDATE sos_alerts SET consoles_at_receipt = $2 WHERE id = $1`, [sosAlertId, consoles]);
 }
 
 /**
@@ -5598,6 +5638,7 @@ export {
   listSosEvents,
   listSosAlerts,
   countSosAlerts,
+  noteSosConsoles,
   allSosMsgIds,
 };
 

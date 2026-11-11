@@ -1,8 +1,8 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, ChevronDown, FileSearch, History, LogOut, Map, MapPinned, Plane, Radio, ShieldAlert, ShieldCheck, Siren, UsersRound } from "lucide-react";
+import { Activity, Building2, ChevronDown, FileSearch, History, LogOut, Map, MapPinned, Plane, Radio, ShieldAlert, ShieldCheck, Siren, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { getActiveOrganizationId, getMe, setActiveOrganizationId, setAuthToken } from "../lib/api";
+import { getActiveOrganizationId, getMe, getPlatformStats, setActiveOrganizationId, setAuthToken } from "../lib/api";
 import { clearOfflineCache } from "../lib/offline-cache";
 import { PLATFORM_ROLE_LABELS, isPlatformOwner, isPlatformStaff } from "../lib/platform-roles";
 import { ListenControl } from "./LiveRadioBar";
@@ -140,6 +140,23 @@ export function AppHeader() {
                   />
                   {isOwner ? (
                     <MenuLink
+                      to="/admin/stats"
+                      icon={Activity}
+                      label="System health"
+                      active={isActive("/admin/stats")}
+                      onNavigate={() => setMenuOpen(false)}
+                      // Numbers start loading on hover, so the page opens filled in.
+                      onHover={() =>
+                        queryClient.prefetchQuery({
+                          queryKey: ["platform-stats", "7d"],
+                          queryFn: () => getPlatformStats("7d"),
+                          staleTime: 15_000,
+                        })
+                      }
+                    />
+                  ) : null}
+                  {isOwner ? (
+                    <MenuLink
                       to="/admin/team"
                       icon={ShieldCheck}
                       label="Platform team"
@@ -181,11 +198,13 @@ export function AppHeader() {
   );
 }
 
-function MenuLink({ to, icon: Icon, label, active, onNavigate }) {
+function MenuLink({ to, icon: Icon, label, active, onNavigate, onHover }) {
   return (
     <Link
       to={to}
       onClick={onNavigate}
+      onMouseEnter={onHover}
+      onFocus={onHover}
       className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-[11px] ${
         active ? "bg-white/10 text-ops-red" : "text-neutral-300 hover:bg-white/10"
       }`}

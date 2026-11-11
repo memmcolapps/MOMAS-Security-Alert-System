@@ -10,6 +10,7 @@
 // It holds its own connection, like the position push, so a problem here can
 // never cost an alarm or a trail.
 import { env } from "../config";
+import { count, watchLink } from "../metrics";
 import * as db from "../db";
 import { PocstarsBridgeClient } from "./bridge-client";
 import { liveRadioConfigured } from "./live-gateway";
@@ -52,6 +53,7 @@ function heartbeatsLive(withinMs = 90_000) {
 export function startHeartbeatPush() {
   if (!liveRadioConfigured() || state.started) return;
   state.started = true;
+  watchLink("push.heartbeat", () => Boolean(state.client));
   void connect();
   setInterval(() => void sweep(), SWEEP_INTERVAL_MS).unref?.();
 }
@@ -76,6 +78,7 @@ function stopLiveness() {
 
 function scheduleReconnect(reason: string) {
   if (state.timer) return;
+  count("push.heartbeat.drop");
   const delay = state.backoffMs;
   state.lastError = reason;
   console.warn(`[Heartbeats] bridge push down (${reason}), retrying in ${Math.round(delay / 1000)}s`);

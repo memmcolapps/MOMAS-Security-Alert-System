@@ -297,6 +297,13 @@ const platformStaffRoute = createRoute({
   component: page("PlatformStaffRoute"),
 });
 
+const statsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/stats",
+  beforeLoad: requireOwner,
+  component: page("StatsRoute"),
+});
+
 const orgAdminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/org/admin",
@@ -319,6 +326,7 @@ const routeTree = rootRoute.addChildren([
   adminOrganizationDetailRoute,
   adminRadioNetworkRoute,
   platformStaffRoute,
+  statsRoute,
   orgAdminRoute,
 ]);
 

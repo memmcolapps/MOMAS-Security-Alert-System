@@ -58,6 +58,21 @@ function broadcast(event: string, alert: any, source: "pocstars" | "geofence") {
   }
 }
 
+/** Open consoles that would be sent this alarm right now. */
+export function alertListenerCount(alert: any) {
+  let listening = 0;
+  for (const client of clients) {
+    if (
+      client.admin ||
+      (Number(alert.organization_id) === Number(client.organizationId) &&
+        (!client.unitId || Number(alert.unit_id) === Number(client.unitId)))
+    ) {
+      listening += 1;
+    }
+  }
+  return listening;
+}
+
 bus.on("operational-alert:new", (alert) => broadcast("alert_new", alert, "geofence"));
 bus.on("operational-alert:updated", (alert) => broadcast("alert_updated", alert, "geofence"));
 bus.on("pocstars-alert:new", (alert) => broadcast("alert_new", alert, "pocstars"));
