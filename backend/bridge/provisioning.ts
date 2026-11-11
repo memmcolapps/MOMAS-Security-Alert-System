@@ -962,12 +962,18 @@ export class PocstarsProvisioning {
     return rows.length ? Number(rows[0].uid) : null;
   }
 
-  // Open alarms from the recipient's own company that the SOS service never
+  // Open alarms, from any company on this install, that the SOS service never
   // addressed to the recipient. The service sends an alarm to whatever group
-  // the radio is in when the button is pressed; during a private call that is
-  // a temporary group holding only the caller, so the alarm skips the
-  // recipient and never shows up in its /sos/mg/records page. Rows come back
-  // in the same shape that page uses, so both feed one pipeline.
+  // the radio is in when the button is pressed, so two kinds skip the
+  // recipient and never show up in its /sos/mg/records page:
+  //  - an EPAIL radio in a private call (the alarm goes to the call's
+  //    temporary group), the case that hid the 2 Nov demo alarm;
+  //  - every radio of every other company (the alarm goes to that company's
+  //    own dispatchers). MOMAS manages radios for ~40 companies here, and
+  //    until this read was widened none of their alarms reached it.
+  // MOMAS files each alarm under the radio's own organization and drops the
+  // ones from radios it does not manage. Rows come back in the same shape the
+  // records page uses, so both feed one pipeline.
   async openSosAlarmsMissedBy(targetUid: number, sinceMs: number) {
     const [rows]: any = await this.pool.query(
       `SELECT m.sos_msg_id AS sosMsgId, m.sos_from_id AS sosFromId,
@@ -978,17 +984,15 @@ export class PocstarsProvisioning {
               m.sos_start_time_stamp AS sosStamp, m.sos_status AS sosStatus
          FROM tb_sos_alarm_message m
          JOIN tb_User sender ON sender.User_ID = m.sos_from_id
-         JOIN tb_User target ON target.User_ID = ?
         WHERE m.sos_status = 0
           AND COALESCE(m.sos_valid, 0) = 0
           AND m.sos_start_time_stamp >= ?
-          AND sender.User_CompanyID = target.User_CompanyID
           AND NOT EXISTS (
                 SELECT 1 FROM tb_sos_alarm_message_record r
                  WHERE r.sos_msg_id = m.sos_msg_id AND r.sos_to_uid = ?)
         ORDER BY m.sos_msg_id DESC
         LIMIT 50`,
-      [targetUid, sinceMs, targetUid],
+      [sinceMs, targetUid],
     );
     return rows.map((row: any) => ({
       ...row,

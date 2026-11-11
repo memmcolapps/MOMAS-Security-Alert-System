@@ -355,6 +355,10 @@ async function fetchPocstarsSos(
 
 async function persistAndBroadcast(rows: any[], via: "push" | "poll" = "poll") {
   for (const row of rows) {
+    // The bridge also reports alarms from other companies on the same radio
+    // install. Only radios MOMAS manages belong here; the rest are another
+    // customer's business.
+    if (row.sosMissedRecipient && !(await db.getDevice(String(row.sosFromId)).catch(() => true))) continue;
     let lat = null;
     let lon = null;
     let locationRaw = null;
