@@ -633,12 +633,12 @@ export function AlarmsRoute() {
       </section>
 
       <section className="glass-panel overflow-hidden rounded-lg">
-        <div className="hidden grid-cols-[minmax(190px,1.4fr)_120px_minmax(120px,0.8fr)_130px_130px_100px_24px] gap-3 border-b border-white/10 px-4 py-2 text-[9px] font-bold uppercase tracking-wider text-neutral-600 md:grid">
+        <div className="hidden md:grid-cols-[minmax(0,1.5fr)_110px_120px_90px_20px] lg:grid-cols-[minmax(190px,1.4fr)_120px_minmax(120px,0.8fr)_130px_130px_100px_24px] gap-3 border-b border-white/10 px-4 py-2 text-[9px] font-bold uppercase tracking-wider text-neutral-600 md:grid">
           <span>Alarm</span>
           <span>Type</span>
-          <span>Assignment</span>
+          <span className="md:max-lg:hidden">Assignment</span>
           <span>Status</span>
-          <span>Raised</span>
+          <span className="md:max-lg:hidden">Raised</span>
           <span>Elapsed</span>
           <span />
         </div>
@@ -655,7 +655,7 @@ export function AlarmsRoute() {
               const rowSync = radioSync(alert);
               return (
                 <button
-                  className={`grid w-full gap-3 border-b border-white/5 px-4 py-3 text-left hover:bg-white/[0.035] focus:bg-white/[0.06] focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-red-400/60 md:grid-cols-[minmax(190px,1.4fr)_120px_minmax(120px,0.8fr)_130px_130px_100px_24px] md:items-center ${
+                  className={`grid w-full gap-3 border-b border-white/5 px-4 py-3 text-left hover:bg-white/[0.035] focus:bg-white/[0.06] focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-red-400/60 md:grid-cols-[minmax(0,1.5fr)_110px_120px_90px_20px] lg:grid-cols-[minmax(190px,1.4fr)_120px_minmax(120px,0.8fr)_130px_130px_100px_24px] md:items-center ${
                     String(selectedId) === String(alert.alert_key) ? "bg-white/[0.05]" : ""
                   }`}
                   key={alert.alert_key}
@@ -670,9 +670,13 @@ export function AlarmsRoute() {
                     <span className="mt-0.5 block truncate font-mono text-[9px] text-neutral-600">
                       {alarmReference(alert)} · {alert.device_id}
                     </span>
+                    {/* Raised has no column of its own on a tablet held upright. */}
+                    <span className="mt-0.5 hidden truncate text-[10px] text-neutral-500 md:max-lg:block">
+                      Raised {formatDateTime(alert.triggered_at)}
+                    </span>
                   </span>
                   <KindTag alert={alert} />
-                  <span className="min-w-0 text-[10px] text-neutral-500">
+                  <span className="min-w-0 text-[10px] text-neutral-500 md:max-lg:hidden">
                     <span className="block truncate">{alert.unit_name || alert.pocstars_group_name || alert.organization_name || "Unassigned"}</span>
                     {alert.organization_name && alert.unit_name ? <span className="block truncate text-[9px] text-neutral-700">{alert.organization_name}</span> : null}
                   </span>
@@ -684,7 +688,7 @@ export function AlarmsRoute() {
                       </span>
                     ) : null}
                   </span>
-                  <span className="text-[10px] text-neutral-500">{formatDateTime(alert.triggered_at)}</span>
+                  <span className="text-[10px] text-neutral-500 md:max-lg:hidden">{formatDateTime(alert.triggered_at)}</span>
                   <span className={`text-[10px] font-bold ${ageTone(alert, now)}`}>{elapsed(alert.triggered_at, alert.resolved_at, now)}</span>
                   <ChevronRight size={14} className="hidden text-neutral-700 md:block" />
                 </button>

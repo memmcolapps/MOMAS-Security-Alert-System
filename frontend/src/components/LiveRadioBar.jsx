@@ -61,14 +61,16 @@ export function ListenControl() {
       <button
         onClick={() => setView((current) => (current ? null : "channels"))}
         aria-expanded={Boolean(view)}
-        className={`inline-flex items-center gap-1.5 rounded border px-2.5 py-1 text-[11px] font-bold transition ${
+        aria-label={inCall ? "In call" : listening && radio.channel ? `Listening: ${radio.channel.name}` : "Listen"}
+        title={inCall ? "In call" : listening && radio.channel ? `Listening: ${radio.channel.name}` : "Listen"}
+        className={`inline-flex h-9 items-center gap-1.5 rounded border px-2.5 text-[11px] font-bold transition min-[1180px]:h-auto min-[1180px]:py-1 ${
           listening || inCall
             ? "border-ops-green/40 bg-ops-green/10 text-ops-green hover:bg-ops-green/15"
             : "border-white/10 bg-white/[0.03] text-neutral-300 hover:bg-white/[0.07]"
         }`}
       >
         <Headphones size={13} />
-        <span className="max-w-[140px] truncate">
+        <span className="hidden max-w-[140px] truncate min-[1180px]:inline">
           {inCall ? "In call" : listening && radio.channel ? radio.channel.name : "Listen"}
         </span>
         <ChevronDown size={12} className="text-neutral-500" />

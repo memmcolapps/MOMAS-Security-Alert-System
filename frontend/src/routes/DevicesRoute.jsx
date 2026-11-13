@@ -619,7 +619,7 @@ export function DevicesRoute() {
           ) : null}
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-left text-xs">
+          <table className="card-table w-full border-collapse text-left text-xs">
             <thead>
               <tr className="border-b border-white/10 text-[9px] uppercase tracking-wide text-neutral-500">
                 <th className="px-4 py-3">Device ID</th>
@@ -641,12 +641,12 @@ export function DevicesRoute() {
               ) : devices.length ? (
                 devices.map((device) => (
                   <tr className="border-b border-white/5 hover:bg-white/[0.03]" key={device.device_id}>
-                    <td className="px-4 py-3 font-mono text-[11px] text-ops-green">{device.device_id}</td>
-                    <td className="px-4 py-3">{device.name || <Muted />}</td>
+                    <td data-label="Device ID" className="px-4 py-3 font-mono text-[11px] text-ops-green">{device.device_id}</td>
+                    <td data-label="Name" className="px-4 py-3">{device.name || <Muted />}</td>
                     {isPlatformAdmin ? (
-                      <td className="px-4 py-3">{device.organization_name || <span className="text-neutral-700">Unassigned</span>}</td>
+                      <td data-label="Company" className="px-4 py-3">{device.organization_name || <span className="text-neutral-700">Unassigned</span>}</td>
                     ) : null}
-                    <td className="px-4 py-3">
+                    <td data-label="Channels" className="px-4 py-3">
                       {(device.channels || []).length ? (
                         <div className="flex flex-wrap gap-1">
                           {device.channels.map((channel) => (
@@ -657,15 +657,15 @@ export function DevicesRoute() {
                         </div>
                       ) : <span className="text-neutral-700">No channel</span>}
                     </td>
-                    <td className="px-4 py-3">
+                    <td data-label="Operator" className="px-4 py-3">
                       <OperatorCell
                         device={device}
                         canEdit={canManageDevices}
                         onSaved={() => queryClient.invalidateQueries({ queryKey: ["devices"] })}
                       />
                     </td>
-                    <td className="px-4 py-3">{device.device_type ? deviceTypeLabel(device.device_type) : <Muted />}</td>
-                    <td className="px-4 py-3">
+                    <td data-label="Type" className="px-4 py-3">{device.device_type ? deviceTypeLabel(device.device_type) : <Muted />}</td>
+                    <td data-label="Status" className="px-4 py-3">
                       {/* A radio the network has dropped reads as its own state.
                           Shown as plain "Inactive" it was indistinguishable
                           from a handset that is merely switched off, so nobody
@@ -691,8 +691,8 @@ export function DevicesRoute() {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-[11px] text-neutral-600">{formatDate(device.created_at)}</td>
-                    <td className="px-4 py-3">
+                    <td data-label="Added" className="px-4 py-3 text-[11px] text-neutral-600">{formatDate(device.created_at)}</td>
+                    <td data-card="actions" className="px-4 py-3">
                       <div className="flex flex-wrap gap-2">
                         <button className="inline-flex items-center gap-1 rounded border border-green-500/25 px-2 py-1 text-[10px] text-ops-green hover:bg-green-500/10" onClick={() => setSelectedRadio(device)}>
                           <MessageSquare size={11} /> Open radio

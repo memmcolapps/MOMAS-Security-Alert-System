@@ -1,6 +1,6 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, Building2, ChevronDown, FileSearch, History, LogOut, Map, MapPinned, Plane, Radio, ShieldAlert, ShieldCheck, Siren, UsersRound } from "lucide-react";
+import { Activity, Building2, ChevronDown, FileSearch, History, LogOut, Map, MapPinned, Menu, Plane, Radio, ShieldAlert, ShieldCheck, Siren, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getActiveOrganizationId, getMe, getPlatformStats, getServerStatus, setActiveOrganizationId, setAuthToken } from "../lib/api";
 import { clearOfflineCache } from "../lib/offline-cache";
@@ -43,6 +43,23 @@ export function AppHeader() {
 
   const isActive = (prefix) => path === prefix || path.startsWith(`${prefix}/`);
 
+  // Platform administration lives in the account menu, not here: this bar is
+  // operational views only, so it stays short enough to fit a tablet.
+  const navItems = [
+    { to: "/", icon: Map, label: "Map", active: path === "/" },
+    ...(modules.has("radio")
+      ? [
+          { to: "/replay", icon: History, label: "Replay", active: isActive("/replay") },
+          { to: "/alarms", icon: Siren, label: "Alarms", active: isActive("/alarms") },
+          { to: "/devices", icon: Radio, label: "Devices", active: isActive("/devices") },
+        ]
+      : []),
+    ...(modules.has("geofence") ? [{ to: "/geofences", icon: MapPinned, label: "Geofences", active: isActive("/geofences") }] : []),
+    ...(isAdmin ? [{ to: "/osint", icon: FileSearch, label: "OSINT", active: isActive("/osint") }] : []),
+    ...(modules.has("drone") ? [{ to: "/drones", icon: Plane, label: "Drones", active: isActive("/drones") }] : []),
+    ...(!isAdmin && canManageOrg ? [{ to: "/org/admin", icon: UsersRound, label: "Admin", active: isActive("/org/admin") }] : []),
+  ];
+
   function logout() {
     setAuthToken(null);
     clearOfflineCache();
@@ -59,10 +76,10 @@ export function AppHeader() {
 
   return (
     <header className="relative z-10 border-b border-white/10 bg-black/70 backdrop-blur">
-      <div className="flex h-12 items-center gap-4 px-4 text-neutral-200">
+      <div className="flex h-12 items-center gap-3 px-3 text-neutral-200 md:gap-4 md:px-4">
         <Link to="/" className="flex shrink-0 items-center gap-2 whitespace-nowrap text-[12px] font-bold tracking-wide text-ops-red">
           <ShieldAlert size={16} />
-          <span>EPAIL <span className="text-neutral-400">Intelligence</span></span>
+          <span>EPAIL <span className="hidden text-neutral-400 min-[400px]:inline">Intelligence</span></span>
         </Link>
 
         {org ? (
@@ -76,22 +93,12 @@ export function AppHeader() {
           </span>
         ) : null}
 
-        <nav className="flex items-center gap-1 text-[11px] font-bold">
-          <NavItem to="/" icon={Map} label="Map" active={path === "/"} />
-          {modules.has("radio") ? <>
-            <NavItem to="/replay" icon={History} label="Replay" active={isActive("/replay")} />
-            <NavItem to="/alarms" icon={Siren} label="Alarms" active={isActive("/alarms")} />
-            <NavItem to="/devices" icon={Radio} label="Devices" active={isActive("/devices")} />
-          </> : null}
-          {modules.has("geofence") ? <NavItem to="/geofences" icon={MapPinned} label="Geofences" active={isActive("/geofences")} /> : null}
-          {isAdmin ? <NavItem to="/osint" icon={FileSearch} label="OSINT" active={isActive("/osint")} /> : null}
-          {modules.has("drone") ? <NavItem to="/drones" icon={Plane} label="Drones" active={isActive("/drones")} /> : null}
-          {/* Platform administration lives in the account menu, not here. This
-              bar is operational views, and an eighth item pushed the account
-              button off-screen on a laptop - the nav does not shrink or wrap. */}
-          {!isAdmin && canManageOrg ? (
-            <NavItem to="/org/admin" icon={UsersRound} label="Admin" active={isActive("/org/admin")} />
-          ) : null}
+        {/* Labels need ~1,100px with every item showing. Below 1,180px the
+            links go icon-only; on phones they move into the account menu. */}
+        <nav className="hidden min-w-0 items-center gap-1 overflow-x-auto text-[11px] font-bold [scrollbar-width:none] md:flex">
+          {navItems.map((item) => (
+            <NavItem key={item.to} {...item} />
+          ))}
         </nav>
 
         <div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap">
@@ -103,18 +110,26 @@ export function AppHeader() {
           {user ? (
             <button
               onClick={() => setMenuOpen((value) => !value)}
-              className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] hover:bg-white/[0.07]"
+              aria-label="Menu"
+              aria-expanded={menuOpen}
+              className="inline-flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded border border-white/10 bg-white/[0.03] px-2 text-[11px] hover:bg-white/[0.07] active:bg-white/[0.1] md:h-auto md:px-2.5 md:py-1"
             >
+              <Menu size={16} className="text-neutral-300 md:hidden" />
               <span className="grid h-5 w-5 place-items-center rounded-full bg-ops-red text-[10px] font-bold text-black">
                 {avatarLetter}
               </span>
-              <span className="hidden max-w-[180px] truncate text-neutral-300 sm:inline">{user.email}</span>
-              <ChevronDown size={12} className="text-neutral-500" />
+              <span className="hidden max-w-[180px] truncate text-neutral-300 xl:inline">{user.email}</span>
+              <ChevronDown size={12} className="hidden text-neutral-500 md:block" />
             </button>
           ) : null}
 
           {menuOpen ? (
-            <div className="absolute right-4 top-full mt-1 w-56 rounded-md border border-white/10 bg-black/95 p-2 shadow-xl backdrop-blur">
+            <div className="absolute right-3 top-full mt-1 max-h-[calc(100dvh-4rem)] w-64 overflow-y-auto rounded-md border border-white/10 bg-black/95 p-2 shadow-xl backdrop-blur md:right-4 md:w-56">
+              <div className="border-b border-white/10 pb-1 md:hidden">
+                {navItems.map((item) => (
+                  <MenuLink key={item.to} {...item} onNavigate={() => setMenuOpen(false)} />
+                ))}
+              </div>
               <div className="border-b border-white/10 px-2 pb-2 text-[11px] text-neutral-400">
                 <div className="truncate font-bold text-neutral-200">{user?.name || user?.email}</div>
                 <div className="truncate text-neutral-500">{user?.email}</div>
@@ -190,7 +205,7 @@ export function AppHeader() {
                 </div>
               ) : null}
               <button
-                className="mt-1 inline-flex w-full items-center gap-2 rounded px-2 py-1.5 text-[11px] text-neutral-300 hover:bg-white/10"
+                className="mt-1 inline-flex w-full items-center gap-2 rounded px-2 py-2.5 text-[13px] text-neutral-300 hover:bg-white/10 md:py-1.5 md:text-[11px]"
                 onClick={logout}
               >
                 <LogOut size={13} /> Sign out
@@ -210,11 +225,11 @@ function MenuLink({ to, icon: Icon, label, active, onNavigate, onHover }) {
       onClick={onNavigate}
       onMouseEnter={onHover}
       onFocus={onHover}
-      className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-[11px] ${
+      className={`flex w-full items-center gap-2 rounded px-2 py-2.5 text-[13px] md:py-1.5 md:text-[11px] ${
         active ? "bg-white/10 text-ops-red" : "text-neutral-300 hover:bg-white/10"
       }`}
     >
-      <Icon size={13} /> {label}
+      <Icon size={14} /> {label}
     </Link>
   );
 }
@@ -223,11 +238,14 @@ function NavItem({ to, icon: Icon, label, active }) {
   return (
     <Link
       to={to}
-      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded px-2.5 py-1 transition ${
+      title={label}
+      aria-label={label}
+      className={`inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded px-2.5 transition min-[1180px]:h-auto min-[1180px]:py-1 ${
         active ? "bg-white/10 text-ops-red" : "text-neutral-400 hover:bg-white/5 hover:text-neutral-100"
       }`}
     >
-      <Icon size={13} /> {label}
+      <Icon size={15} className="min-[1180px]:h-[13px] min-[1180px]:w-[13px]" />
+      <span className="hidden min-[1180px]:inline">{label}</span>
     </Link>
   );
 }

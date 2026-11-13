@@ -359,7 +359,7 @@ export function DronesRoute() {
           {registryQuery.isLoading ? "Loading..." : `${visibleDrones.length} registered drone${visibleDrones.length === 1 ? "" : "s"} · ${onlineCount} live now`}
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-left text-xs">
+          <table className="card-table w-full border-collapse text-left text-xs">
             <thead>
               <tr className="border-b border-white/10 text-[9px] uppercase tracking-wide text-neutral-500">
                 <th className="px-4 py-3">Sysid</th>
@@ -384,15 +384,15 @@ export function DronesRoute() {
                   const liveState = liveBySysid.get(Number(drone.sysid));
                   return (
                     <tr className="border-b border-white/5 hover:bg-white/[0.03]" key={drone.sysid}>
-                      <td className="px-4 py-3 font-mono text-[11px] text-sky-400">{drone.sysid}</td>
-                      <td className="px-4 py-3">{drone.name || <Muted />}</td>
-                      <td className="px-4 py-3 font-mono text-[11px]">{drone.registration || <Muted />}</td>
-                      <td className="px-4 py-3">{drone.model || <Muted />}</td>
+                      <td data-label="Sysid" className="px-4 py-3 font-mono text-[11px] text-sky-400">{drone.sysid}</td>
+                      <td data-label="Name" className="px-4 py-3">{drone.name || <Muted />}</td>
+                      <td data-label="Registration" className="px-4 py-3 font-mono text-[11px]">{drone.registration || <Muted />}</td>
+                      <td data-label="Model" className="px-4 py-3">{drone.model || <Muted />}</td>
                       {isPlatformAdmin ? (
-                        <td className="px-4 py-3">{drone.organization_name || <span className="text-neutral-700">Unassigned</span>}</td>
+                        <td data-label="Company" className="px-4 py-3">{drone.organization_name || <span className="text-neutral-700">Unassigned</span>}</td>
                       ) : null}
-                      <td className="px-4 py-3">{drone.operator || <Muted />}</td>
-                      <td className="px-4 py-3">
+                      <td data-label="Operator" className="px-4 py-3">{drone.operator || <Muted />}</td>
+                      <td data-label="Live" className="px-4 py-3">
                         {liveState?.online ? (
                           <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[9px] font-bold text-sky-400">
                             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-400" /> LIVE
@@ -403,13 +403,13 @@ export function DronesRoute() {
                           <Muted />
                         )}
                       </td>
-                      <td className="px-4 py-3">
+                      <td data-label="Status" className="px-4 py-3">
                         <span className={`rounded-full border px-2 py-0.5 text-[9px] font-bold ${drone.active ? "border-sky-500/30 bg-sky-500/10 text-sky-400" : "border-white/10 bg-white/5 text-neutral-500"}`}>
                           {drone.active ? "Active" : "Inactive"}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-[11px] text-neutral-600">{formatDate(drone.created_at)}</td>
-                      <td className="px-4 py-3">
+                      <td data-label="Added" className="px-4 py-3 text-[11px] text-neutral-600">{formatDate(drone.created_at)}</td>
+                      <td data-card="actions" className="px-4 py-3">
                         <div className="flex gap-2">
                           {canManageDrones ? (
                             <button className="rounded border border-white/10 px-2 py-1 text-[10px] text-neutral-500 hover:border-sky-400 hover:text-sky-400" onClick={() => openEdit(drone)}>

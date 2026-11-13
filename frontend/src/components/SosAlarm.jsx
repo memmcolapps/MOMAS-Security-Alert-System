@@ -250,9 +250,13 @@ export function SosAlarmBanner() {
         onClick={enableAlerts}
         // The tracked-radio tiles start below anything marked like this.
         data-grid-avoid=""
-        className="fixed left-1/2 top-[calc(var(--ops-chrome)+8px)] z-[1200] inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-amber-400/50 bg-[#1a1408]/95 px-3 py-1.5 text-[11px] font-bold text-amber-300 hover:bg-[#2a200c]"
+        // One line at every width: the long sentence wrapped to three lines on
+        // a phone and covered the page title.
+        className="fixed left-1/2 top-[calc(var(--ops-chrome)+8px)] z-[1200] inline-flex max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full border border-amber-400/50 bg-[#1a1408]/95 px-3 py-1.5 text-[11px] font-bold text-amber-300 shadow-lg backdrop-blur hover:bg-[#2a200c] active:bg-[#2a200c]"
       >
-        <Volume2 size={13} /> Alarm sound is off until this screen is clicked - click to turn it on
+        <Volume2 size={13} className="shrink-0" />
+        <span className="md:hidden">Alarm sound off · Tap to turn on</span>
+        <span className="hidden md:inline">Alarm sound is off until this screen is clicked. Click to turn it on.</span>
       </button>
     );
   }

@@ -713,3 +713,61 @@ textarea {
     animation: none;
   }
 }
+
+/* Wide registry tables (Devices, Drones) become one card per row on phones.
+   Each cell carries its column name in data-label, shown on the left. */
+@media (max-width: 767px) {
+  .card-table thead {
+    display: none;
+  }
+
+  .card-table,
+  .card-table tbody,
+  .card-table tr,
+  .card-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .card-table tr {
+    padding: 12px 16px;
+  }
+
+  .card-table td[data-label] {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 4px 0 !important;
+    text-align: right;
+    font-size: 13px;
+  }
+
+  .card-table td[data-label]::before {
+    content: attr(data-label);
+    flex: none;
+    padding-top: 1px;
+    color: #737373;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 11px;
+    text-align: left;
+  }
+
+  .card-table td[data-label] > * {
+    min-width: 0;
+  }
+
+  .card-table td[data-label] .flex-wrap {
+    justify-content: flex-end;
+  }
+
+  .card-table td[data-card="actions"] {
+    padding: 10px 0 0 !important;
+  }
+
+  .card-table td[data-card="actions"] button {
+    min-height: 40px;
+    padding-inline: 12px;
+    font-size: 12px;
+  }
+}
