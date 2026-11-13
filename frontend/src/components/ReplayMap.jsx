@@ -1,6 +1,6 @@
 import L from "leaflet";
 import { useEffect, useRef, useState } from "react";
-import { IMAGERY_LABEL_TILES, IMAGERY_ROAD_TILES, SATELLITE_TILES } from "../lib/basemaps";
+import { IMAGERY_LABEL_TILES, IMAGERY_ROAD_TILES, satelliteLayer } from "../lib/basemaps";
 import { escapeHtml } from "../lib/domain";
 import { mainCluster, pathIndexAt, radioStateAt } from "../lib/fleet-replay";
 import { replayPosition } from "../lib/radio-replay";
@@ -66,7 +66,7 @@ export function ReplayMap({ fleet, time: t, focusId, trailMode, hiddenIds, showS
     // clear of the side panel needs room past the border, and a clamp would
     // shove Lagos under the panel.
     const map = L.map(nodeRef.current, { zoomControl: false, maxZoom: 21 }).setView(NIGERIA_CENTER, 6);
-    L.tileLayer(SATELLITE_TILES.url, SATELLITE_TILES.options).addTo(map);
+    satelliteLayer(L).addTo(map);
     L.tileLayer(IMAGERY_ROAD_TILES.url, IMAGERY_ROAD_TILES.options).addTo(map);
     L.tileLayer(IMAGERY_LABEL_TILES.url, IMAGERY_LABEL_TILES.options).addTo(map);
     L.control.zoom({ position: "topright" }).addTo(map);

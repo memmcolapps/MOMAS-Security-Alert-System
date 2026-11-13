@@ -4,7 +4,7 @@ import { addZoneName, hideZoneNamesWhenFar, zoneColour } from "../lib/zone-colou
 import "leaflet.heat";
 import "leaflet.markercluster";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { IMAGERY_LABEL_TILES, IMAGERY_ROAD_TILES, LABELLED_BASEMAPS, SATELLITE_TILES, VECTOR_STYLES, vectorBasemapLayer } from "../lib/basemaps";
+import { IMAGERY_LABEL_TILES, IMAGERY_ROAD_TILES, LABELLED_BASEMAPS, VECTOR_STYLES, satelliteLayer, vectorBasemapLayer } from "../lib/basemaps";
 import { deviceTypeGlyph, escapeHtml, safeUrl, severityColors, severityLabels, typeIcons } from "../lib/domain";
 import { MOTION, distanceMetres, fixAgeSec, fixFromLocation, formatAge, trailSegments } from "../lib/radio-motion";
 import { newestPoint, sampleTrack } from "../lib/radio-playback";
@@ -339,7 +339,7 @@ export function OperationsMap({
 
     // Vector basemaps are created on first use (see the basemap effect).
     const baseLayers = {
-      satellite: L.tileLayer(SATELLITE_TILES.url, SATELLITE_TILES.options),
+      satellite: satelliteLayer(L),
     };
     // Street names under place names, so a town label is never hidden by a road.
     const labelLayer = L.layerGroup([

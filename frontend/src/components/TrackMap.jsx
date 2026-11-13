@@ -1,6 +1,6 @@
 import L from "leaflet";
 import { useEffect, useRef } from "react";
-import { IMAGERY_LABEL_TILES, IMAGERY_ROAD_TILES, SATELLITE_TILES } from "../lib/basemaps";
+import { IMAGERY_LABEL_TILES, IMAGERY_ROAD_TILES, satelliteLayer } from "../lib/basemaps";
 import { onFrame } from "../lib/frame-ticker";
 import { MOTION, distanceMetres, fixAgeSec, fixFromLocation, trailSegments } from "../lib/radio-motion";
 import { newestPoint, sampleTrack } from "../lib/radio-playback";
@@ -49,7 +49,7 @@ export function TrackMap({ radios, radioTracks, trails, paused, onPause, onState
       fadeAnimation: false,
     }).setView([9, 8.5], 6);
     const tileOptions = { updateWhenIdle: true, keepBuffer: 1 };
-    L.tileLayer(SATELLITE_TILES.url, { ...SATELLITE_TILES.options, ...tileOptions }).addTo(map);
+    satelliteLayer(L, tileOptions).addTo(map);
     L.tileLayer(IMAGERY_ROAD_TILES.url, { ...IMAGERY_ROAD_TILES.options, ...tileOptions }).addTo(map);
     L.tileLayer(IMAGERY_LABEL_TILES.url, { ...IMAGERY_LABEL_TILES.options, ...tileOptions }).addTo(map);
     // One canvas for every trail segment is far cheaper than an SVG path each.

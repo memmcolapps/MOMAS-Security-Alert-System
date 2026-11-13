@@ -18,7 +18,7 @@
  * different pane - keep their full colour.
  */
 
-const ESRI_CLARITY = "https://clarity.maptiles.arcgis.com/arcgis/rest/services";
+const ESRI_IMAGERY = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer";
 const ESRI_CANVAS = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas";
 const ESRI_REFERENCE = "https://services.arcgisonline.com/arcgis/rest/services/Reference";
 const ESRI_ATTRIBUTION = "Tiles &copy; Esri";
@@ -36,11 +36,45 @@ export const DARK_TILES = {
 /**
  * Imagery is the default basemap: it is how someone who does not read maps
  * recognises a real place - they see their own buildings.
+ *
+ * Esri's main World Imagery service, which carries its newest photos (checked
+ * Nov 2026: Kaduna Mar 2026, Kano Jan 2026, Abuja Dec 2025, about 30 cm). The
+ * "Clarity" service used before now redirects every street-level zoom (15+)
+ * to a frozen January 2020 snapshot.
+ *
+ * Cities have photos to zoom 19; much of the countryside stops at 18, where
+ * Esri would answer with a grey "Map data not yet available" square.
+ * blankTile=false turns that square into a plain miss, and a zoom-18 layer
+ * underneath shows through, slightly enlarged, wherever the zoom-19 photo is
+ * missing.
  */
-export const SATELLITE_TILES = {
-  url: `${ESRI_CLARITY}/World_Imagery/MapServer/tile/{z}/{y}/{x}`,
-  options: { maxZoom: 21, maxNativeZoom: 19, attribution: "Tiles &copy; Esri Clarity" },
-};
+const SATELLITE_URL = `${ESRI_IMAGERY}/tile/{z}/{y}/{x}?blankTile=false`;
+const SATELLITE_ATTRIBUTION = "Tiles &copy; Esri";
+
+export function satelliteLayer(L, extraOptions = {}) {
+  const base = L.tileLayer(SATELLITE_URL, {
+    maxZoom: 21,
+    maxNativeZoom: 18,
+    attribution: SATELLITE_ATTRIBUTION,
+    ...extraOptions,
+  });
+  // Only exists from zoom 19, so lower zooms fetch each photo once.
+  const detail = L.tileLayer(SATELLITE_URL, {
+    minZoom: 19,
+    maxZoom: 21,
+    maxNativeZoom: 19,
+    ...extraOptions,
+  });
+  const group = L.layerGroup([base, detail]);
+  // Basemap switching sends the active basemap behind the labels. Each call
+  // lands below the last, so the detail layer goes first to end up on top.
+  group.bringToBack = () => {
+    detail.bringToBack();
+    base.bringToBack();
+    return group;
+  };
+  return group;
+}
 
 /**
  * Imagery carries no place names of its own, and the operations map opens

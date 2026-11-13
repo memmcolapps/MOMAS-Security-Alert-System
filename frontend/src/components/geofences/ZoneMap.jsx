@@ -1,7 +1,7 @@
 import L from "leaflet";
 import { useEffect, useRef } from "react";
 import { LEVEL_STYLES } from "../../lib/alarm-levels";
-import { IMAGERY_LABEL_TILES, IMAGERY_ROAD_TILES, LABELLED_BASEMAPS, SATELLITE_TILES, vectorBasemapLayer } from "../../lib/basemaps";
+import { IMAGERY_LABEL_TILES, IMAGERY_ROAD_TILES, LABELLED_BASEMAPS, satelliteLayer, vectorBasemapLayer } from "../../lib/basemaps";
 import { escapeHtml } from "../../lib/domain";
 import { polygonSelfIntersects } from "../../lib/fence-placement";
 import { addZoneName, hideZoneNamesWhenFar, zoneColour } from "../../lib/zone-colours";
@@ -153,7 +153,7 @@ export function ZoneMap({
     const map = mapRef.current;
     if (!map) return;
     const cache = (layers.current.baseLayers ||= {
-      satellite: L.tileLayer(SATELLITE_TILES.url, SATELLITE_TILES.options),
+      satellite: satelliteLayer(L),
     });
     layers.current.labelLayer ||= L.layerGroup([
       L.tileLayer(IMAGERY_ROAD_TILES.url, IMAGERY_ROAD_TILES.options),
