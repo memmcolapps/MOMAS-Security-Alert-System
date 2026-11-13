@@ -180,7 +180,7 @@ export function getServerStatus(sosPoll: { lastOkAt: string | null }) {
       {
         id: "contabo",
         name: "Contabo server",
-        role: "Runs MOMAS and its database",
+        role: "Runs EPAIL Intelligence and its database",
         // The page loading at all means this server is up.
         state: worst(["up", ...contabo.map((c) => c.state)]),
         checks: contabo,

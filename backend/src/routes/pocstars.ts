@@ -1148,7 +1148,7 @@ router.post("/radio/messages", requireOperator, async (c) => {
         msg: message,
         msg_descriptor: message,
         from: DISPATCHER_UID,
-        from_name: "MOMAS Command",
+        from_name: "EPAIL Command",
         to: deviceId,
         to_name: device.name || deviceId,
         msg_type: 1,

@@ -68,7 +68,7 @@ async function claimSeatSlot(user: any, organizationId: number | null) {
   if (organization && String(organization.status) === DISCOVERED_STATUS) {
     return {
       ok: false as const,
-      message: `${organization.name} was discovered on the radio network and is not operated by MOMAS yet. `
+      message: `${organization.name} was discovered on the radio network and is not operated by EPAIL yet. `
         + "Promote it before opening a radio console.",
       busyBy: null,
     };
@@ -155,7 +155,7 @@ export function liveRadioConfigured() {
 // database; keep the voice path for a bridge built without provisioning.
 export async function queryPocstarsInventory() {
   if (!liveRadioConfigured()) {
-    throw new Error("The radio network link is not configured on this MOMAS server.");
+    throw new Error("The radio network link is not configured on this EPAIL server.");
   }
   const fromDatabase = await queryInventoryFromDatabase();
   if (fromDatabase) return fromDatabase;
@@ -168,7 +168,7 @@ export async function queryPocstarsInventory() {
 // competing with one, and the caller retries later.
 export async function refreshPresenceOverVoice() {
   if (!liveRadioConfigured()) {
-    throw new Error("The radio network link is not configured on this MOMAS server.");
+    throw new Error("The radio network link is not configured on this EPAIL server.");
   }
   return await db.refreshPocstarsPresence(await queryInventoryOverVoice());
 }
@@ -408,7 +408,7 @@ export async function provisionOnNetwork(command: string, payload: Record<string
   // means the refusal is the same either way.
   await assertCompanyIsOperated(command, payload);
   if (!liveRadioConfigured()) {
-    throw new Error("The radio network link is not configured on this MOMAS server.");
+    throw new Error("The radio network link is not configured on this EPAIL server.");
   }
   const client = createLiveClient();
   try {
@@ -507,7 +507,7 @@ async function startCall(ws: WSContext, user: any, deviceId: string) {
     send(ws, {
       type: "error",
       code: "live_radio_not_configured",
-      message: "Live radio is not configured on this MOMAS server.",
+      message: "Live radio is not configured on this EPAIL server.",
     });
     return;
   }
@@ -582,7 +582,7 @@ async function startGroupCall(ws: WSContext, user: any, deviceIds: unknown) {
     send(ws, {
       type: "error",
       code: "live_radio_not_configured",
-      message: "Live radio is not configured on this MOMAS server.",
+      message: "Live radio is not configured on this EPAIL server.",
     });
     return;
   }
@@ -661,7 +661,7 @@ async function startMonitor(ws: WSContext, user: any, message: any) {
     send(ws, {
       type: "error",
       code: "live_radio_not_configured",
-      message: "Live radio is not configured on this MOMAS server.",
+      message: "Live radio is not configured on this EPAIL server.",
     });
     return;
   }

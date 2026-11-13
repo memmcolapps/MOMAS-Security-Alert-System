@@ -231,7 +231,7 @@ export function LiveRadioProvider({ children }) {
           setConfigured(Boolean(message.configured));
           if (!message.configured) {
             wantedChannelRef.current = null;
-            setCondition("Live radio is not configured on this MOMAS server.");
+            setCondition("Live radio is not configured on this EPAIL server.");
             socket.close();
             return;
           }

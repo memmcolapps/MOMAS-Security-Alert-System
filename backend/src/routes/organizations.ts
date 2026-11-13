@@ -287,7 +287,7 @@ router.post("/:id/licences/recharge", requireOps, async (c) => {
       companyId: found.companyId,
       uids,
       ...(manual ? { until: String(body.until), reason: body.reason || undefined } : { years: Number(body.years) || 1 }),
-      actor: user?.email || user?.name || "MOMAS",
+      actor: user?.email || user?.name || "EPAIL",
     });
   } catch (error) {
     return networkError(c, error);

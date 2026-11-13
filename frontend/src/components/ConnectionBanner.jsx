@@ -20,7 +20,7 @@ export function ConnectionBanner() {
     return (
       <div className="flex min-h-8 items-center gap-2 border-b border-ops-amber/40 bg-amber-500/15 px-4 py-1 text-[11px] text-amber-200 backdrop-blur">
         <WifiOff size={13} className="shrink-0" />
-        <span className="font-semibold">{online ? "Can't reach the MOMAS server." : "You're offline."}</span>
+        <span className="font-semibold">{online ? "Can't reach the EPAIL server." : "You're offline."}</span>
         <span className="text-amber-200/80">
           {lastSyncAt ? `Showing data from ${formatSyncTime(lastSyncAt)}. ` : ""}
           Alarms, tracking and live radio are paused until the connection is back.
@@ -33,7 +33,7 @@ export function ConnectionBanner() {
     return (
       <div className="flex h-8 items-center gap-3 border-b border-white/10 bg-black/60 px-4 text-[11px] text-neutral-300 backdrop-blur">
         <RefreshCw size={12} className="shrink-0 text-neutral-500" />
-        <span>A new version of MOMAS is ready.</span>
+        <span>A new version of EPAIL Intelligence is ready.</span>
         <button
           className="rounded bg-ops-red px-2.5 py-0.5 font-bold text-black transition-opacity hover:opacity-85 active:opacity-70"
           onClick={applyUpdate}

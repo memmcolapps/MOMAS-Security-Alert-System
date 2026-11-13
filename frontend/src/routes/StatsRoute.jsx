@@ -381,7 +381,7 @@ function serverFacts(server) {
   const facts = server.facts || {};
   if (server.id === "contabo") {
     return [
-      ["MOMAS running for", duration(facts.running_seconds)],
+      ["EPAIL Intelligence running for", duration(facts.running_seconds)],
       ["Processor load", facts.cpu_load_pct === null || facts.cpu_load_pct === undefined ? "–" : `${facts.cpu_load_pct}%`],
       ["Memory in use", facts.memory_used_pct === null || facts.memory_used_pct === undefined ? "–" : `${facts.memory_used_pct}%`],
     ];

@@ -322,7 +322,7 @@ function RadioSection({
         <p className="mb-4 text-[11px] text-neutral-500">
           How many audio sessions can run at once. Platform seats are reserved
           for us, so our monitoring never consumes theirs. Saving here changes
-          the allowance in MOMAS only; use the button below to create the
+          the allowance in EPAIL Intelligence only; use the button below to create the
           matching dispatcher seats on the radio network.
         </p>
         <div className="grid gap-3 md:grid-cols-2">
@@ -665,9 +665,9 @@ function PromotePanel({ organization }) {
       </h2>
       <p className="mt-1 max-w-3xl text-[11px] leading-relaxed text-neutral-400">
         The sync found this organization on the shared radio network and imported its
-        radios so you can see them. MOMAS does not operate it: nobody can be
+        radios so you can see them. EPAIL does not operate it: nobody can be
         given a login here, its channels cannot be changed, and its dispatcher
-        consoles cannot be used. Promoting it says MOMAS runs this organization from
+        consoles cannot be used. Promoting it says EPAIL runs this organization from
         now on.
       </p>
       <p className="mt-2 max-w-3xl text-[11px] leading-relaxed text-neutral-500">
@@ -827,7 +827,7 @@ function OnlineStatusPanel({ organization, devices, canWrite }) {
       </div>
       <p className="mt-3 text-[11px] text-neutral-400">
         {discovered
-          ? "Not operated by MOMAS yet, so no watcher runs here. Online status comes from radio reports."
+          ? "Not operated by EPAIL yet, so no watcher runs here. Online status comes from radio reports."
           : enabled
             ? "Watcher on: a radio is online when it reports or the watcher sees it."
             : "Watcher off: tk4849 is in none of the channels, and a radio is online only while it is reporting."}

@@ -46,7 +46,7 @@ async function request(path, options = {}) {
     const offline = !window.navigator.onLine;
     const write = options.method && options.method !== "GET";
     const error = new Error(
-      `${offline ? "You're offline." : "Can't reach the MOMAS server."}${write ? " Nothing was saved." : ""}`,
+      `${offline ? "You're offline." : "Can't reach the EPAIL server."}${write ? " Nothing was saved." : ""}`,
     );
     error.status = 0;
     error.code = offline ? "offline" : "server_unreachable";

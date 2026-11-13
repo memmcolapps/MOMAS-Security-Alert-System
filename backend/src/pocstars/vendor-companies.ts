@@ -172,5 +172,5 @@ export function refuseDiscoveredWrite(
   if (isReadOnlyProvisionCommand(command)) return null;
   if (!organization || String(organization.status || "") !== DISCOVERED_STATUS) return null;
   return `${organization.name || "That organization"} was discovered on the radio network and is `
-    + "not operated by MOMAS yet. Promote it before changing anything on its radio network.";
+    + "not operated by EPAIL yet. Promote it before changing anything on its radio network.";
 }

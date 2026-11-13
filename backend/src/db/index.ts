@@ -698,6 +698,12 @@ async function init() {
       ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS upstream_processed_at TIMESTAMPTZ;
       ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS upstream_closed_at TIMESTAMPTZ;
       ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+      -- The console is EPAIL Intelligence; older upstream-resolved alarms
+      -- carried the sister company's name in their note. Matches nothing once run.
+      UPDATE sos_alerts SET resolution_note='Resolved on the radio network outside EPAIL Intelligence.'
+       WHERE resolution_note='Resolved on the radio network outside MOMAS.';
+      UPDATE sos_alert_events SET note='Resolved on the radio network outside EPAIL Intelligence.'
+       WHERE note='Resolved on the radio network outside MOMAS.';
       ALTER TABLE sos_alerts ADD COLUMN IF NOT EXISTS scope_captured_at TIMESTAMPTZ;
       CREATE INDEX IF NOT EXISTS idx_sos_org ON sos_alerts(organization_id, triggered_at DESC);
       CREATE INDEX IF NOT EXISTS idx_sos_unit ON sos_alerts(unit_id, triggered_at DESC);
@@ -2513,7 +2519,7 @@ async function reconcileSosAlert({
     }
 
     const eventType = nextStatus === 2 ? "resolved_upstream" : "response_started_upstream";
-    const resolutionNote = nextStatus === 2 ? "Resolved on the radio network outside MOMAS." : null;
+    const resolutionNote = nextStatus === 2 ? "Resolved on the radio network outside EPAIL Intelligence." : null;
     await client.query(
       `UPDATE sos_alerts
           SET status=$2,
@@ -4088,7 +4094,7 @@ async function assignPocstarsGroupToOrganization({ group_id, organization_id, gr
       "SELECT id, name FROM organizations WHERE id = $1",
       [organization_id],
     );
-    if (!organizations[0]) throw new Error("The selected MOMAS organization could not be found.");
+    if (!organizations[0]) throw new Error("The selected organization could not be found.");
 
     const { rows: existingChannels } = await client.query(
       `SELECT c.id, c.organization_id, o.name AS organization_name
@@ -4938,7 +4944,7 @@ async function assertOrganizationAcceptsUsers(organizationId: number) {
   const organization = await getOrganization(organizationId);
   if (organization && isDiscoveredOrganization(organization)) {
     throw new Error(
-      `${organization.name} was discovered on the radio network and is not operated by MOMAS yet. `
+      `${organization.name} was discovered on the radio network and is not operated by EPAIL yet. `
       + "Promote it before adding users.",
     );
   }
@@ -4960,7 +4966,7 @@ async function promoteDiscoveredOrganization(id: number, {
   const organization = await getOrganization(id);
   if (!organization) return null;
   if (!isDiscoveredOrganization(organization)) {
-    throw new Error(`${organization.name} is already operated by MOMAS.`);
+    throw new Error(`${organization.name} is already operated by EPAIL.`);
   }
 
   const tenantSeats = radio_seats === undefined

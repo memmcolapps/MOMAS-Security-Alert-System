@@ -140,7 +140,7 @@ describe("keeping MOMAS out of a company it has not taken on", () => {
       "provision.licences.cards",
       "provision.something.invented.tomorrow",
     ]) {
-      expect(refuseDiscoveredWrite(command, discovered)).toMatch(/NISO.*not operated by MOMAS yet/s);
+      expect(refuseDiscoveredWrite(command, discovered)).toMatch(/NISO.*not operated by EPAIL yet/s);
     }
   });
 

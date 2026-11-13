@@ -340,7 +340,7 @@ export function RadioConsole({ device, location, onShowOnMap, tracking = false, 
                 <article className="ml-8 rounded-lg border border-green-500/20 bg-green-500/[0.07] px-3 py-2" key={item.id}>
                   <p className="text-xs text-neutral-200">{item.message}</p>
                   <p className="mt-1 text-right text-[9px] text-neutral-600">
-                    {formatRadioTime(item.sentAt)} · MOMAS Command
+                    {formatRadioTime(item.sentAt)} · EPAIL Command
                   </p>
                 </article>
               ))}

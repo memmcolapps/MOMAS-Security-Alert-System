@@ -153,7 +153,7 @@ export function AdminOrganizationsRoute() {
               <Building2 size={20} className="text-ops-red" /> Organizations
             </h1>
             <p className="mt-1 text-[12px] text-neutral-500">
-              {network ? `${totalRadios} radios · ${totalOnline} online · ${counts.operated} organizations run by MOMAS` : "Every organization and how its radios are doing."}
+              {network ? `${totalRadios} radios · ${totalOnline} online · ${counts.operated} organizations run by EPAIL` : "Every organization and how its radios are doing."}
             </p>
           </div>
           {canWrite ? (
@@ -286,7 +286,7 @@ export function AdminOrganizationsRoute() {
           </label>
           <div className="flex flex-wrap gap-2">
             {[
-              { key: "operated", label: `Run by MOMAS (${counts.operated})` },
+              { key: "operated", label: `Run by EPAIL (${counts.operated})` },
               { key: "attention", label: `Needs attention (${counts.attention})` },
               { key: "discovered", label: `Discovered (${counts.discovered})` },
               { key: "all", label: `All (${counts.all})` },
