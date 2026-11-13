@@ -11,6 +11,7 @@ import {
   runPocstarsPlatformSync,
 } from "../lib/api";
 import { NIGERIAN_STATES } from "../lib/domain";
+import { MODULES, MODULE_OPTIONS } from "../lib/modules";
 import { isPlatformOperator } from "../lib/platform-roles";
 
 // The platform home: every organization, how its radios are doing, and what
@@ -24,7 +25,7 @@ const emptyOrg = {
   states: [],
   radio_seats: 2,
   platform_radio_seats: 1,
-  modules: ["radio", "drone", "osint", "geofence"],
+  modules: [...MODULES],
 };
 
 const isDiscovered = (org) => org?.status === "discovered";
@@ -242,7 +243,7 @@ export function AdminOrganizationsRoute() {
             <fieldset className="mt-4">
               <legend className="mb-2 text-[11px] font-bold uppercase tracking-wide text-neutral-400">Modules they can access</legend>
               <div className="flex flex-wrap gap-2">
-                {[["radio", "Radio"], ["drone", "Drone"], ["osint", "OSINT"], ["geofence", "Geofence"]].map(([value, label]) => {
+                {MODULE_OPTIONS.map(([value, label]) => {
                   const checked = orgForm.modules.includes(value);
                   return (
                     <label key={value} className={`inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-xs ${checked ? "border-ops-red/50 bg-red-500/10 text-neutral-100" : "border-white/10 bg-white/[0.02] text-neutral-400"}`}>

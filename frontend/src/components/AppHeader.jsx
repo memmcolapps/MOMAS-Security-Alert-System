@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { getActiveOrganizationId, getMe, getPlatformStats, getServerStatus, setActiveOrganizationId, setAuthToken } from "../lib/api";
 import { clearOfflineCache } from "../lib/offline-cache";
 import { PLATFORM_ROLE_LABELS, isPlatformOwner, isPlatformStaff } from "../lib/platform-roles";
+import { MODULES, hasRadioNetwork, moduleSet } from "../lib/modules";
 import { ListenControl } from "./LiveRadioBar";
 import { LocationStatus } from "./LocationStatus";
 
@@ -22,7 +23,7 @@ export function AppHeader() {
   const memberships = user?.memberships || [];
   const org = user?.active_membership || memberships.find((membership) => String(membership.organization_id) === String(getActiveOrganizationId())) || memberships[0] || null;
   const canManageOrg = isAdmin || ["org_owner", "org_admin", "unit_admin", "admin"].includes(org?.role);
-  const modules = new Set(isAdmin ? ["radio", "drone", "osint", "geofence"] : (org?.modules?.length ? org.modules : ["radio", "drone", "osint", "geofence"]));
+  const modules = isAdmin ? new Set(MODULES) : moduleSet(org?.modules);
   const accessSummary = org
     ? org.all_states
       ? "all states"
@@ -47,7 +48,7 @@ export function AppHeader() {
   // operational views only, so it stays short enough to fit a tablet.
   const navItems = [
     { to: "/", icon: Map, label: "Map", active: path === "/" },
-    ...(modules.has("radio")
+    ...(hasRadioNetwork(modules)
       ? [
           { to: "/replay", icon: History, label: "Replay", active: isActive("/replay") },
           { to: "/alarms", icon: Siren, label: "Alarms", active: isActive("/alarms") },
@@ -101,7 +102,10 @@ export function AppHeader() {
           ))}
         </nav>
 
-        <div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap">
+        {/* No whitespace-nowrap here: the location and Listen pop-ups live
+            inside this box and inherit it, so their paragraphs ran off the
+            panel. Each button keeps itself on one line. */}
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           <ListenControl />
           <LocationStatus />
         </div>

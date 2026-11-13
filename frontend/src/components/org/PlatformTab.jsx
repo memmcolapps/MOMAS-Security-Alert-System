@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Radio, RadioTower, Save, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { deleteOrganization, getMe, getOrganization, getOrganizationDeletionImpact, promoteOrganization, provisionOrganizationRadio, setOrganizationPresenceWatcher, topUpOrganizationSeats, updateOrganizationAccess } from "../../lib/api";
+import { MODULES, MODULE_OPTIONS } from "../../lib/modules";
 import { NIGERIAN_STATES } from "../../lib/domain";
 import { isPlatformOperator, isPlatformOwner } from "../../lib/platform-roles";
 
@@ -72,7 +73,7 @@ function OverviewSection({ organization, onSaved, onDirtyChange }) {
       status: organization.status,
       all_states: Boolean(organization.all_states),
       states: organization.states || [],
-      modules: organization.modules?.length ? [...organization.modules].sort() : ["radio", "drone", "osint", "geofence"],
+      modules: organization.modules?.length ? [...organization.modules].sort() : [...MODULES].sort(),
     }),
     [organization],
   );
@@ -150,7 +151,7 @@ function OverviewSection({ organization, onSaved, onDirtyChange }) {
         <h3 className="mb-1 mt-5 text-[12px] font-bold text-ops-red">Available modules</h3>
         <p className="mb-3 text-[11px] text-neutral-500">Choose which modules this organization can open. At least one must remain enabled.</p>
         <div className="flex flex-wrap gap-2">
-          {[["radio", "Radio"], ["drone", "Drone"], ["osint", "OSINT"], ["geofence", "Geofence"]].map(([value, label]) => {
+          {MODULE_OPTIONS.map(([value, label]) => {
             const checked = draft.modules.includes(value);
             return (
               <label key={value} className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-xs ${checked ? "border-ops-red/50 bg-red-500/10 text-neutral-100" : "border-white/10 bg-white/[0.02] text-neutral-400"}`}>

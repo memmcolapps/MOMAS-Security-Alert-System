@@ -3,6 +3,7 @@ import { isPlatformStaff, primaryOrganization, requireAuth, requireOperator } fr
 import { env } from "../config";
 import * as db from "../db";
 import { bus } from "../events";
+import { allowsDeviceType } from "../modules";
 import * as store from "../geofencing/store";
 
 type Client = {
@@ -10,6 +11,7 @@ type Client = {
   close: () => Promise<void>;
   organizationId: number | null;
   unitId: number | null;
+  modules?: string[];
   admin: boolean;
 };
 
@@ -48,14 +50,23 @@ function normalizeGeofence(alert: any) {
 function broadcast(event: string, alert: any, source: "pocstars" | "geofence") {
   const normalized = source === "pocstars" ? normalizeSos(alert) : normalizeGeofence(alert);
   const message = `event: ${event}\ndata: ${JSON.stringify(normalized)}\n\n`;
-  for (const client of clients) {
-    const allowed =
-      client.admin ||
-      (Number(normalized.organization_id) === Number(client.organizationId) &&
-        (!client.unitId || Number(normalized.unit_id) === Number(client.unitId)));
-    if (!allowed) continue;
-    void client.write(message).catch(() => clients.delete(client));
-  }
+  // An alarm on a radio follows that device's Radio/Vehicle module. The device
+  // is looked up only when some console has one of the two switched off.
+  const onRadio = normalized.asset_type === "radio" && normalized.device_id !== undefined;
+  const restricted = onRadio && [...clients].some((client) =>
+    !client.admin && allowsDeviceType(client.modules, "vehicle") !== allowsDeviceType(client.modules, "handheld"));
+  const deviceType = restricted ? db.deviceTypeOf(normalized.device_id).catch(() => null) : Promise.resolve(null);
+  void deviceType.then((type) => {
+    for (const client of clients) {
+      const allowed =
+        client.admin ||
+        (Number(normalized.organization_id) === Number(client.organizationId) &&
+          (!client.unitId || Number(normalized.unit_id) === Number(client.unitId)) &&
+          (!onRadio || allowsDeviceType(client.modules, type)));
+      if (!allowed) continue;
+      void client.write(message).catch(() => clients.delete(client));
+    }
+  });
 }
 
 /** Open consoles that would be sent this alarm right now. */
@@ -88,6 +99,7 @@ function requestScope(c: any) {
     ? {
         organizationId: membership.organization_id,
         unitId: membership.scope_level === "unit" ? membership.unit_id : null,
+        modules: membership.modules,
       }
     : { organizationId: -1 };
 }
@@ -102,6 +114,7 @@ router.get("/events", (c) => {
     close: () => writer.close(),
     organizationId: membership?.organization_id || null,
     unitId: membership?.scope_level === "unit" ? membership.unit_id : null,
+    modules: membership?.modules,
     admin: isPlatformStaff(user),
   };
   clients.add(client);

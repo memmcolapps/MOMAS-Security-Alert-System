@@ -50,6 +50,7 @@ import {
 } from "../lib/api";
 import { config } from "../lib/app-config";
 import { isPlatformOperator, isPlatformStaff } from "../lib/platform-roles";
+import { MODULES, hasRadioNetwork, isVehicle, moduleSet } from "../lib/modules";
 import {
   NIGERIAN_STATES,
   rangeForMode,
@@ -204,11 +205,11 @@ export function OperationsRoute() {
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
   const user = meQuery.data?.user;
   const membership = user?.active_membership || user?.memberships?.[0];
-  const enabledModules = new Set(
-    isPlatformStaff(user) ? ["radio", "drone", "osint", "geofence"]
-      : Array.isArray(membership?.modules) ? membership.modules : ["radio", "drone", "osint", "geofence"],
-  );
-  const hasRadio = enabledModules.has("radio");
+  const enabledModules = isPlatformStaff(user) ? new Set(MODULES) : moduleSet(membership?.modules);
+  // The radio network - fleet, Listen, alarms - opens with Radio or Vehicle.
+  const hasRadio = hasRadioNetwork(enabledModules);
+  // Both kinds visible: the map offers to show or hide each one.
+  const hasBothKinds = enabledModules.has("radio") && enabledModules.has("vehicle");
   const hasDrone = enabledModules.has("drone");
   const hasOsint = enabledModules.has("osint");
   const hasGeofence = enabledModules.has("geofence");
@@ -225,6 +226,8 @@ export function OperationsRoute() {
   const [panelOpen, setPanelOpen] = usePersistentFlag("momas_ops_feed_open", false);
   const [basemap, setBasemap] = usePersistentChoice("momas_ops_basemap", "satellite", ["satellite", "streets", "grey"]);
   const [radioFilter, setRadioFilter] = usePersistentChoice("momas_ops_radio_filter", "all", ["all", "moving", "online", "nofix", "offline", "nopos"]);
+  // Radios, vehicles or both on the map. Only offered with both modules on.
+  const [deviceKind, setDeviceKind] = usePersistentChoice("momas_ops_device_kind", "all", ["all", "radio", "vehicle"]);
   const [fleetOpen, setFleetOpen] = usePersistentFlag("momas_ops_fleet_open", false);
   const [keyOpen, setKeyOpen] = usePersistentFlag("momas_ops_key_open", false);
   // What each radio is doing, as the map works it out - for the counts bar and
@@ -578,6 +581,25 @@ export function OperationsRoute() {
     [activeAlerts],
   );
   sosRadioIdsRef.current = sosRadioIds;
+
+  // The Radios / Vehicles switch. Hiding one kind never hides a radio in SOS.
+  const shownKind = hasBothKinds ? deviceKind : "all";
+  const kindCounts = useMemo(() => {
+    const active = devices.filter((device) => device.active !== false);
+    const vehicles = active.filter(isVehicle).length;
+    return { all: active.length, radio: active.length - vehicles, vehicle: vehicles };
+  }, [devices]);
+  const mapDevices = useMemo(
+    () => (shownKind === "all"
+      ? devices
+      : devices.filter((device) => sosRadioIds.has(String(device.device_id)) || (shownKind === "vehicle") === isVehicle(device))),
+    [devices, shownKind, sosRadioIds],
+  );
+  const mapLocations = useMemo(() => {
+    if (shownKind === "all") return locations;
+    const shown = new Set(mapDevices.map((device) => String(device.device_id)));
+    return locations.filter((location) => shown.has(String(location.Uid)) || location.processStatus === 1);
+  }, [locations, mapDevices, shownKind]);
   const sosRadioKey = [...sosRadioIds].sort().join(",");
   const sosStartMs = useMemo(
     () => Math.min(...activeAlerts.filter(isRadioSos).map((alert) => new Date(alert.triggered_at).getTime() || Date.now())),
@@ -833,8 +855,8 @@ export function OperationsRoute() {
     <main className="relative h-screen w-screen overflow-hidden bg-ops-bg text-neutral-200">
       <OperationsMap
         incidents={hasOsint ? visibleIncidents : []}
-        devices={devices}
-        locations={locations}
+        devices={mapDevices}
+        locations={mapLocations}
         sosAlerts={hasRadio ? activeAlerts : []}
         sosRadioIds={hasRadio ? sosRadioIds : new Set()}
         sosTrails={hasRadio ? sosTrails : NO_TRAILS}
@@ -978,7 +1000,10 @@ export function OperationsRoute() {
 
       {visibleLayers.devices ? (
         <RadioFleetPanel
-          devices={devices}
+          devices={mapDevices}
+          kind={hasBothKinds ? deviceKind : null}
+          onKind={setDeviceKind}
+          kindCounts={hasBothKinds ? kindCounts : null}
           statuses={radioStatuses}
           filter={radioFilter}
           onFilter={setRadioFilter}

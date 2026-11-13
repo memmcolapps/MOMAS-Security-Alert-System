@@ -477,6 +477,14 @@ export function listDevices() {
   return request("/api/pocstars/devices");
 }
 
+// Platform only: the type puts a device in the Radio or Vehicle module.
+export function setDeviceTypes(deviceIds, deviceType) {
+  return request("/api/pocstars/devices/type", {
+    method: "POST",
+    body: JSON.stringify({ device_ids: deviceIds, device_type: deviceType }),
+  });
+}
+
 export function saveDevice(payload) {
   return request("/api/pocstars/devices", {
     method: "POST",

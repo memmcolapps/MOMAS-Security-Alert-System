@@ -123,7 +123,7 @@ export function deviceTypeLabel(type) {
   return (
     {
       handheld: "Handheld radio",
-      vehicle: "Vehicle tracker",
+      vehicle: "Vehicle",
       fixed: "Fixed unit",
       other: "Other",
     }[type] || "Other"

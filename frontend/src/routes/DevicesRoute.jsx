@@ -12,7 +12,9 @@ import {
   listOrganizations,
   onboardRadio,
   saveDevice,
+  setDeviceTypes,
 } from "../lib/api";
+import { MODULES, isVehicle, moduleSet } from "../lib/modules";
 import { isPlatformOperator, isPlatformStaff } from "../lib/platform-roles";
 import { FilterBar } from "../components/FilterBar";
 import { RadioConsole, radioChannelLabel } from "../components/RadioConsole";
@@ -89,6 +91,13 @@ export function DevicesRoute() {
   const isPlatformAdmin = isPlatformStaff(meQuery.data?.user);
   const orgRole = meQuery.data?.user?.active_membership?.role || meQuery.data?.user?.memberships?.[0]?.role;
   const canManageDevices = isPlatformOperator(meQuery.data?.user) || ["org_owner", "org_admin", "admin"].includes(orgRole);
+  // Type decides whether a device is a Radio or a Vehicle (two modules), so
+  // only the platform team sets it.
+  const canSetType = isPlatformOperator(meQuery.data?.user);
+  const membershipModules = isPlatformAdmin
+    ? new Set(MODULES)
+    : moduleSet((meQuery.data?.user?.active_membership || meQuery.data?.user?.memberships?.[0])?.modules);
+  const showKindTabs = membershipModules.has("radio") && membershipModules.has("vehicle");
 
   const orgsQuery = useQuery({
     queryKey: ["organizations"],
@@ -104,6 +113,8 @@ export function DevicesRoute() {
   const [orgFilter, setOrgFilter] = useState("all");
   const [channelFilter, setChannelFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [kind, setKind] = useState("all");
+  const [selected, setSelected] = useState(() => new Set());
 
   const allDevices = useMemo(() => devicesQuery.data?.devices || [], [devicesQuery.data?.devices]);
   const organizations = useMemo(() => orgsQuery.data?.organizations || [], [orgsQuery.data?.organizations]);
@@ -128,9 +139,14 @@ export function DevicesRoute() {
     }
     return [...seen.values()];
   }, [organizationDevices]);
+  const kindCounts = useMemo(() => {
+    const vehicles = organizationDevices.filter(isVehicle).length;
+    return { all: organizationDevices.length, radio: organizationDevices.length - vehicles, vehicle: vehicles };
+  }, [organizationDevices]);
   const devices = useMemo(() => {
     const term = search.trim().toLowerCase();
     let list = organizationDevices;
+    if (showKindTabs && kind !== "all") list = list.filter((device) => (kind === "vehicle") === isVehicle(device));
     if (channelFilter === "unassigned") {
       list = list.filter((device) => !(device.channels || []).length);
     } else if (channelFilter !== "all") {
@@ -147,7 +163,7 @@ export function DevicesRoute() {
       device.operator,
       device.organization_name,
     ].filter(Boolean).some((value) => String(value).toLowerCase().includes(term)));
-  }, [channelFilter, organizationDevices, search]);
+  }, [channelFilter, kind, organizationDevices, search, showKindTabs]);
   // Both dimensions carry their counts in the option text, so the operator can
   // see how the fleet splits without the page having to render a chip per row.
   const filterControls = useMemo(() => {
@@ -193,6 +209,37 @@ export function DevicesRoute() {
     });
     return controls;
   }, [allDevices, channelFilter, channels, isPlatformAdmin, orgFilter, organizationDevices, organizations]);
+
+  const typeMutation = useMutation({
+    mutationFn: ({ ids, type }) => setDeviceTypes(ids, type),
+    onMutate: async ({ ids, type }) => {
+      await queryClient.cancelQueries({ queryKey: ["devices"] });
+      const previous = queryClient.getQueryData(["devices"]);
+      const chosen = new Set(ids.map(String));
+      queryClient.setQueryData(["devices"], (data) => data?.devices
+        ? { ...data, devices: data.devices.map((device) => (chosen.has(String(device.device_id)) ? { ...device, device_type: type } : device)) }
+        : data);
+      setSelected(new Set());
+      return { previous };
+    },
+    onError: (error, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(["devices"], context.previous);
+      notify(error.message || "Could not change the type", "error");
+    },
+    onSuccess: (_data, { ids, type }) => {
+      notify(`${ids.length} device${ids.length === 1 ? "" : "s"} marked as ${type === "vehicle" ? "vehicles" : "radios"}`);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["devices"] }),
+  });
+  const shownIds = devices.map((device) => String(device.device_id));
+  const allShownSelected = shownIds.length > 0 && shownIds.every((id) => selected.has(id));
+  const toggleSelected = (id) => setSelected((current) => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  });
+  const toggleAllShown = () => setSelected(allShownSelected ? new Set() : new Set(shownIds));
 
   const activeCount = useMemo(() => devices.filter((device) => device.active).length, [devices]);
   const orphanCount = useMemo(() => devices.filter((device) => device.pocstars_orphaned).length, [devices]);
@@ -534,10 +581,16 @@ export function DevicesRoute() {
               <input className="field-input" value={form.operator} onChange={(event) => updateField("operator", event.target.value)} placeholder="e.g. John Doe" />
             </Field>
             <Field label="Device Type">
-              <select className="field-input" value={form.device_type} onChange={(event) => updateField("device_type", event.target.value)}>
+              <select
+                className="field-input disabled:opacity-60"
+                value={form.device_type}
+                disabled={!canSetType}
+                title={canSetType ? undefined : "Set by the platform team"}
+                onChange={(event) => updateField("device_type", event.target.value)}
+              >
                 <option value="">Select</option>
                 <option value="handheld">Handheld radio</option>
-                <option value="vehicle">Vehicle tracker</option>
+                <option value="vehicle">Vehicle</option>
                 <option value="fixed">Fixed unit</option>
                 <option value="other">Other</option>
               </select>
@@ -596,6 +649,24 @@ export function DevicesRoute() {
         </form>
       ) : null}
 
+      {showKindTabs ? (
+        <div className="mb-3 inline-flex rounded-lg border border-white/10 bg-white/[0.03] p-0.5" role="tablist" aria-label="Device kind">
+          {[["all", "All"], ["radio", "Radios"], ["vehicle", "Vehicles"]].map(([value, label]) => (
+            <button
+              key={value}
+              role="tab"
+              aria-selected={kind === value}
+              onClick={() => { setKind(value); setSelected(new Set()); }}
+              className={`rounded-md px-3.5 py-1.5 text-[12px] font-bold transition ${
+                kind === value ? "bg-white/[0.12] text-neutral-100 shadow-sm" : "text-neutral-500 hover:text-neutral-200"
+              }`}
+            >
+              {label} <span className="ml-0.5 tabular-nums text-neutral-500">{kindCounts[value]}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       <FilterBar
         accent="green"
         search={search}
@@ -610,6 +681,28 @@ export function DevicesRoute() {
       />
 
       <section className="glass-panel overflow-hidden rounded-lg border-green-500/25">
+        {canSetType && selected.size ? (
+          <div className="flex flex-wrap items-center gap-2 border-b border-white/10 bg-white/[0.04] px-4 py-2.5 text-[12px]">
+            <span className="font-bold text-neutral-200">{selected.size} selected</span>
+            <button
+              className="inline-flex items-center gap-1.5 rounded-md bg-ops-green px-3 py-1.5 text-[11px] font-bold text-black hover:opacity-90 disabled:opacity-50"
+              disabled={typeMutation.isPending}
+              onClick={() => typeMutation.mutate({ ids: [...selected], type: "vehicle" })}
+            >
+              Mark as vehicle
+            </button>
+            <button
+              className="rounded-md border border-white/15 px-3 py-1.5 text-[11px] font-bold text-neutral-200 hover:bg-white/[0.06] disabled:opacity-50"
+              disabled={typeMutation.isPending}
+              onClick={() => typeMutation.mutate({ ids: [...selected], type: "handheld" })}
+            >
+              Mark as radio
+            </button>
+            <button className="ml-auto text-[11px] text-neutral-500 hover:text-neutral-200" onClick={() => setSelected(new Set())}>
+              Clear
+            </button>
+          </div>
+        ) : null}
         <div className="border-b border-white/10 px-4 py-3 text-[11px] text-neutral-500">
           {devicesQuery.isLoading ? "Loading..." : `${devices.length} device${devices.length === 1 ? "" : "s"} · ${activeCount} active`}
           {!devicesQuery.isLoading && orphanCount ? (
@@ -622,6 +715,11 @@ export function DevicesRoute() {
           <table className="card-table w-full border-collapse text-left text-xs">
             <thead>
               <tr className="border-b border-white/10 text-[9px] uppercase tracking-wide text-neutral-500">
+                {canSetType ? (
+                  <th className="w-8 py-3 pl-4">
+                    <input type="checkbox" aria-label="Select every device shown" checked={allShownSelected} onChange={toggleAllShown} className="accent-ops-green" />
+                  </th>
+                ) : null}
                 <th className="px-4 py-3">Device ID</th>
                 <th className="px-4 py-3">Name</th>
                 {isPlatformAdmin ? <th className="px-4 py-3">Company</th> : null}
@@ -636,11 +734,22 @@ export function DevicesRoute() {
             <tbody>
               {devicesQuery.isLoading ? (
                 <tr>
-                  <td className="px-4 py-10 text-center text-neutral-500" colSpan={isPlatformAdmin ? 9 : 8}>Loading devices...</td>
+                  <td className="px-4 py-10 text-center text-neutral-500" colSpan={(isPlatformAdmin ? 9 : 8) + (canSetType ? 1 : 0)}>Loading devices...</td>
                 </tr>
               ) : devices.length ? (
                 devices.map((device) => (
-                  <tr className="border-b border-white/5 hover:bg-white/[0.03]" key={device.device_id}>
+                  <tr className={`border-b border-white/5 hover:bg-white/[0.03] ${selected.has(String(device.device_id)) ? "bg-white/[0.04]" : ""}`} key={device.device_id}>
+                    {canSetType ? (
+                      <td data-card="select" className="w-8 py-3 pl-4">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${device.name || device.device_id}`}
+                          checked={selected.has(String(device.device_id))}
+                          onChange={() => toggleSelected(String(device.device_id))}
+                          className="accent-ops-green"
+                        />
+                      </td>
+                    ) : null}
                     <td data-label="Device ID" className="px-4 py-3 font-mono text-[11px] text-ops-green">{device.device_id}</td>
                     <td data-label="Name" className="px-4 py-3">{device.name || <Muted />}</td>
                     {isPlatformAdmin ? (
@@ -728,7 +837,7 @@ export function DevicesRoute() {
                 ))
               ) : (
                 <tr>
-                  <td className="px-4 py-12 text-center text-neutral-500" colSpan={isPlatformAdmin ? 9 : 8}>
+                  <td className="px-4 py-12 text-center text-neutral-500" colSpan={(isPlatformAdmin ? 9 : 8) + (canSetType ? 1 : 0)}>
                     <Radio className="mx-auto mb-2" size={28} /> No devices yet
                   </td>
                 </tr>

@@ -1,6 +1,7 @@
 import { pool } from "../db";
+import { deviceTypeCondition } from "../modules";
 
-export type Scope = { organizationId?: number | null; unitId?: number | null };
+export type Scope = { organizationId?: number | null; unitId?: number | null; modules?: string[] };
 
 function scopeSql(scope: Scope, alias: string, start = 1) {
   const values: any[] = [];
@@ -12,6 +13,14 @@ function scopeSql(scope: Scope, alias: string, start = 1) {
   if (scope.unitId) {
     values.push(scope.unitId);
     conditions.push(`${alias}.unit_id = $${start + values.length - 1}`);
+  }
+  // Alarms ("a") on a radio follow the Radio/Vehicle module of that device.
+  if (alias === "a") {
+    const byModule = deviceTypeCondition(
+      scope.modules,
+      `(SELECT md.device_type FROM devices md WHERE md.device_id = ${alias}.asset_id)`,
+    );
+    if (byModule) conditions.push(`(${alias}.asset_type <> 'radio' OR ${byModule})`);
   }
   return { values, conditions };
 }
@@ -36,8 +45,10 @@ export async function transaction<T>(fn: (client: any) => Promise<T>) {
  * with the editor: units, channels, radios and drones. A unit-scoped admin
  * gets their own unit subtree only.
  */
-export async function listTargets(organizationId: number, unitIds: number[] | null) {
+export async function listTargets(organizationId: number, unitIds: number[] | null, modules?: string[]) {
   const unitFilter = unitIds ? "AND unit_id = ANY($2::int[])" : "";
+  // Only radios of a type the caller's Radio/Vehicle modules allow.
+  const radioFilter = deviceTypeCondition(modules, "device_type");
   const values = unitIds ? [organizationId, unitIds] : [organizationId];
   const [units, channels, radios, drones] = await Promise.all([
     pool.query(
@@ -52,7 +63,8 @@ export async function listTargets(organizationId: number, unitIds: number[] | nu
     ),
     pool.query(
       `SELECT device_id, name, unit_id FROM devices
-        WHERE organization_id=$1 AND active = true ${unitFilter} ORDER BY name NULLS LAST, device_id`,
+        WHERE organization_id=$1 AND active = true ${unitFilter} ${radioFilter ? `AND ${radioFilter}` : ""}
+        ORDER BY name NULLS LAST, device_id`,
       values,
     ),
     pool.query(

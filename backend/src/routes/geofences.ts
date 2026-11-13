@@ -286,7 +286,12 @@ router.get("/targets", async (c) => {
     return c.json({ units: [], channels: [], radios: [], drones: [] });
   try {
     const units = await allowedUnits(organizationId, callerUnit(c));
-    const targets = await store.listTargets(organizationId, units);
+    const user = (c as any).get("user");
+    const targets = await store.listTargets(
+      organizationId,
+      units,
+      isPlatformStaff(user) ? undefined : primaryOrganization(user)?.modules,
+    );
     const members = (target_type: string, target_id: any) =>
       membersOf({ target_type, target_id: String(target_id) }).map(
         (m) => `${m.asset_type}:${m.asset_id}`,

@@ -4,6 +4,7 @@
 // we have taken no responsibility for - see assertOrganizationAcceptsUsers,
 // claimSeatSlot and the provisioning guard in live-gateway.
 import { DISCOVERED_STATUS } from "../pocstars/vendor-companies";
+import { MODULES, deviceTypeCondition, hasRadioNetwork, normalizeModules } from "../modules";
 import { Pool } from "pg";
 import { env } from "../config";
 import { bus } from "../events";
@@ -546,8 +547,8 @@ async function init() {
       END $$;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS radio_seats INTEGER NOT NULL DEFAULT 2;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS platform_radio_seats INTEGER NOT NULL DEFAULT 1;
-      ALTER TABLE organizations ADD COLUMN IF NOT EXISTS modules TEXT[] NOT NULL DEFAULT ARRAY['radio', 'drone', 'osint', 'geofence'];
-      ALTER TABLE organizations ALTER COLUMN modules SET DEFAULT ARRAY['radio', 'drone', 'osint', 'geofence'];
+      ALTER TABLE organizations ADD COLUMN IF NOT EXISTS modules TEXT[] NOT NULL DEFAULT ARRAY['radio', 'vehicle', 'drone', 'osint', 'geofence'];
+      ALTER TABLE organizations ALTER COLUMN modules SET DEFAULT ARRAY['radio', 'vehicle', 'drone', 'osint', 'geofence'];
       CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
       DO $$
       BEGIN
@@ -556,6 +557,18 @@ async function init() {
              SET modules = array_append(COALESCE(modules, ARRAY[]::TEXT[]), 'geofence')
            WHERE NOT ('geofence' = ANY(COALESCE(modules, ARRAY[]::TEXT[])));
           INSERT INTO schema_migrations (name) VALUES ('organization-geofence-module');
+        END IF;
+      END $$;
+      -- Vehicles split out of Radio. Anyone who could see vehicle radios
+      -- under Radio keeps them, so nothing disappears on the day it ships.
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE name = 'organization-vehicle-module') THEN
+          UPDATE organizations
+             SET modules = array_append(modules, 'vehicle')
+           WHERE 'radio' = ANY(COALESCE(modules, ARRAY[]::TEXT[]))
+             AND NOT ('vehicle' = ANY(modules));
+          INSERT INTO schema_migrations (name) VALUES ('organization-vehicle-module');
         END IF;
       END $$;
       ALTER TABLE organizations ADD COLUMN IF NOT EXISTS pocstars_company_name TEXT;
@@ -2359,6 +2372,12 @@ function sosScopeSql(scope: any = {}, alias = "s", startIndex = 1) {
     conds.push(`${alias}.unit_id = $${startIndex + vals.length}`);
     vals.push(scope.unitId);
   }
+  // An alarm belongs to the module of the device that raised it.
+  const byModule = deviceTypeCondition(
+    scope.modules,
+    `(SELECT md.device_type FROM devices md WHERE md.device_id = ${alias}.device_id)`,
+  );
+  if (byModule) conds.push(byModule);
   return { vals, conds };
 }
 
@@ -2855,6 +2874,14 @@ async function allSosMsgIds(scope: any = {}) {
 
 // ── Device registry ───────────────────────────────────────────────────────────
 
+// One device's type, for live pushes that must respect the Radio/Vehicle
+// modules without re-running a scoped query per listener.
+async function deviceTypeOf(deviceId: unknown) {
+  if (deviceId === undefined || deviceId === null || deviceId === "") return null;
+  const { rows } = await pool.query("SELECT device_type FROM devices WHERE device_id = $1", [String(deviceId)]);
+  return rows[0]?.device_type ?? null;
+}
+
 async function listDevices(scope: any = {}) {
   const vals = [];
   const conds = ["1=1"];
@@ -2868,6 +2895,8 @@ async function listDevices(scope: any = {}) {
   } else if (scope.assignedOnly) {
     conds.push("d.unit_id IS NOT NULL");
   }
+  const byModule = deviceTypeCondition(scope.modules, "d.device_type");
+  if (byModule) conds.push(byModule);
   const { rows } = await pool.query(
     `SELECT d.*,
             -- A radio the network no longer lists and that was never traced to
@@ -2915,6 +2944,8 @@ async function listDevices(scope: any = {}) {
 // channels; org members see their own; unit-scoped members only channels
 // pinned to their unit (or org-wide ones). Channels are never cross-org.
 async function listMonitorableChannels(scope: any = {}) {
+  // Channels carry handhelds and vehicles together, so either module opens them.
+  if (!hasRadioNetwork(scope.modules)) return [];
   const vals: any[] = [];
   const conds = ["c.active", "c.pocstars_group_id IS NOT NULL"];
   if (scope.organizationId) {
@@ -4412,7 +4443,7 @@ async function getDevice(device_id) {
   return rows[0] ?? null;
 }
 
-async function updateDeviceFields(device_id, { name, operator, device_type, notes, active }) {
+async function updateDeviceFields(device_id, { name, operator, device_type = undefined, notes, active }: any) {
   const { rows } = await pool.query(
     `UPDATE devices SET
        name        = COALESCE($2, name),
@@ -4427,6 +4458,16 @@ async function updateDeviceFields(device_id, { name, operator, device_type, note
     [device_id, name ?? null, operator ?? null, device_type ?? null, notes ?? null, active ?? null],
   );
   return rows[0] ?? null;
+}
+
+// One statement for the whole selection; returns how many rows changed.
+async function setDeviceTypes(deviceIds: string[], deviceType: string) {
+  const { rowCount } = await pool.query(
+    `UPDATE devices SET device_type = $2
+      WHERE device_id = ANY($1::text[]) AND device_type IS DISTINCT FROM $2`,
+    [deviceIds, deviceType],
+  );
+  return rowCount ?? 0;
 }
 
 async function deleteDevice(device_id) {
@@ -4794,12 +4835,9 @@ async function createOrganization({
   pocstars_company_name = null,
   radio_seats = 2,
   platform_radio_seats = 1,
-  modules = ["radio", "drone", "osint", "geofence"],
+  modules = [...MODULES] as string[],
 }) {
-  const validModules = ["radio", "drone", "osint", "geofence"];
-  const selectedModules = [...new Set((Array.isArray(modules) ? modules : validModules)
-    .map((module) => String(module).toLowerCase())
-    .filter((module) => validModules.includes(module)))];
+  const selectedModules = normalizeModules((Array.isArray(modules) ? modules : [...MODULES]).map((module) => String(module).toLowerCase()));
   if (!selectedModules.length) throw new Error("Select at least one module.");
   const finalSlug = slugify(slug || name);
   const { rows } = await pool.query(
@@ -4882,10 +4920,7 @@ async function updateOrganizationAccess(id, {
 
   let selectedModules;
   if (modules !== undefined) {
-    const validModules = ["radio", "drone", "osint", "geofence"];
-    selectedModules = [...new Set((Array.isArray(modules) ? modules : [])
-      .map((module) => String(module).toLowerCase())
-      .filter((module) => validModules.includes(module)))];
+    selectedModules = normalizeModules((Array.isArray(modules) ? modules : []).map((module) => String(module).toLowerCase()));
     if (!selectedModules.length) throw new Error("Select at least one module.");
   }
 
@@ -5553,6 +5588,8 @@ export {
   clearAll,
   countAllIncidents,
   listDevices,
+  deviceTypeOf,
+  setDeviceTypes,
   upsertDevice,
   upsertPocstarsDevice,
   getDevice,

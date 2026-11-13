@@ -42,7 +42,13 @@ function detail(info) {
  * map, and a list sorted by what needs attention - alarms, then whatever is
  * moving. Finding a radio no longer means hunting for its pin.
  */
-export function RadioFleetPanel({ devices, statuses, filter, onFilter, trackedIds, onTrack, onOpen, open, onToggle, header }) {
+const KINDS = [
+  { key: "all", label: "All" },
+  { key: "radio", label: "Radios" },
+  { key: "vehicle", label: "Vehicles" },
+];
+
+export function RadioFleetPanel({ devices, kind, onKind, kindCounts, statuses, filter, onFilter, trackedIds, onTrack, onOpen, open, onToggle, header }) {
   const [query, setQuery] = useState("");
 
   // Every registered radio in service, with what the map knows about it - or
@@ -81,6 +87,28 @@ export function RadioFleetPanel({ devices, statuses, filter, onFilter, trackedId
   return (
     <section className="glass-panel absolute left-16 top-[calc(var(--ops-chrome)+0.75rem)] z-[1000] flex max-h-[calc(100vh-var(--ops-chrome)-6rem)] w-[280px] flex-col rounded-md">
       <div className="px-3 pt-2">{header}</div>
+
+      {/* Only shown when the organization has both Radio and Vehicle. */}
+      {kind ? (
+        <div className="mx-3 mt-2 grid grid-cols-3 gap-0.5 rounded-md border border-white/10 bg-white/[0.03] p-0.5" role="radiogroup" aria-label="Show on map">
+          {KINDS.map((item) => {
+            const active = kind === item.key;
+            return (
+              <button
+                key={item.key}
+                role="radio"
+                aria-checked={active}
+                onClick={() => onKind(item.key)}
+                className={`rounded px-1.5 py-1 text-[10px] font-bold transition ${
+                  active ? "bg-white/[0.12] text-neutral-100 shadow-sm" : "text-neutral-500 hover:text-neutral-200"
+                }`}
+              >
+                {item.label} <span className="tabular-nums text-neutral-500">{kindCounts?.[item.key] ?? ""}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-1 px-3 py-2">
         {counts.sos ? (

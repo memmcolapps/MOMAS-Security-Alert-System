@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { isPlatformOwner, normalizeOrgRole, requirePlatform } from "../auth";
 import * as db from "../db";
+import { MODULES, normalizeModules } from "../modules";
 import {
   liveRadioConfigured,
   provisionOnNetwork,
@@ -55,10 +56,8 @@ router.get("/", async (c) => {
 router.post("/", requireOps, async (c) => {
   const body = await c.req.json().catch(() => ({}));
   if (!body.name) return c.json({ error: "Enter an organization name." }, 400);
-  const availableModules = ["radio", "drone", "osint", "geofence"];
-  const modules = [...new Set((Array.isArray(body.modules) ? body.modules : availableModules)
-    .map((module: unknown) => String(module).toLowerCase())
-    .filter((module: string) => availableModules.includes(module)))];
+  const modules = normalizeModules((Array.isArray(body.modules) ? body.modules : [...MODULES])
+    .map((module: unknown) => String(module).toLowerCase()));
   if (!modules.length) return c.json({ error: "Select at least one module." }, 400);
   try {
     const tenantSeats = Math.max(1, Number(body.radio_seats) || 2);
@@ -391,10 +390,8 @@ router.put("/:id/access", requireOps, async (c) => {
   }
   let modules;
   if (body.modules !== undefined) {
-    const availableModules = ["radio", "drone", "osint", "geofence"];
-    modules = [...new Set((Array.isArray(body.modules) ? body.modules : [])
-      .map((module: unknown) => String(module).toLowerCase())
-      .filter((module: string) => availableModules.includes(module)))];
+    modules = normalizeModules((Array.isArray(body.modules) ? body.modules : [])
+      .map((module: unknown) => String(module).toLowerCase()));
     if (!modules.length) return c.json({ error: "Select at least one module." }, 400);
   }
 

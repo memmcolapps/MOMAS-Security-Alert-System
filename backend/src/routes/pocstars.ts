@@ -12,6 +12,7 @@ import {
   requireOperator,
 } from "../auth";
 import { env } from "../config";
+import { allowsDeviceType } from "../modules";
 import * as db from "../db";
 import { bus } from "../events";
 import { fetchLastLocations } from "../pocstars/locations";
@@ -25,7 +26,7 @@ import { actionMessage, describeSyncFailure } from "../pocstars/messages";
 type SseClient = {
   write: (chunk: string) => Promise<void>;
   close: () => Promise<void>;
-  scope: { organizationId?: number; unitId?: number | null };
+  scope: { organizationId?: number; unitId?: number | null; modules?: string[] };
 };
 
 const router = new Hono();
@@ -68,6 +69,8 @@ function orgScope(c: any) {
         organizationId: org.organization_id,
         unitId: org.scope_level === "unit" ? org.unit_id : null,
         assignedOnly: !canManageOrganization(org),
+        // Radio and Vehicle modules decide which device types come back.
+        modules: org.modules,
       }
     : { organizationId: -1 };
 }
@@ -307,22 +310,31 @@ function sseResponse(signal: AbortSignal, scope: any) {
 }
 
 function broadcastSse(event: string, data: unknown) {
-  const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const client of sseClients) {
-    const alert = data as any;
-    if (
-      alert?.organization_id !== undefined &&
-      client.scope.organizationId &&
-      (Number(alert.organization_id) !== Number(client.scope.organizationId) ||
-        (client.scope.unitId &&
-          Number(alert.unit_id) !== Number(client.scope.unitId)))
-    ) {
-      continue;
+  const alert = data as any;
+  // Alarms follow the Radio/Vehicle module of the device that raised them.
+  // Only look the device up when some listener actually has one switched off.
+  const restricted = alert?.device_id !== undefined
+    && [...sseClients].some((client) =>
+      allowsDeviceType(client.scope.modules, "vehicle") !== allowsDeviceType(client.scope.modules, "handheld"));
+  const deviceType = restricted ? db.deviceTypeOf(alert.device_id).catch(() => null) : Promise.resolve(null);
+  void deviceType.then((type) => {
+    const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    for (const client of sseClients) {
+      if (
+        alert?.organization_id !== undefined &&
+        client.scope.organizationId &&
+        (Number(alert.organization_id) !== Number(client.scope.organizationId) ||
+          (client.scope.unitId &&
+            Number(alert.unit_id) !== Number(client.scope.unitId)))
+      ) {
+        continue;
+      }
+      if (alert?.device_id !== undefined && !allowsDeviceType(client.scope.modules, type)) continue;
+      void client.write(message).catch(() => {
+        sseClients.delete(client);
+      });
     }
-    void client.write(message).catch(() => {
-      sseClients.delete(client);
-    });
-  }
+  });
 }
 
 async function fetchPocstarsSos(
@@ -795,14 +807,51 @@ router.post("/devices", requireOperator, async (c) => {
     const renameError = await renameOnNetwork(existing, name, companyId);
     if (renameError) return c.json({ error: renameError }, 502);
 
+    // Device type decides the Radio/Vehicle module a device belongs to, so it
+    // is a platform setting: a tenant could otherwise retype handhelds as
+    // vehicles to see radios their organization has not been given.
+    if (device_type !== undefined && device_type !== existing.device_type) {
+      return c.json({ error: "Only the platform team can change a device's type." }, 403);
+    }
     const device = await db.updateDeviceFields(device_id.trim(), {
       name,
       operator,
-      device_type,
       notes,
       active,
     });
     return c.json({ device });
+  } catch (error) {
+    return c.json(jsonError(error), 500);
+  }
+});
+
+// Sets the type of many devices at once - mostly marking the vehicle radios,
+// which the network sync brings in as handhelds. Platform operators only,
+// because the type decides which module (Radio or Vehicle) a device is in.
+router.post("/devices/type", requireOperator, async (c) => {
+  const user = (c as any).get("user");
+  if (!isPlatformOperator(user)) {
+    return c.json({ error: "Only the platform team can change a device's type." }, 403);
+  }
+  const body = await c.req.json().catch(() => ({}));
+  const ids: string[] = [...new Set<string>((Array.isArray(body.device_ids) ? body.device_ids : []).map((id: unknown) => String(id).trim()).filter(Boolean))];
+  const type = String(body.device_type || "");
+  if (!ids.length) return c.json({ error: "Pick at least one device." }, 400);
+  if (ids.length > 2000) return c.json({ error: "Too many devices in one go." }, 400);
+  if (!["handheld", "vehicle", "fixed", "other"].includes(type)) {
+    return c.json({ error: "Unknown device type." }, 400);
+  }
+  try {
+    const updated = await db.setDeviceTypes(ids, type);
+    await db.createAuditLog({
+      organization_id: null,
+      actor_user_id: user?.id,
+      action: "device.type",
+      target_type: "device",
+      target_id: ids.length === 1 ? ids[0] : `${ids.length} devices`,
+      metadata: { device_type: type, device_ids: ids },
+    });
+    return c.json({ updated });
   } catch (error) {
     return c.json(jsonError(error), 500);
   }

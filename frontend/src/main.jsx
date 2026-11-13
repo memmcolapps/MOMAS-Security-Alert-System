@@ -22,6 +22,7 @@ import { LiveRadioProvider } from "./lib/live-radio-session";
 import { getActiveOrganizationId, getAuthToken, getMe } from "./lib/api";
 import { noteRestoredAt } from "./lib/connection";
 import { persistQueryCache, restoreQueryCache } from "./lib/offline-cache";
+import { MODULES, hasRadioNetwork, moduleSet } from "./lib/modules";
 import { PLATFORM_RANK, platformRank } from "./lib/platform-roles";
 import { registerServiceWorker } from "./lib/service-worker";
 import "./styles.css";
@@ -52,7 +53,7 @@ function RootLayout() {
   const showHeader = !["/login", "/change-password"].includes(router.location.pathname);
   const me = meQuery.data?.user;
   const activeMembership = me?.memberships?.find((membership) => Number(membership.organization_id) === Number(getActiveOrganizationId())) || me?.memberships?.[0];
-  const showRadio = Boolean(platformRank(me) || !activeMembership?.modules?.length || activeMembership.modules.includes("radio"));
+  const showRadio = Boolean(platformRank(me) || hasRadioNetwork(moduleSet(activeMembership?.modules)));
   const chromeRef = useRef(null);
 
   // The app chrome is the header plus a radio strip that only shows while the
@@ -159,21 +160,21 @@ async function requirePlatform(minimum) {
 }
 
 const enabledModules = (session) => {
-  if (platformRank(session.user)) return new Set(["radio", "drone", "osint", "geofence"]);
+  if (platformRank(session.user)) return new Set(MODULES);
   const membership = session.user?.active_membership || session.user?.memberships?.find(
     (item) => Number(item.organization_id) === Number(getActiveOrganizationId()),
   ) || session.user?.memberships?.[0];
-  return new Set(Array.isArray(membership?.modules) && membership.modules.length
-    ? membership.modules
-    : ["radio", "drone", "osint", "geofence"]);
+  return moduleSet(membership?.modules);
 };
 
+// Takes one module or a list, any of which opens the page.
 function requireModule(module) {
+  const wanted = Array.isArray(module) ? module : [module];
   return async () => {
     const session = await requireReadySession();
     const modules = enabledModules(session);
-    if (modules.has(module)) return session;
-    const fallback = ["radio", "drone", "osint", "geofence"].find((candidate) => modules.has(candidate));
+    if (wanted.some((name) => modules.has(name))) return session;
+    const fallback = MODULES.find((candidate) => modules.has(candidate));
     throw redirect({ to: fallback === "drone" ? "/drones" : fallback === "geofence" ? "/geofences" : "/" });
   };
 }
@@ -209,21 +210,21 @@ const indexRoute = createRoute({
 const replayRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/replay",
-  beforeLoad: requireModule("radio"),
+  beforeLoad: requireModule(["radio", "vehicle"]),
   component: page("ReplayRoute"),
 });
 
 const devicesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/devices",
-  beforeLoad: requireModule("radio"),
+  beforeLoad: requireModule(["radio", "vehicle"]),
   component: page("DevicesRoute"),
 });
 
 const alarmsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/alarms",
-  beforeLoad: requireModule("radio"),
+  beforeLoad: requireModule(["radio", "vehicle"]),
   component: page("AlarmsRoute"),
 });
 
