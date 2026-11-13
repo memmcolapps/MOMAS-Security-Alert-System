@@ -8,6 +8,7 @@
 import { Hono } from "hono";
 import { requirePlatform } from "../auth";
 import { getPlatformStats, normalizeRange } from "../platform-stats";
+import { getServerStatus } from "../server-checks";
 import { sosPollStatus } from "./pocstars";
 
 const router = new Hono();
@@ -21,5 +22,9 @@ router.get("/", async (c) => {
     return c.json({ error: "The stats could not be loaded." }, 500);
   }
 });
+
+// Kept apart from the stats above: it is read from memory, so the server
+// cards can refresh often and never wait on the slower stats queries.
+router.get("/servers", (c) => c.json(getServerStatus(sosPollStatus())));
 
 export default router;

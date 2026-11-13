@@ -36,6 +36,7 @@ import { positionPushStatus } from "./pocstars/position-push";
 import { heartbeatPushStatus, startHeartbeatPush } from "./pocstars/heartbeat-push";
 import { checkClassifierModels, getClassifierHealth } from "./classifier";
 import { observeRequest, startMetrics } from "./metrics";
+import { startServerChecks } from "./server-checks";
 import platformStatsRouter from "./routes/platform-stats";
 
 const app = new Hono();
@@ -269,6 +270,7 @@ try {
 ╚══════════════════════════════════════════════╝`);
 
   startMetrics();
+  startServerChecks();
   void startGeofenceMonitor();
   startMavlinkListener();
   void startRadioPositionRecorder();

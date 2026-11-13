@@ -2,7 +2,7 @@ import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, Building2, ChevronDown, FileSearch, History, LogOut, Map, MapPinned, Plane, Radio, ShieldAlert, ShieldCheck, Siren, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { getActiveOrganizationId, getMe, getPlatformStats, setActiveOrganizationId, setAuthToken } from "../lib/api";
+import { getActiveOrganizationId, getMe, getPlatformStats, getServerStatus, setActiveOrganizationId, setAuthToken } from "../lib/api";
 import { clearOfflineCache } from "../lib/offline-cache";
 import { PLATFORM_ROLE_LABELS, isPlatformOwner, isPlatformStaff } from "../lib/platform-roles";
 import { ListenControl } from "./LiveRadioBar";
@@ -146,13 +146,18 @@ export function AppHeader() {
                       active={isActive("/admin/stats")}
                       onNavigate={() => setMenuOpen(false)}
                       // Numbers start loading on hover, so the page opens filled in.
-                      onHover={() =>
+                      onHover={() => {
                         queryClient.prefetchQuery({
                           queryKey: ["platform-stats", "7d"],
                           queryFn: () => getPlatformStats("7d"),
                           staleTime: 15_000,
-                        })
-                      }
+                        });
+                        queryClient.prefetchQuery({
+                          queryKey: ["platform-servers"],
+                          queryFn: getServerStatus,
+                          staleTime: 10_000,
+                        });
+                      }}
                     />
                   ) : null}
                   {isOwner ? (

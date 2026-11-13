@@ -294,6 +294,23 @@ export function getPlatformStats(range = "7d") {
   return request(`/api/platform/stats?range=${encodeURIComponent(range)}`);
 }
 
+export function getServerStatus() {
+  return request("/api/platform/stats/servers");
+}
+
+/**
+ * How long this browser takes to reach the MOMAS server and back, in ms.
+ * Sent without the session so the server takes its cheapest path and the
+ * time is the trip itself.
+ */
+export async function pingServer() {
+  const started = window.performance.now();
+  const response = await fetch(`${config.apiBase}/api/health`, { cache: "no-store" });
+  await response.arrayBuffer();
+  if (!response.ok) throw new Error(`The server answered ${response.status}`);
+  return Math.round(window.performance.now() - started);
+}
+
 export function getPlatformStaff() {
   return request("/api/platform/staff");
 }

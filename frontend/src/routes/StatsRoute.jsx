@@ -1,7 +1,7 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Activity, AlertTriangle, CheckCircle2, CircleSlash, ShieldCheck, XCircle } from "lucide-react";
-import { useState } from "react";
-import { getPlatformStats } from "../lib/api";
+import { useEffect, useState } from "react";
+import { getPlatformStats, getServerStatus, pingServer } from "../lib/api";
 
 const RANGES = [
   { id: "24h", label: "24 hours" },
@@ -67,15 +67,19 @@ export function StatsRoute() {
         </div>
       </header>
 
-      {query.isError && !stats ? (
-        <div className="rounded border border-ops-red/30 bg-red-500/10 px-3 py-2 text-xs text-ops-red">
-          {query.error?.message || "The stats could not be loaded."}
-        </div>
-      ) : !stats ? (
-        <Skeleton />
-      ) : (
-        <Body stats={stats} />
-      )}
+      <Servers />
+
+      <div className="mt-8">
+        {query.isError && !stats ? (
+          <div className="rounded border border-ops-red/30 bg-red-500/10 px-3 py-2 text-xs text-ops-red">
+            {query.error?.message || "The stats could not be loaded."}
+          </div>
+        ) : !stats ? (
+          <Skeleton />
+        ) : (
+          <Body stats={stats} />
+        )}
+      </div>
     </main>
   );
 }
@@ -268,6 +272,236 @@ function Body({ stats }) {
       </p>
     </>
   );
+}
+
+/* ---------- servers ---------- */
+
+const BROWSER_PING_MS = 15_000;
+const BROWSER_KEEP = 40;
+
+/**
+ * Times the trip from this browser to the MOMAS server and back. Paused while
+ * the tab is hidden, so a page left open in the background costs nothing.
+ */
+function useBrowserPing() {
+  const [samples, setSamples] = useState([]);
+  useEffect(() => {
+    let stopped = false;
+    const ping = async () => {
+      if (document.hidden) return;
+      let ms = null;
+      try {
+        ms = await pingServer();
+      } catch {
+        ms = null;
+      }
+      if (!stopped) setSamples((list) => [...list, ms].slice(-BROWSER_KEEP));
+    };
+    void ping();
+    const timer = window.setInterval(ping, BROWSER_PING_MS);
+    document.addEventListener("visibilitychange", ping);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", ping);
+    };
+  }, []);
+  return samples;
+}
+
+function browserCheck(samples, slowMs) {
+  const times = samples.filter((ms) => ms !== null).sort((a, b) => a - b);
+  const last = samples.length ? samples[samples.length - 1] : undefined;
+  return {
+    id: "browser",
+    name: "From your browser",
+    detail: "This page to the server and back",
+    state: last === undefined ? "unknown" : last === null ? "down" : last > slowMs ? "slow" : "up",
+    last_ms: last ?? null,
+    last_error: last === null ? "No answer" : null,
+    typical_ms: times.length ? times[Math.floor(times.length / 2)] : null,
+    up_pct: samples.length ? (times.length / samples.length) * 100 : null,
+    recent: samples,
+  };
+}
+
+function Servers() {
+  const query = useQuery({
+    queryKey: ["platform-servers"],
+    queryFn: getServerStatus,
+    staleTime: 10_000,
+    refetchInterval: 15_000,
+  });
+  const browserSamples = useBrowserPing();
+  const data = query.data;
+
+  return (
+    <section aria-labelledby="servers-title">
+      <h2 id="servers-title" className="mb-2 text-xs font-bold uppercase tracking-wide text-neutral-400">
+        Servers
+      </h2>
+      {query.isError && !data ? (
+        <div className="rounded border border-ops-red/30 bg-red-500/10 px-3 py-2 text-xs text-ops-red">
+          {query.error?.message || "Server status could not be loaded."}
+        </div>
+      ) : !data ? (
+        <div className="grid animate-pulse gap-3 lg:grid-cols-2" aria-busy="true" aria-label="Loading">
+          <div className="h-[244px] rounded-lg border border-white/10 bg-white/[0.03]" />
+          <div className="h-[244px] rounded-lg border border-white/10 bg-white/[0.03]" />
+        </div>
+      ) : (
+        <>
+          <div className="grid gap-3 lg:grid-cols-2">
+            {data.servers.map((server) => {
+              const checks =
+                server.id === "contabo" ? [browserCheck(browserSamples, data.slow_ms), ...server.checks] : server.checks;
+              return (
+                <ServerCard
+                  key={server.id}
+                  server={{ ...server, state: worstState(checks.map((check) => check.state)) }}
+                  checks={checks}
+                  slowMs={data.slow_ms}
+                  facts={serverFacts(server)}
+                />
+              );
+            })}
+          </div>
+          <p className="mt-2 text-[10px] text-neutral-600">
+            The server checks itself and the radio server every {data.every_seconds} s. Times and uptime cover the
+            last 24 hours, or since it last restarted at{" "}
+            {new Date(data.since).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
+function serverFacts(server) {
+  const facts = server.facts || {};
+  if (server.id === "contabo") {
+    return [
+      ["MOMAS running for", duration(facts.running_seconds)],
+      ["Processor load", facts.cpu_load_pct === null || facts.cpu_load_pct === undefined ? "–" : `${facts.cpu_load_pct}%`],
+      ["Memory in use", facts.memory_used_pct === null || facts.memory_used_pct === undefined ? "–" : `${facts.memory_used_pct}%`],
+    ];
+  }
+  return [
+    [
+      "Last alarm check answered",
+      facts.last_alarm_check_at
+        ? `${duration(Math.max(0, (Date.now() - new Date(facts.last_alarm_check_at).getTime()) / 1000))} ago`
+        : "Not yet",
+    ],
+    ["Radio consoles in use", facts.bridge_seats ?? "–"],
+  ];
+}
+
+function worstState(states) {
+  for (const state of ["down", "slow", "unknown", "up"]) if (states.includes(state)) return state;
+  return "off";
+}
+
+const STATE_STYLE = {
+  up: { label: "Up", className: "text-ops-green", Icon: CheckCircle2 },
+  slow: { label: "Slow", className: "text-amber-300", Icon: AlertTriangle },
+  down: { label: "Down", className: "text-ops-red", Icon: XCircle },
+  unknown: { label: "Checking", className: "text-neutral-500", Icon: Activity },
+  off: { label: "Not set up", className: "text-neutral-500", Icon: CircleSlash },
+};
+
+function StatePill({ state, size = "md" }) {
+  const style = STATE_STYLE[state] || STATE_STYLE.unknown;
+  const { Icon } = style;
+  return (
+    <span className={`inline-flex items-center gap-1 font-bold ${style.className} ${size === "md" ? "text-xs" : "text-[10px]"}`}>
+      <Icon size={size === "md" ? 13 : 10} aria-hidden="true" />
+      {style.label}
+    </span>
+  );
+}
+
+function ServerCard({ server, checks, slowMs, facts }) {
+  return (
+    <div className="flex flex-col rounded-lg border border-white/10 bg-white/[0.02] p-4">
+      <div className="mb-2 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-sm font-bold text-neutral-100">{server.name}</h3>
+          <p className="text-[11px] text-neutral-500">{server.role}</p>
+        </div>
+        <StatePill state={server.state} />
+      </div>
+      <div className="divide-y divide-white/5">
+        {checks.map((check) => (
+          <CheckRow key={check.id} check={check} slowMs={slowMs} />
+        ))}
+      </div>
+      <div className="mt-auto border-t border-white/5 pt-1">
+        <Facts rows={facts} />
+      </div>
+    </div>
+  );
+}
+
+function CheckRow({ check, slowMs }) {
+  const off = check.state === "off";
+  const down = check.state === "down";
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 py-2.5 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 text-xs font-bold text-neutral-200">
+          {check.name}
+          {down || off ? <StatePill state={check.state} size="sm" /> : null}
+        </div>
+        <div className={`truncate text-[11px] ${down ? "text-ops-red/80" : "text-neutral-500"}`}>
+          {down ? check.last_error || "No answer" : check.detail}
+        </div>
+      </div>
+      {off ? <span className="hidden sm:block" /> : <Spark values={check.recent || []} slowMs={slowMs} />}
+      <div className="w-36 text-right">
+        <div
+          className={`text-sm font-bold tabular-nums ${
+            check.state === "slow" ? "text-amber-200" : down ? "text-ops-red" : "text-neutral-100"
+          }`}
+        >
+          {off ? "–" : down ? "No answer" : ms(check.last_ms)}
+        </div>
+        {!off && check.typical_ms !== null && check.typical_ms !== undefined ? (
+          <div className="whitespace-nowrap text-[10px] text-neutral-500 tabular-nums">
+            usually {ms(check.typical_ms)} · {formatRate(check.up_pct)}% up
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** The last few checks as small bars: taller is slower, red is no answer. */
+function Spark({ values, slowMs }) {
+  const shown = values.slice(-30);
+  const max = Math.max(slowMs / 4, ...shown.filter((value) => value !== null));
+  return (
+    // Fixed-width bars filling from the right, so a few checks look like a few.
+    <div className="hidden h-6 w-[89px] items-end justify-end gap-px sm:flex" aria-hidden="true">
+      {shown.map((value, index) => (
+        <span
+          key={index}
+          className={`w-[2px] shrink-0 rounded-[1px] ${
+            value === null ? "bg-ops-red" : value > slowMs ? "bg-amber-400" : ""
+          }`}
+          style={{
+            height: value === null ? "100%" : `${Math.max(8, (value / max) * 100)}%`,
+            background: value !== null && value <= slowMs ? ON_TIME : undefined,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ms(value) {
+  if (value === null || value === undefined) return "–";
+  return value < 1000 ? `${value} ms` : `${(value / 1000).toFixed(1)} s`;
 }
 
 /* ---------- pieces ---------- */
