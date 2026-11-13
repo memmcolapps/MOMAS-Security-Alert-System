@@ -42,6 +42,7 @@ import {
   getRadioTracks,
   getRadioReplay,
   getRadioCoverage,
+  RADIO_POLL_LIVE_MS,
   RADIO_POLL_MS,
   listAlarms,
   listGeofences,
@@ -288,12 +289,6 @@ export function OperationsRoute() {
     enabled: hasRadio,
   });
 
-  const locationsQuery = useQuery({
-    queryKey: ["locations"],
-    queryFn: () => getLocations(),
-    refetchInterval: RADIO_POLL_MS,
-    enabled: hasRadio,
-  });
 
   // Tracked radios. One is followed on the main map, as before; a second
   // splits the screen into a tile per radio (TrackGrid). Dragging a map
@@ -301,7 +296,13 @@ export function OperationsRoute() {
   const [tracked, setTracked] = useState(() => trackedFromSearch(routeSearch?.track));
   const [trackedMotion, setTrackedMotion] = useState(null);
   // Every GPS point each radio sends, streamed; the maps play them back.
-  const radioTracks = useRadioTracks(hasRadio);
+  const { tracksRef: radioTracks, live: radioStreamLive } = useRadioTracks(hasRadio);
+  const locationsQuery = useQuery({
+    queryKey: ["locations"],
+    queryFn: () => getLocations(),
+    refetchInterval: radioStreamLive ? RADIO_POLL_LIVE_MS : RADIO_POLL_MS,
+    enabled: hasRadio,
+  });
   const trackedRadioId = tracked.length === 1 ? tracked[0].deviceId : null;
   const trackedKey = tracked.map((item) => item.deviceId).sort().join(",");
   // Every tracked radio's trail in one request, however many there are.

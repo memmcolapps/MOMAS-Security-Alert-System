@@ -4701,7 +4701,7 @@ async function radioReplaySummary(deviceIds, from, to) {
 
 /**
  * Fixes for several radios between two moments, thinned to at most one per
- * radio per bucketSec, oldest first. A day of 5-second fixes is more than a
+ * radio per bucketSec, oldest first. A day of 3-second fixes is more than a
  * browser needs to draw a route; one every 15-30 s still follows the roads.
  */
 async function radioReplayTracks(deviceIds, from, to, bucketSec) {

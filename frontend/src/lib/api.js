@@ -1,6 +1,7 @@
 import { config } from "./app-config";
 import { noteServerReached, noteServerUnreachable } from "./connection";
 import { clearOfflineCache } from "./offline-cache";
+import { createSharedEventSource } from "./shared-event-source";
 
 const TOKEN_KEY = "momas_auth_token";
 const ORG_KEY = "momas_active_organization_id";
@@ -552,9 +553,12 @@ export function radioPointsStreamUrl() {
   return `${config.apiBase}/api/pocstars/positions/stream?${query}`;
 }
 
-// Radio positions are shared by one server-side poll, so asking often is cheap.
-// 5s keeps a moving radio's glide close to where it really is.
+// The radio list (which radios exist, their last fix, SOS flag). While the
+// live points stream is connected the map moves radios from that stream, so
+// the list only needs a slow backup refresh; when the stream is down, the
+// list is all the map has and is asked for every 5 s.
 export const RADIO_POLL_MS = 5_000;
+export const RADIO_POLL_LIVE_MS = 15_000;
 
 export function getSosLog() {
   return request("/api/pocstars/sos/log");
@@ -635,6 +639,14 @@ export function alertsEventsUrl() {
   if (token) query.set("access_token", token);
   if (org) query.set("organization_id", org);
   return `${config.apiBase}/api/alerts/events?${query}`;
+}
+
+// The alerts feed, shared by every listener on the page (siren, radio bar,
+// alarms list) so the tab holds one connection to it rather than three.
+const alertsStream = createSharedEventSource({ getUrl: alertsEventsUrl, events: ["alert_new", "alert_updated"] });
+
+export function subscribeAlerts(subscriber) {
+  return alertsStream.subscribe(subscriber);
 }
 
 export function listGeofences() {

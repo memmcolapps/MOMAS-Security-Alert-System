@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getRecentRadioPoints, radioPointsStreamUrl } from "./api";
 import { addPoints, createTrack } from "./radio-playback";
 
@@ -8,15 +8,20 @@ const FORGET_MS = 20 * 60_000;
 
 /**
  * Every radio's recent GPS points, kept in a ref the map reads on each frame.
- * Nothing here causes a re-render: the points arrive several times a second
+ * The points never cause a re-render: they arrive several times a second
  * across the fleet, and only the map's animation loop needs them.
+ *
+ * `live` says whether the stream is connected (it changes only on connect and
+ * drop), so the page can ease off its backup poll while points are flowing.
  */
 export function useRadioTracks(enabled = true) {
   const tracksRef = useRef(new Map());
+  const [live, setLive] = useState(false);
 
   useEffect(() => {
     if (!enabled) {
       tracksRef.current.clear();
+      setLive(false);
       return undefined;
     }
     let cancelled = false;
@@ -42,7 +47,12 @@ export function useRadioTracks(enabled = true) {
         .catch(() => {});
 
     const source = new window.EventSource(radioPointsStreamUrl());
-    source.onopen = backfill;
+    source.onopen = () => {
+      setLive(true);
+      backfill();
+    };
+    // The browser retries on its own; until it gets back, the page polls fast.
+    source.onerror = () => setLive(false);
     source.addEventListener("points", (event) => {
       try {
         ingest(JSON.parse(event.data), true);
@@ -63,8 +73,9 @@ export function useRadioTracks(enabled = true) {
       source.close();
       window.clearInterval(sweep);
       tracks.clear();
+      setLive(false);
     };
   }, [enabled]);
 
-  return tracksRef;
+  return { tracksRef, live };
 }

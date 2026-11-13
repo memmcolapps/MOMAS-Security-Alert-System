@@ -23,7 +23,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlarmMiniMap } from "../components/AlarmMiniMap";
 import { useFollow } from "../lib/follow-session";
 import {
-  alertsEventsUrl,
   getAlarm,
   getMe,
   listAlarms,
@@ -32,6 +31,7 @@ import {
   reopenAlarm,
   resolveAlarm,
   startAlarmResponse,
+  subscribeAlerts,
 } from "../lib/api";
 import { geofenceDistance, geofenceTitle, isGeofenceAlarm, LEVEL_STYLES, levelOf } from "../lib/alarm-levels";
 import { isPlatformStaff } from "../lib/platform-roles";
@@ -325,17 +325,17 @@ export function AlarmsRoute() {
   selectedIdRef.current = selectedId;
 
   useEffect(() => {
-    const source = new window.EventSource(alertsEventsUrl());
     const refresh = () => {
       queryClient.invalidateQueries({ queryKey: ["alarms"] });
       if (selectedIdRef.current) queryClient.invalidateQueries({ queryKey: ["alarm", selectedIdRef.current] });
     };
-    source.onopen = () => setFeedConnected(true);
-    source.onerror = () => setFeedConnected(false);
-    source.addEventListener("alert_new", refresh);
-    source.addEventListener("alert_updated", refresh);
+    const unsubscribe = subscribeAlerts({
+      onEvent: refresh,
+      onOpen: () => setFeedConnected(true),
+      onError: () => setFeedConnected(false),
+    });
     return () => {
-      source.close();
+      unsubscribe();
       setFeedConnected(false);
     };
   }, [queryClient]);

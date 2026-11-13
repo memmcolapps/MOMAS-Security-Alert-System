@@ -76,13 +76,21 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          # Pinned to the runtime the servers run, so a new Bun release can't
+          # change behaviour between two deploys of the same code.
+          bun-version: 1.1.29
 
       # Sanity check: lockfile resolves cleanly. Catches a broken bun.lockb
       # before we push anything to the server.
       - name: Verify dependencies resolve
         working-directory: backend
         run: bun install --frozen-lockfile
+
+      # Typecheck + the full test suite. A failure here stops the deploy
+      # before anything reaches the server.
+      - name: Typecheck and test
+        working-directory: backend
+        run: bun run check
 
       # Pack only what the server needs. node_modules is reinstalled on the
       # server; the env file lives in /etc/momas/momas.env (Pattern B); the

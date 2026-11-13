@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { BellOff, ChevronDown, Siren, Volume2 } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { alertsEventsUrl, listAlarms, startAlarmResponse } from "../lib/api";
+import { listAlarms, startAlarmResponse, subscribeAlerts } from "../lib/api";
 import { alarmHeadline, LEVEL_STYLES, levelOf } from "../lib/alarm-levels";
 import {
   armSiren,
@@ -68,7 +68,6 @@ export function SosAlarmProvider({ enabled = true, children }) {
   // siren and puts it on the map at once; the refetch only reconciles.
   useEffect(() => {
     if (!enabled) return undefined;
-    const source = new window.EventSource(alertsEventsUrl());
     const apply = (event) => {
       let alert = null;
       try {
@@ -90,12 +89,12 @@ export function SosAlarmProvider({ enabled = true, children }) {
       }
       queryClient.invalidateQueries({ queryKey: ["alarms"] });
     };
-    source.addEventListener("alert_new", apply);
-    source.addEventListener("alert_updated", apply);
-    // Anything pushed while the stream was down is fetched on reconnect
-    // rather than waiting for the next poll.
-    source.addEventListener("open", () => queryClient.invalidateQueries({ queryKey: ["alarms"] }));
-    return () => source.close();
+    return subscribeAlerts({
+      onEvent: (_name, event) => apply(event),
+      // Anything pushed while the stream was down is fetched on reconnect
+      // rather than waiting for the next poll.
+      onOpen: () => queryClient.invalidateQueries({ queryKey: ["alarms"] }),
+    });
   }, [enabled, queryClient]);
 
   // Signed out (login, password change) there is nothing to ring for, and a

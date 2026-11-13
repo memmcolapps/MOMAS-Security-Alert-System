@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, Headphones, Mic, Phone, Search, Square, UsersRound, Volume2, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { alertsEventsUrl, getRadioChannels, listDevices } from "../lib/api";
+import { getRadioChannels, listDevices, subscribeAlerts } from "../lib/api";
 import { useLiveRadioSession } from "../lib/live-radio-session";
 
 function useRadioChannels() {
@@ -150,8 +150,8 @@ export function LiveRadioBar() {
   const hasChannels = channels.length > 0;
   useEffect(() => {
     if (!hasChannels) return undefined;
-    const source = new window.EventSource(alertsEventsUrl());
-    const onAlert = (event) => {
+    const onAlert = (name, event) => {
+      if (name !== "alert_new") return;
       try {
         const alert = JSON.parse(event.data);
         if (alert?.source !== "pocstars" || !alert.pocstars_group_id) return;
@@ -166,9 +166,9 @@ export function LiveRadioBar() {
         sosTimerRef.current = window.setTimeout(() => setSosPrompt(null), 30_000);
       } catch { /* malformed SSE payload — ignore */ }
     };
-    source.addEventListener("alert_new", onAlert);
+    const unsubscribe = subscribeAlerts({ onEvent: onAlert });
     return () => {
-      source.close();
+      unsubscribe();
       if (sosTimerRef.current) window.clearTimeout(sosTimerRef.current);
     };
   }, [hasChannels]);
