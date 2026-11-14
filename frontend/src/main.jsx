@@ -59,6 +59,10 @@ function RootLayout() {
   const me = meQuery.data?.user;
   const activeMembership = me?.memberships?.find((membership) => Number(membership.organization_id) === Number(getActiveOrganizationId())) || me?.memberships?.[0];
   const showRadio = Boolean(platformRank(me) || hasRadioNetwork(moduleSet(activeMembership?.modules)));
+  // Same rule as the server's canOperate: ops and above, or an org operator
+  // and up. Viewers listen only, so they are never asked for the microphone.
+  const mayTalk = platformRank(me) >= PLATFORM_RANK.ops
+    || ["operator", "unit_admin", "org_admin", "admin", "org_owner"].includes(activeMembership?.role);
   const chromeRef = useRef(null);
 
   // The app chrome is the header plus a radio strip that only shows while the
@@ -81,7 +85,7 @@ function RootLayout() {
   }, [showHeader]);
 
   return (
-    <LiveRadioProvider>
+    <LiveRadioProvider mayTalk={mayTalk}>
       <CallsProvider enabled={showHeader && Boolean(session.token)} sessionKey={`${session.token}:${session.organizationId}`}>
       <FollowProvider>
         <SosAlarmProvider enabled={showHeader && showRadio}>

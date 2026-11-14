@@ -3,6 +3,7 @@ import { BatteryFull, BatteryLow, BatteryMedium, Crosshair, GripHorizontal, Hist
 import { useCallback, useEffect, useRef, useState } from "react";
 import { reverseGeocode, sendRadioMessage } from "../lib/api";
 import { useLiveRadioSession } from "../lib/live-radio-session";
+import { TalkButton, talkLabel, useTalkSecondsLeft } from "./TalkButton";
 
 function formatRadioTime(value) {
   if (!value) return "Unknown time";
@@ -79,6 +80,7 @@ function HandsetStatus({ device }) {
  */
 export function RadioConsole({ device, location, onShowOnMap, tracking = false, onTrack, onReplay }) {
   const liveRadio = useLiveRadioSession();
+  const secondsLeft = useTalkSecondsLeft();
   const [draft, setDraft] = useState("");
   const [sent, setSent] = useState([]);
   const [notice, setNotice] = useState("");
@@ -288,35 +290,17 @@ export function RadioConsole({ device, location, onShowOnMap, tracking = false, 
               </div>
             ) : liveRadio.callState === "connected" ? (
               <div className="space-y-2">
-                <button
-                  className={`flex min-h-20 w-full touch-none select-none flex-col items-center justify-center gap-1.5 rounded-lg border text-xs font-black uppercase tracking-wider transition ${
+                <TalkButton
+                  title="Tap to talk and tap again to stop, or hold and let go. Space works too."
+                  className={`flex min-h-20 w-full flex-col items-center justify-center gap-1.5 rounded-lg border text-xs font-black uppercase tracking-wider tabular-nums transition ${
                     liveRadio.pttState === "granted"
                       ? "border-red-400 bg-red-500/25 text-red-200 shadow-[0_0_28px_rgba(239,68,68,0.18)]"
                       : "border-green-500/40 bg-green-500/10 text-ops-green hover:bg-green-500/15"
                   }`}
-                  onPointerDown={(event) => {
-                    event.currentTarget.setPointerCapture(event.pointerId);
-                    liveRadio.startPtt();
-                  }}
-                  onPointerUp={liveRadio.stopPtt}
-                  onPointerCancel={liveRadio.stopPtt}
-                  onKeyDown={(event) => {
-                    if ((event.key === " " || event.key === "Enter") && !event.repeat) {
-                      event.preventDefault();
-                      liveRadio.startPtt();
-                    }
-                  }}
-                  onKeyUp={(event) => {
-                    if (event.key === " " || event.key === "Enter") liveRadio.stopPtt();
-                  }}
                 >
                   <Mic size={20} />
-                  {liveRadio.pttState === "granted"
-                    ? "Speaking · release to stop"
-                    : liveRadio.pttState === "requesting"
-                      ? "Requesting microphone…"
-                      : "Hold to talk"}
-                </button>
+                  {talkLabel(liveRadio, secondsLeft)}
+                </TalkButton>
                 <button
                   className="inline-flex w-full items-center justify-center gap-2 rounded border border-red-500/25 px-3 py-1.5 text-[10px] text-red-300 hover:bg-red-500/10"
                   onClick={liveRadio.endCall}

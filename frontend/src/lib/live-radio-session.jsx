@@ -1,6 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { getAuthToken } from "./api";
 import { BrowserRadioAudio, liveRadioUrl } from "./live-radio";
+import { buzz, chirp, unlockChirps } from "./radio-chirps";
+import { MAX_TALK_MS, createTalkControl } from "./talk-control";
 
 // One live-radio session for the whole app. The listen bar monitors a division
 // through it and the radio console places private calls through it, so audio
@@ -41,7 +43,15 @@ function isKickout(message) {
   return message.code === "pocstars_kicked" || /used somewhere else/i.test(message.message || "");
 }
 
-export function LiveRadioProvider({ children }) {
+// Space talks from anywhere on the page while a radio is live, except while
+// typing. USB foot pedals and desk talk buttons that send Space work the same.
+function typingInField(target) {
+  if (!target) return false;
+  if (target.isContentEditable || target.tagName === "TEXTAREA" || target.tagName === "SELECT") return true;
+  return target.tagName === "INPUT" && !["checkbox", "radio", "range", "button", "submit"].includes(String(target.type).toLowerCase());
+}
+
+export function LiveRadioProvider({ children, mayTalk = true }) {
   const socketRef = useRef(null);
   const audioRef = useRef(null);
   const heldRef = useRef(false);
@@ -62,6 +72,8 @@ export function LiveRadioProvider({ children }) {
   const [mode, setMode] = useState(null);
   const [callState, setCallState] = useState("idle");
   const [pttState, setPttState] = useState("idle");
+  const pttStateRef = useRef("idle");
+  pttStateRef.current = pttState;
   const [speaker, setSpeaker] = useState(null);
   const [configured, setConfigured] = useState(null);
   const [error, setError] = useState("");
@@ -406,6 +418,113 @@ export function LiveRadioProvider({ children }) {
     }
   }, []);
 
+  // ── one talk control for every button, the Space bar and pedals ──────
+  const [talkState, setTalkState] = useState("idle");
+  const [talkStartedAt, setTalkStartedAt] = useState(0);
+  const sendPttRef = useRef(sendPtt);
+  sendPttRef.current = sendPtt;
+  const stopPttRef = useRef(stopPtt);
+  stopPttRef.current = stopPtt;
+  const talkRef = useRef(null);
+  if (!talkRef.current) {
+    talkRef.current = createTalkControl({
+      start: (kind) => void sendPttRef.current(kind === "takeover" ? "ptt.takeover" : "ptt.start"),
+      stop: () => stopPttRef.current(),
+      onChange: ({ state, startedAt }) => {
+        setTalkState(state);
+        setTalkStartedAt(startedAt);
+      },
+    });
+  }
+
+  const pressTalk = useCallback((kind = "start") => {
+    unlockChirps();
+    talkRef.current.press(kind);
+  }, []);
+  const releaseTalk = useCallback(() => talkRef.current.release(), []);
+
+  // The network ends a talk too: it refuses the channel, someone with
+  // priority takes it, or the call drops. The control follows it.
+  const lastPttRef = useRef("idle");
+  useEffect(() => {
+    const previous = lastPttRef.current;
+    lastPttRef.current = pttState;
+    if (pttState === "granted" && previous !== "granted") {
+      chirp("on");
+      buzz();
+    }
+    if (pttState === "idle" && previous !== "idle") {
+      if (previous === "granted") chirp("tail");
+      talkRef.current.reset("network");
+    }
+  }, [pttState]);
+
+  // When someone else on the channel stops talking, the squelch closes with
+  // the same "kssshh" a handset makes.
+  const lastSpeakerRef = useRef(null);
+  useEffect(() => {
+    const previous = lastSpeakerRef.current;
+    lastSpeakerRef.current = speaker;
+    if (previous && !speaker && pttStateRef.current !== "granted") chirp("tail");
+  }, [speaker]);
+
+  useEffect(() => {
+    if (!mode) talkRef.current.reset("closed");
+  }, [mode]);
+
+  const canTalkNow = Boolean(mayTalk && mode && callState === "connected" && !micBlocked);
+  const canTalkRef = useRef(canTalkNow);
+  canTalkRef.current = canTalkNow;
+
+  useEffect(() => {
+    const onDown = (event) => {
+      if (event.code !== "Space" || event.repeat || event.defaultPrevented) return;
+      if (event.metaKey || event.ctrlKey || event.altKey || typingInField(event.target)) return;
+      if (!canTalkRef.current) return;
+      event.preventDefault();
+      pressTalk("start");
+    };
+    const onUp = (event) => {
+      if (event.code !== "Space" || talkRef.current.state === "idle") return;
+      event.preventDefault();
+      releaseTalk();
+    };
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
+    return () => {
+      window.removeEventListener("keydown", onDown);
+      window.removeEventListener("keyup", onUp);
+    };
+  }, [pressTalk, releaseTalk]);
+
+  // Ask for the microphone when a channel opens, not on the first press, so
+  // the first press talks straight away. Only for people allowed to talk, and
+  // only if the browser has not been asked before.
+  const connectedMonitor = mode === "monitor" && callState === "connected";
+  useEffect(() => {
+    if (!connectedMonitor || !mayTalk || !window.navigator.mediaDevices?.getUserMedia) return;
+    let cancelled = false;
+    const ask = async () => {
+      const status = await window.navigator.permissions?.query({ name: "microphone" }).catch(() => null);
+      if (cancelled || (status && status.state !== "prompt")) return;
+      const stream = await window.navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => null);
+      stream?.getTracks().forEach((track) => track.stop());
+    };
+    void ask();
+    return () => {
+      cancelled = true;
+    };
+  }, [connectedMonitor, mayTalk]);
+
+  const talk = useMemo(() => ({
+    state: talkState,
+    startedAt: talkStartedAt,
+    maxMs: MAX_TALK_MS,
+    canTalk: canTalkNow,
+    press: pressTalk,
+    release: releaseTalk,
+  }), [talkState, talkStartedAt, canTalkNow, pressTalk, releaseTalk]);
+
   const value = useMemo(() => ({
     mode,
     callState,
@@ -426,9 +545,10 @@ export function LiveRadioProvider({ children }) {
     startPtt,
     stopPtt,
     cutIn,
+    talk,
   }), [
     mode, callState, pttState, speaker, configured, error, busyBy, micBlocked, condition, channel, callDevice,
-    listenToChannel, stopListening, callRadio, callGroup, endCall, startPtt, stopPtt, cutIn,
+    listenToChannel, stopListening, callRadio, callGroup, endCall, startPtt, stopPtt, cutIn, talk,
   ]);
 
   return <LiveRadioContext.Provider value={value}>{children}</LiveRadioContext.Provider>;

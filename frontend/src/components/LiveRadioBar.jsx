@@ -1,8 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, Headphones, Mic, Phone, Search, Square, UsersRound, Volume2, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { getRadioChannels, listDevices, subscribeAlerts } from "../lib/api";
 import { useLiveRadioSession } from "../lib/live-radio-session";
+import { useFollow } from "../lib/follow-session";
+import { useIsNarrow } from "../lib/use-is-narrow";
+import { TalkButton, talkLabel, useTalkSecondsLeft } from "./TalkButton";
 
 function useRadioChannels() {
   const channelsQuery = useQuery({
@@ -133,12 +137,15 @@ export function ListenControl() {
   );
 }
 
-// Strip under the app header while the radio is live: hold to talk, who is
+// Strip under the app header while the radio is live: talk, who is
 // speaking, cut in, end. Hidden when idle. When an SOS lands in another channel
 // it appears to offer a one-click switch (never automatic).
 export function LiveRadioBar() {
   const radio = useLiveRadioSession();
   const { channels } = useRadioChannels();
+  const narrow = useIsNarrow();
+  const secondsLeft = useTalkSecondsLeft();
+  const { target: followTarget } = useFollow();
   const [sosPrompt, setSosPrompt] = useState(null);
   const sosTimerRef = useRef(null);
 
@@ -178,7 +185,7 @@ export function LiveRadioBar() {
   const connecting = radio.callState === "connecting";
   const reconnecting = radio.callState === "reconnecting";
   const connected = radio.callState === "connected";
-  const canTalk = connected && (listening || inCall) && !radio.micBlocked;
+  const canTalk = radio.talk.canTalk && (listening || inCall);
   const talking = radio.pttState === "granted";
   // Someone else holds the channel. Cutting in is the dispatcher's priority.
   const otherTalking = Boolean(radio.speaker) && !talking;
@@ -202,30 +209,28 @@ export function LiveRadioBar() {
           </span>
         ) : null}
 
-        {canTalk ? (
-          <HoldButton
-            onStart={radio.startPtt}
-            onStop={radio.stopPtt}
-            className={talking
+        {canTalk && !narrow ? (
+          <TalkButton
+            title="Tap to talk and tap again to stop, or hold and let go. Space works too."
+            className={`inline-flex h-6 items-center gap-1 rounded px-2.5 font-bold tabular-nums transition ${talking
               ? "bg-ops-red text-black"
-              : radio.pttState === "requesting"
+              : radio.pttState === "requesting" || radio.talk.state !== "idle"
                 ? "bg-ops-green/60 text-black"
-                : "bg-ops-green text-black hover:opacity-85"}
+                : "bg-ops-green text-black hover:opacity-85"}`}
           >
             <Mic size={11} />
-            {talking ? "Talking · release" : radio.pttState === "requesting" ? "Requesting…" : "Hold to talk"}
-          </HoldButton>
+            {talkLabel(radio, secondsLeft)}
+          </TalkButton>
         ) : null}
 
         {canTalk && otherTalking ? (
-          <HoldButton
-            onStart={radio.cutIn}
-            onStop={radio.stopPtt}
+          <TalkButton
+            kind="takeover"
             title={`Cut off ${radio.speaker.name || "the current talker"} and talk`}
-            className="border border-amber-400/50 text-amber-200 hover:bg-amber-500/15"
+            className="inline-flex h-6 items-center gap-1 rounded border border-amber-400/50 px-2.5 font-bold text-amber-200 transition hover:bg-amber-500/15"
           >
             <Zap size={11} /> Cut in
-          </HoldButton>
+          </TalkButton>
         ) : null}
 
         {connected && (listening || inCall) && radio.micBlocked ? (
@@ -285,35 +290,30 @@ export function LiveRadioBar() {
           </span>
         ) : null}
       </div>
+      {canTalk && narrow
+        ? createPortal(
+            <PhoneTalkButton radio={radio} talking={talking} secondsLeft={secondsLeft} raised={Boolean(followTarget)} />,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
 
-// Push-to-talk needs press and release, and keeps the pointer captured so a
-// drag off the button still releases the microphone.
-function HoldButton({ onStart, onStop, className, title, children }) {
+// A thumb-sized talk button for phones, bottom right, outside the header (the
+// header's blur would trap anything "fixed" inside it).
+function PhoneTalkButton({ radio, talking, secondsLeft, raised }) {
+  const waiting = !talking && (radio.pttState === "requesting" || radio.talk.state !== "idle");
   return (
-    <button
-      title={title}
-      className={`inline-flex h-6 touch-none select-none items-center gap-1 rounded px-2.5 font-bold transition ${className}`}
-      onPointerDown={(event) => {
-        event.currentTarget.setPointerCapture(event.pointerId);
-        onStart();
-      }}
-      onPointerUp={onStop}
-      onPointerCancel={onStop}
-      onKeyDown={(event) => {
-        if ((event.key === " " || event.key === "Enter") && !event.repeat) {
-          event.preventDefault();
-          onStart();
-        }
-      }}
-      onKeyUp={(event) => {
-        if (event.key === " " || event.key === "Enter") onStop();
-      }}
+    <TalkButton
+      aria-label={talkLabel(radio, secondsLeft)}
+      className={`fixed right-4 z-[1150] flex h-20 w-20 flex-col items-center justify-center gap-0.5 rounded-full text-[11px] font-black tabular-nums shadow-2xl transition active:scale-95 ${
+        raised ? "bottom-[calc(5.5rem+env(safe-area-inset-bottom))]" : "bottom-[calc(1rem+env(safe-area-inset-bottom))]"
+      } ${talking ? "bg-ops-red text-black ring-4 ring-red-500/30" : waiting ? "bg-ops-green/60 text-black" : "bg-ops-green text-black"}`}
     >
-      {children}
-    </button>
+      <Mic size={24} />
+      <span>{talking ? (secondsLeft != null ? `${secondsLeft}s` : "On air") : waiting ? "…" : "Talk"}</span>
+    </TalkButton>
   );
 }
 
