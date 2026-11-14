@@ -36,6 +36,17 @@ textarea {
   font: inherit;
 }
 
+/* iPhones zoom into any text field whose text is under 16px, and stay zoomed
+   after typing. Every field here is smaller than that, so on touch screens
+   they all use 16px; mouse-driven consoles keep the compact sizes. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
 .ops-map {
   width: 100vw;
   height: 100vh;

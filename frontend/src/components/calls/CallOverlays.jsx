@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { formatDuration } from "../../lib/call-logic";
 import { useCalls } from "../../lib/console-calls";
 import { initials } from "./CallsMenu";
-import { useIsNarrow } from "./useIsNarrow";
+import { useIsNarrow } from "../../lib/use-is-narrow";
 
 const QUALITY = {
   good: { label: "Good", Icon: Signal, tone: "text-ops-green" },

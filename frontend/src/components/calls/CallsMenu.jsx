@@ -1,7 +1,8 @@
 import { Phone, PhoneMissed, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useCalls } from "../../lib/console-calls";
-import { useIsNarrow } from "./useIsNarrow";
+import { useIsNarrow } from "../../lib/use-is-narrow";
 
 const STATUS_TEXT = { online: "Online", on_radio: "On radio", busy: "In a call" };
 
@@ -25,9 +26,9 @@ export function CallsButton() {
   const rootRef = useRef(null);
 
   useEffect(() => {
-    if (!open || narrow) return undefined;
+    if (!open) return undefined;
     const onDown = (event) => {
-      if (!rootRef.current?.contains(event.target)) setOpen(false);
+      if (!narrow && !rootRef.current?.contains(event.target)) setOpen(false);
     };
     const onKey = (event) => {
       if (event.key === "Escape") setOpen(false);
@@ -71,15 +72,21 @@ export function CallsButton() {
       </button>
       {open ? (
         narrow ? (
-          <div className="fixed inset-0 z-[1250]">
-            <button type="button" aria-label="Close" className="absolute inset-0 bg-black/50" onClick={() => setOpen(false)} />
-            <div className="absolute inset-x-0 bottom-0 max-h-[75dvh] overflow-hidden rounded-t-2xl border-t border-white/10 bg-neutral-950 pb-[env(safe-area-inset-bottom)] shadow-2xl">
-              <div className="mx-auto my-2 h-1 w-9 rounded-full bg-white/20" />
-              <PeopleList onDone={() => setOpen(false)} large />
-            </div>
-          </div>
+          // Drawn on the page itself, not inside the header: the header's blur
+          // makes "fixed" mean "inside the header", which squeezed this sheet
+          // into the header strip with its close button off screen.
+          createPortal(
+            <div className="fixed inset-0 z-[1250]">
+              <button type="button" aria-label="Close" className="absolute inset-0 bg-black/50" onClick={() => setOpen(false)} />
+              <div className="absolute inset-x-0 bottom-0 flex max-h-[75dvh] flex-col overflow-hidden rounded-t-2xl border-t border-white/10 bg-neutral-950 pb-[env(safe-area-inset-bottom)] shadow-2xl">
+                <div className="mx-auto my-2 h-1 w-9 shrink-0 rounded-full bg-white/20" />
+                <PeopleList onDone={() => setOpen(false)} large />
+              </div>
+            </div>,
+            document.body,
+          )
         ) : (
-          <div className="absolute right-0 top-full z-[1250] mt-2 w-80 overflow-hidden rounded-lg border border-white/10 bg-black/95 shadow-2xl backdrop-blur">
+          <div className="absolute right-0 top-full z-[1250] mt-2 flex max-h-[70vh] w-80 flex-col overflow-hidden rounded-lg border border-white/10 bg-black/95 shadow-2xl backdrop-blur">
             <PeopleList onDone={() => setOpen(false)} />
           </div>
         )
@@ -125,7 +132,7 @@ function PeopleList({ onDone, large = false }) {
   const recentMissed = missedSnapshot.current;
 
   return (
-    <div className="flex max-h-[inherit] flex-col text-[12px] text-neutral-200">
+    <div className="flex min-h-0 flex-1 flex-col text-[12px] text-neutral-200">
       <div className="flex items-center justify-between px-3 pb-1 pt-2">
         <p className="text-[9px] font-bold uppercase tracking-wide text-neutral-500">People online</p>
         {large ? (

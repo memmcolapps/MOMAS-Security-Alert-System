@@ -14,7 +14,6 @@ import {
   SatelliteDish,
   SkipForward,
   Siren,
-  Tv,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -23,6 +22,7 @@ import { FloatingRadioCard } from "../components/RadioConsole";
 import { TrackingStrip } from "../components/TrackingStrip";
 import { TrackGrid } from "../components/TrackGrid";
 import { RadioFleetPanel } from "../components/RadioFleetPanel";
+import { IncidentPeriod } from "../components/IncidentPeriod";
 import { MapKey } from "../components/MapKey";
 import { ReplayPanel, replayRange } from "../components/ReplayPanel";
 import { buildReplay } from "../lib/radio-replay";
@@ -1201,34 +1201,22 @@ export function OperationsRoute() {
       {/* The incident period, and the tour that works over the whole map.
           Fleet figures live in the fleet panel, incident figures in Live
           Monitoring, and the basemap and layers in the map panel. */}
-      <section
-        className={`glass-panel absolute z-[1000] max-w-[calc(100vw-2rem)] flex-wrap items-center gap-1.5 rounded-lg px-2.5 py-1.5 transition-transform ${gridActive ? "hidden" : "flex"} ${followTarget ? "bottom-[4.5rem]" : "bottom-3"} ${
-          panelOpen ? "left-1/2 -translate-x-[calc(50%+190px)]" : "left-1/2 -translate-x-1/2"
-        }`}
-      >
-        <span className="text-[9px] font-bold uppercase tracking-wide text-neutral-600">Incidents</span>
-        {modes.map(([mode, label]) => (
-          <button
-            className={`rounded px-2 py-1 text-[10px] font-bold ${activeMode === mode ? "bg-ops-red text-black" : "text-neutral-400 hover:text-ops-red"}`}
-            key={mode}
-            onClick={() => setMode(mode)}
-          >
-            {label}
-          </button>
-        ))}
-        <input className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px]" type="date" value={from} onChange={(event) => setManualRange([event.target.value, to])} aria-label="From" />
-        <span className="text-neutral-600">→</span>
-        <input className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px]" type="date" value={to} onChange={(event) => setManualRange([from, event.target.value])} aria-label="To" />
-        <span className="mx-1 h-4 w-px bg-white/10" />
-        <button
-          className="rounded px-2 py-1 text-[10px] font-bold text-ops-red hover:bg-red-500/15 disabled:opacity-50"
-          onClick={liveMode ? stopLiveMode : startLiveMode}
-          disabled={!liveMode && !tourStops.length}
-          title={tourStops.length ? `Tour ${tourStops.length} pins` : "No pins to tour"}
-        >
-          <Tv size={12} className="mr-1 inline" /> {liveMode ? "Exit Live" : "Live Mode"}
-        </button>
-      </section>
+      <IncidentPeriod
+        modes={modes}
+        activeMode={activeMode}
+        onMode={setMode}
+        from={from}
+        to={to}
+        onRange={setManualRange}
+        liveMode={liveMode}
+        onStartLive={startLiveMode}
+        onStopLive={stopLiveMode}
+        tourCount={tourStops.length}
+        hidden={gridActive}
+        raised={Boolean(followTarget)}
+        shiftedLeft={panelOpen}
+        radioListOpen={Boolean(visibleLayers.devices && fleetOpen)}
+      />
     </main>
   );
 }
