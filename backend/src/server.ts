@@ -31,6 +31,7 @@ import { compress } from "hono/compress";
 import { cors } from "hono/cors";
 import { invalidateAuthCache, isPlatformStaff, optionalAuth, requireAuth } from "./auth";
 import { liveRadioWebSocket } from "./pocstars/live-gateway";
+import { callsWebSocket } from "./calls/socket";
 import { sosPushStatus } from "./pocstars/sos-push";
 import { positionPushStatus } from "./pocstars/position-push";
 import { heartbeatPushStatus, startHeartbeatPush } from "./pocstars/heartbeat-push";
@@ -146,6 +147,10 @@ app.route("/api/geofences", geofencesRouter);
 app.route("/api/alerts", alertsRouter);
 app.use("/api/pocstars/radio/live", requireAuth);
 app.get("/api/pocstars/radio/live", upgradeWebSocket((c) => liveRadioWebSocket(c)));
+// Console-to-console calls: presence, ringing and call setup. Voice goes
+// browser to browser and never passes through here.
+app.use("/api/calls/live", requireAuth);
+app.get("/api/calls/live", upgradeWebSocket((c) => callsWebSocket(c)));
 
 app.get("/api/config", (c) =>
   c.json({

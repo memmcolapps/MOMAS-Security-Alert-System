@@ -46,6 +46,17 @@ const envSchema = z.object({
   POCSTARS_BRIDGE_TOKEN: z.string().optional().default(""),
   POCSTARS_PTT_TIMEOUT_MS: intFromEnv(10_000),
   POCSTARS_PTT_MAX_SECONDS: intFromEnv(60),
+  // Console-to-console calls (browser to browser). STUN finds each console's
+  // public address; TURN relays the encrypted audio when two networks cannot
+  // reach each other directly. Comma-separated URLs. Without TURN, calls
+  // between strict office networks may fail to connect.
+  CALLS_STUN_URLS: z.string().default("stun:stun.l.google.com:19302"),
+  CALLS_TURN_URLS: z.string().default(""),
+  // Shared secret with coturn's static-auth-secret: each console gets its own
+  // relay password, signed with it, that stops working after CALLS_TURN_TTL_SEC.
+  CALLS_TURN_SECRET: z.string().default(""),
+  CALLS_TURN_TTL_SEC: intFromEnv(4 * 3600),
+  CALLS_RING_SEC: intFromEnv(45),
   // Drone tracking — raw MAVLink TCP listener (Mission Planner forwards here).
   MAVLINK_ENABLE: boolFromEnv(true),
   MAVLINK_TCP_HOST: z.string().default("0.0.0.0"),

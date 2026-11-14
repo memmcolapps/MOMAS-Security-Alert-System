@@ -110,7 +110,7 @@ function loadIdentity(userId: number) {
 
 // Streams, the live radio socket and audio players, which a browser opens
 // without letting the page set headers.
-const URL_TOKEN_PATHS = /\/(events|positions\/stream|radio\/live|radio\/recordings\/[^/]+\/audio)$/;
+const URL_TOKEN_PATHS = /\/(events|positions\/stream|radio\/live|calls\/live|radio\/recordings\/[^/]+\/audio)$/;
 
 /** True while the account behind a long-lived connection may still use it. */
 async function isUserStillActive(userId: number) {

@@ -241,3 +241,8 @@ export function stopYellowAlarm() {
   yellowSource.disconnect();
   yellowSource = null;
 }
+
+/** True while any alarm sound (SOS, amber or yellow) is meant to be playing. */
+export function isAlarmSounding() {
+  return wanted || amberWanted || yellowWanted;
+}

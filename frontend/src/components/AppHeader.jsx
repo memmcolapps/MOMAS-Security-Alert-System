@@ -7,6 +7,7 @@ import { clearOfflineCache } from "../lib/offline-cache";
 import { PLATFORM_ROLE_LABELS, isPlatformOwner, isPlatformStaff } from "../lib/platform-roles";
 import { MODULES, hasRadioNetwork, moduleSet } from "../lib/modules";
 import { ListenControl } from "./LiveRadioBar";
+import { CallsButton } from "./calls/CallsMenu";
 import { LocationStatus } from "./LocationStatus";
 
 export function AppHeader() {
@@ -106,6 +107,7 @@ export function AppHeader() {
             inside this box and inherit it, so their paragraphs ran off the
             panel. Each button keeps itself on one line. */}
         <div className="ml-auto flex shrink-0 items-center gap-2">
+          <CallsButton />
           <ListenControl />
           <LocationStatus />
         </div>

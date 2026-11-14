@@ -19,6 +19,8 @@ import { LiveRadioBar } from "./components/LiveRadioBar";
 import { SosAlarmBanner, SosAlarmProvider } from "./components/SosAlarm";
 import { FollowProvider } from "./lib/follow-session";
 import { LiveRadioProvider } from "./lib/live-radio-session";
+import { CallsProvider } from "./lib/console-calls";
+import { CallOverlays, CallStrip } from "./components/calls/CallOverlays";
 import { getActiveOrganizationId, getAuthToken, getMe } from "./lib/api";
 import { noteRestoredAt } from "./lib/connection";
 import { persistQueryCache, restoreQueryCache } from "./lib/offline-cache";
@@ -51,6 +53,9 @@ function RootLayout() {
   const router = useRouterState();
   const meQuery = useQuery({ queryKey: ["me"], queryFn: getMe, staleTime: 60_000 });
   const showHeader = !["/login", "/change-password"].includes(router.location.pathname);
+  // Read on every render (each navigation re-renders this), so signing in again
+  // or switching organization reconnects calls under the new identity.
+  const session = currentSession();
   const me = meQuery.data?.user;
   const activeMembership = me?.memberships?.find((membership) => Number(membership.organization_id) === Number(getActiveOrganizationId())) || me?.memberships?.[0];
   const showRadio = Boolean(platformRank(me) || hasRadioNetwork(moduleSet(activeMembership?.modules)));
@@ -77,12 +82,14 @@ function RootLayout() {
 
   return (
     <LiveRadioProvider>
+      <CallsProvider enabled={showHeader && Boolean(session.token)} sessionKey={`${session.token}:${session.organizationId}`}>
       <FollowProvider>
         <SosAlarmProvider enabled={showHeader && showRadio}>
           {showHeader ? (
             <div ref={chromeRef} className="fixed left-0 right-0 top-0 z-[1100]">
               <AppHeader />
               {showRadio ? <LiveRadioBar /> : null}
+              <CallStrip />
               <ConnectionBanner />
             </div>
           ) : null}
@@ -91,8 +98,10 @@ function RootLayout() {
               between the map, the alarm and the radio console. */}
           {showHeader && showRadio ? <FollowBar /> : null}
           {showHeader && showRadio ? <SosAlarmBanner /> : null}
+          {showHeader ? <CallOverlays /> : null}
         </SosAlarmProvider>
       </FollowProvider>
+      </CallsProvider>
     </LiveRadioProvider>
   );
 }

@@ -24,6 +24,16 @@ export function liveRadioUrl() {
   return url.toString();
 }
 
+// How loud radio plays, 0-1. A console call turns the radio down so the two
+// do not talk over each other, without stopping the channel.
+let radioLevel = 1;
+const players = new Set();
+
+export function setRadioDuck(level) {
+  radioLevel = Math.max(0, Math.min(1, Number(level)));
+  for (const player of players) player.applyLevel();
+}
+
 export class BrowserRadioAudio {
   constructor(sendAudio) {
     this.sendAudio = sendAudio;
@@ -43,6 +53,12 @@ export class BrowserRadioAudio {
     this.incomingTimer = null;
     this.playhead = 0;
     this.closed = false;
+    this.output = null;
+    players.add(this);
+  }
+
+  applyLevel() {
+    if (this.output) this.output.gain.value = radioLevel;
   }
 
   async prepare({ microphone = false } = {}) {
@@ -51,6 +67,11 @@ export class BrowserRadioAudio {
       throw new Error("This browser cannot use live radio audio.");
     }
     if (!this.context) this.context = new AudioContext();
+    if (!this.output) {
+      this.output = this.context.createGain();
+      this.output.connect(this.context.destination);
+      this.applyLevel();
+    }
     await this.context.resume();
     if (!this.decoder) {
       const { default: BenzAMRRecorder } = await import("benz-amr-recorder");
@@ -153,7 +174,7 @@ export class BrowserRadioAudio {
     buffer.copyToChannel(pcm, 0);
     const source = context.createBufferSource();
     source.buffer = buffer;
-    source.connect(context.destination);
+    source.connect(this.output || context.destination);
     // Clamp the scheduling cursor to a small jitter window ahead of the clock.
     // Without this, playhead only ever grows: audio arriving faster than
     // real-time (bursts, bridge buffering) pushes it seconds into the future
@@ -170,6 +191,7 @@ export class BrowserRadioAudio {
   close() {
     if (this.closed) return;
     this.closed = true;
+    players.delete(this);
     if (this.incomingTimer) window.clearTimeout(this.incomingTimer);
     this.incomingTimer = null;
     this.capture = [];
@@ -178,6 +200,8 @@ export class BrowserRadioAudio {
     this.processor?.disconnect();
     this.source?.disconnect();
     this.silentGain?.disconnect();
+    this.output?.disconnect();
+    this.output = null;
     this.stream?.getTracks().forEach((track) => track.stop());
     void this.context?.close().catch(() => {});
     // benz-amr-recorder 1.1.5 throws in destroy() when no playback source
