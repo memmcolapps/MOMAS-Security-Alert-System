@@ -4,6 +4,7 @@ import { deviceTypeGlyph } from "../lib/domain";
 import { useSecondClock } from "../lib/frame-ticker";
 import { compassFor, formatAge } from "../lib/radio-motion";
 import { TILE_GAP, TILE_SIZES, capacity, gridFor } from "../lib/track-grid";
+import { useIsNarrow } from "../lib/use-is-narrow";
 import { TrackMap } from "./TrackMap";
 
 const STATUS_TEXT = {
@@ -71,8 +72,12 @@ function Segmented({ value, options, onChange }) {
   );
 }
 
+// On a phone each tile is a full-width row of this height, and the list scrolls.
+const STACK_TILE_HEIGHT = "max(240px, 42svh)";
+
 function TrackTile({
   radio,
+  stacked = false,
   radioTracks,
   trails,
   maximised,
@@ -107,22 +112,39 @@ function TrackTile({
       }}
       // Filling the screen lifts the tile out of its cell to cover the whole
       // grid; it needs "absolute" alone, since "relative" would win and keep
-      // it in its cell.
-      className={`${maximised ? "absolute inset-0 z-10" : "relative"} flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border-2 bg-black shadow-lg shadow-black/40 ${
+      // it in its cell. In the phone list the other tiles drop out instead,
+      // since "absolute" would cover the top of the list, not what is in view.
+      className={`${
+        stacked ? `relative ${maximised ? "min-h-0 flex-1" : "shrink-0"}` : maximised ? "absolute inset-0 z-10" : "relative"
+      } flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border-2 bg-black shadow-lg shadow-black/40 ${
         sos ? "animate-pulse border-ops-red" : dim ? "border-amber-400/60" : ""
-      } ${hidden ? "invisible" : ""} ${dragOver ? "ring-2 ring-white/60" : ""}`}
-      style={sos || dim ? undefined : { borderColor: radio.colour }}
+      } ${hidden ? (stacked ? "hidden" : "invisible") : ""} ${dragOver ? "ring-2 ring-white/60" : ""}`}
+      style={{ ...(sos || dim ? {} : { borderColor: radio.colour }), ...(stacked && !maximised ? { height: STACK_TILE_HEIGHT } : {}) }}
     >
       <header
-        draggable
-        onDragStart={onDragStart}
-        onDoubleClick={onMaximise}
-        title="Drag to move this tile · double-click to fill the screen"
-        className="flex cursor-grab items-center gap-x-3 gap-y-0.5 bg-neutral-950/90 px-2 py-1 text-[11px] text-neutral-200 active:cursor-grabbing"
+        // Dragging and double-clicking don't work by touch, so on a phone the
+        // radio's name is the button that fills the screen.
+        draggable={!stacked}
+        onDragStart={stacked ? undefined : onDragStart}
+        onDoubleClick={stacked ? undefined : onMaximise}
+        title={stacked ? undefined : "Drag to move this tile · double-click to fill the screen"}
+        className={`flex items-center gap-x-3 gap-y-0.5 bg-neutral-950/90 px-2 py-1 text-[11px] text-neutral-200 ${
+          stacked ? "flex-wrap" : "cursor-grab active:cursor-grabbing"
+        }`}
       >
         <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: radio.colour }} />
-        <span className="min-w-0 shrink truncate font-bold">{radio.label}</span>
-        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 overflow-hidden whitespace-nowrap">
+        {stacked ? (
+          <button onClick={onMaximise} className="min-w-0 flex-1 truncate py-1 text-left font-bold active:text-neutral-400">
+            {radio.label}
+          </button>
+        ) : (
+          <span className="min-w-0 shrink truncate font-bold">{radio.label}</span>
+        )}
+        <span
+          className={`flex min-w-0 flex-wrap items-center gap-x-2 overflow-hidden whitespace-nowrap ${
+            stacked ? "order-last basis-full pb-0.5 pl-[1.375rem] text-[10px]" : "flex-1"
+          }`}
+        >
           <RadioSummary state={state} now={now} compact={!maximised} />
         </span>
         <span className="flex shrink-0 items-center">
@@ -134,14 +156,14 @@ function TrackTile({
               <LocateFixed size={11} /> Re-centre
             </button>
           ) : null}
-          <IconButton title="Replay where this radio has been" onClick={onReplay}>
-            <History size={13} />
+          <IconButton title="Replay where this radio has been" onClick={onReplay} tone={stacked ? "p-2" : ""}>
+            <History size={stacked ? 16 : 13} />
           </IconButton>
-          <IconButton title={maximised ? "Back to all tiles (Esc)" : "Fill the screen"} onClick={onMaximise}>
-            {maximised ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+          <IconButton title={maximised ? "Back to all tiles (Esc)" : "Fill the screen"} onClick={onMaximise} tone={stacked ? "p-2" : ""}>
+            {maximised ? <Minimize2 size={stacked ? 16 : 13} /> : <Maximize2 size={stacked ? 16 : 13} />}
           </IconButton>
-          <IconButton title="Stop tracking this radio" onClick={onStop}>
-            <X size={13} />
+          <IconButton title="Stop tracking this radio" onClick={onStop} tone={stacked ? "p-2" : ""}>
+            <X size={stacked ? 16 : 13} />
           </IconButton>
         </span>
       </header>
@@ -162,7 +184,7 @@ function TrackTile({
 }
 
 // An empty cell: find another radio to track without going back to the list.
-function AddTile({ devices, trackedIds, onTrack }) {
+function AddTile({ devices, trackedIds, onTrack, stacked = false }) {
   const [query, setQuery] = useState("");
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -174,7 +196,11 @@ function AddTile({ devices, trackedIds, onTrack }) {
   }, [devices, trackedIds, query]);
 
   return (
-    <section className="flex min-h-0 min-w-0 flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-white/10 p-4 text-[11px] text-neutral-500">
+    <section
+      className={`flex min-h-0 min-w-0 flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-white/10 p-4 text-[11px] text-neutral-500 ${
+        stacked ? "shrink-0" : ""
+      }`}
+    >
       <Plus size={18} />
       <span className="font-bold text-neutral-400">Add a radio</span>
       <label className="flex w-full max-w-[240px] items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.04] px-2 py-1">
@@ -183,7 +209,8 @@ function AddTile({ devices, trackedIds, onTrack }) {
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Name or ID"
-          className="w-full bg-transparent text-neutral-200 outline-none placeholder:text-neutral-600"
+          // 16px keeps iOS from zooming the page when the field is tapped.
+          className={`w-full bg-transparent text-neutral-200 outline-none placeholder:text-neutral-600 ${stacked ? "py-1 text-base" : ""}`}
         />
       </label>
       {matches.length ? (
@@ -195,7 +222,7 @@ function AddTile({ devices, trackedIds, onTrack }) {
                   setQuery("");
                   onTrack(String(device.device_id));
                 }}
-                className="w-full truncate rounded px-2 py-1 text-left text-neutral-200 hover:bg-white/10"
+                className={`w-full truncate rounded px-2 text-left text-neutral-200 hover:bg-white/10 active:bg-white/15 ${stacked ? "py-2 text-[13px]" : "py-1"}`}
               >
                 {device.name || device.device_id}
               </button>
@@ -204,7 +231,7 @@ function AddTile({ devices, trackedIds, onTrack }) {
         </ul>
       ) : query.trim() ? (
         <span>No radios match.</span>
-      ) : (
+      ) : stacked ? null : (
         <span>or pick one from the radio list</span>
       )}
     </section>
@@ -212,7 +239,7 @@ function AddTile({ devices, trackedIds, onTrack }) {
 }
 
 // Every tracked radio on one map, with a list that matches colours to names.
-function TogetherView({ radios, radioTracks, trails, onStop }) {
+function TogetherView({ radios, radioTracks, trails, onStop, stacked = false }) {
   const [states, setStates] = useState({});
   const [paused, setPaused] = useState(false);
   const [recentreKey, setRecentreKey] = useState(0);
@@ -230,7 +257,7 @@ function TogetherView({ radios, radioTracks, trails, onStop }) {
         onState={reportState}
         recentreKey={recentreKey}
       />
-      <ul className="glass-panel scrollbar-thin absolute left-2 top-2 z-[500] max-h-[calc(100%-1rem)] w-[min(320px,calc(100%-1rem))] overflow-y-auto rounded-md py-1 text-[11px]">
+      <ul className={`glass-panel scrollbar-thin absolute left-2 top-2 z-[500] ${stacked ? "max-h-[38%]" : "max-h-[calc(100%-1rem)]"} w-[min(320px,calc(100%-1rem))] overflow-y-auto rounded-md py-1 text-[11px]`}>
         {radios.map((radio) => (
           <li key={radio.uid} className="flex items-center gap-2 px-2 py-1">
             <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: radio.colour }} />
@@ -297,6 +324,9 @@ export function TrackGrid({
   const [maximised, setMaximised] = useState(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
   const dragRef = useRef(null);
+  // A phone has room for one tile across, so the tiles stack and scroll and
+  // every tracked radio gets one: no tile sizes, nothing "not shown".
+  const stacked = useIsNarrow();
 
   // Alarm banners from elsewhere on the page sit over the top of the grid,
   // exactly when its bar matters most ("+2 not shown", who took whose tile).
@@ -342,8 +372,9 @@ export function TrackGrid({
 
   const grid = useMemo(() => gridFor(tracked.length, area.width, area.height, tileSize), [tracked.length, area, tileSize]);
   useEffect(() => {
-    if (area.width) onCapacity?.(grid.max);
-  }, [grid.max, area.width, onCapacity]);
+    if (stacked) onCapacity?.(Infinity);
+    else if (area.width) onCapacity?.(grid.max);
+  }, [stacked, grid.max, area.width, onCapacity]);
 
   useEffect(() => {
     if (!maximised) return undefined;
@@ -393,19 +424,19 @@ export function TrackGrid({
   // When not every radio fits - say an alarm banner has just squeezed the grid
   // - radios in SOS keep their tiles first; the rest fill up in their order.
   const { shown, notShown } = useMemo(() => {
-    if (view !== "split" || radios.length <= grid.shown) return { shown: radios, notShown: [] };
+    if (view !== "split" || stacked || radios.length <= grid.shown) return { shown: radios, notShown: [] };
     const keep = new Set(radios.filter((radio) => radio.sos).slice(0, grid.shown).map((radio) => radio.uid));
     for (const radio of radios) {
       if (keep.size >= grid.shown) break;
       keep.add(radio.uid);
     }
     return { shown: radios.filter((radio) => keep.has(radio.uid)), notShown: radios.filter((radio) => !keep.has(radio.uid)) };
-  }, [radios, grid.shown, view]);
+  }, [radios, grid.shown, view, stacked]);
   // SOS radios waiting for a tile come first in the list.
   const overflowList = useMemo(() => [...notShown.filter((radio) => radio.sos), ...notShown.filter((radio) => !radio.sos)], [notShown]);
   const waitingSos = overflowList.filter((radio) => radio.sos).length;
   const trackedIds = useMemo(() => new Set(tracked.map((item) => item.deviceId)), [tracked]);
-  const emptyCells = view === "split" ? grid.cols * grid.rows - shown.length : 0;
+  const emptyCells = view === "split" && !stacked ? grid.cols * grid.rows - shown.length : 0;
 
   return (
     <>
@@ -414,7 +445,7 @@ export function TrackGrid({
       <div className="absolute inset-x-0 bottom-0 top-[var(--ops-chrome)] z-[899] bg-ops-bg" />
       <div ref={wrapperRef} style={{ ...style, paddingTop: padTop }} className="absolute z-[900] flex flex-col gap-2 transition-[padding] duration-200">
         <div className="glass-panel flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md px-3 py-1.5 text-[11px] text-neutral-300">
-          <span className="font-bold text-neutral-100">Tracking {tracked.length} radios</span>
+          <span className="font-bold text-neutral-100">{stacked ? `Tracking ${tracked.length}` : `Tracking ${tracked.length} radios`}</span>
           <Segmented
             value={view}
             onChange={onView}
@@ -423,7 +454,7 @@ export function TrackGrid({
               ["together", "Together", <MapIcon key="t" size={11} />],
             ]}
           />
-          {view === "split" ? (
+          {view === "split" && !stacked ? (
             <>
               <span className="inline-flex items-center gap-1.5">
                 <span className="text-neutral-500">Tiles</span>
@@ -475,10 +506,12 @@ export function TrackGrid({
               ) : null}
             </span>
           ) : null}
-          <span className="ml-auto text-[9px] text-neutral-600">Imagery © Esri</span>
+          {stacked ? <span className="ml-auto" /> : <span className="ml-auto text-[9px] text-neutral-600">Imagery © Esri</span>}
           <button
             onClick={onStopAll}
-            className="rounded-md bg-white/10 px-2.5 py-1 text-[10px] font-bold text-neutral-100 hover:bg-white/15 active:bg-white/20"
+            className={`rounded-md bg-white/10 font-bold text-neutral-100 hover:bg-white/15 active:bg-white/20 ${
+              stacked ? "px-3 py-1.5 text-[11px]" : "px-2.5 py-1 text-[10px]"
+            }`}
           >
             Stop all
           </button>
@@ -494,7 +527,32 @@ export function TrackGrid({
         </div>
 
         {view === "together" ? (
-          <TogetherView radios={radios} radioTracks={radioTracks} trails={trails} onStop={onStop} />
+          <TogetherView radios={radios} radioTracks={radioTracks} trails={trails} onStop={onStop} stacked={stacked} />
+        ) : stacked ? (
+          <div className="scrollbar-thin flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain" style={{ gap: TILE_GAP }}>
+            {shown.map((radio) => (
+              <TrackTile
+                key={radio.uid}
+                stacked
+                radio={radio}
+                radioTracks={radioTracks}
+                trails={trails}
+                maximised={maximised === radio.uid}
+                hidden={Boolean(maximised) && maximised !== radio.uid}
+                onMaximise={() => setMaximised((current) => (current === radio.uid ? null : radio.uid))}
+                onStop={() => onStop(radio.uid)}
+                onPause={() => onPause(radio.uid)}
+                onResume={() => onResume(radio.uid)}
+                onReplay={() => onReplay(radio.uid)}
+              />
+            ))}
+            {!maximised ? (
+              <>
+                <AddTile stacked devices={devices} trackedIds={trackedIds} onTrack={onTrack} />
+                <span className="shrink-0 pb-1 text-center text-[9px] text-neutral-600">Imagery © Esri</span>
+              </>
+            ) : null}
+          </div>
         ) : (
           <div
             ref={areaRef}

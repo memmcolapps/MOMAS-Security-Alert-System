@@ -3,7 +3,7 @@ import { BatteryFull, BatteryLow, BatteryMedium, Crosshair, GripHorizontal, Hist
 import { useCallback, useEffect, useRef, useState } from "react";
 import { reverseGeocode, sendRadioMessage } from "../lib/api";
 import { useLiveRadioSession } from "../lib/live-radio-session";
-import { TalkButton, talkLabel, useTalkSecondsLeft } from "./TalkButton";
+import { TalkButton, isOnAir, talkLabel, useTalkSecondsLeft } from "./TalkButton";
 
 function formatRadioTime(value) {
   if (!value) return "Unknown time";
@@ -293,7 +293,7 @@ export function RadioConsole({ device, location, onShowOnMap, tracking = false, 
                 <TalkButton
                   title="Tap to talk and tap again to stop, or hold and let go. Space works too."
                   className={`flex min-h-20 w-full flex-col items-center justify-center gap-1.5 rounded-lg border text-xs font-black uppercase tracking-wider tabular-nums transition ${
-                    liveRadio.pttState === "granted"
+                    isOnAir(liveRadio)
                       ? "border-red-400 bg-red-500/25 text-red-200 shadow-[0_0_28px_rgba(239,68,68,0.18)]"
                       : "border-green-500/40 bg-green-500/10 text-ops-green hover:bg-green-500/15"
                   }`}

@@ -2,10 +2,19 @@ import { Mic } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLiveRadioSession } from "../lib/live-radio-session";
 
+/**
+ * On air: the network granted the microphone and someone is holding or has
+ * tapped the talk button. Every talk button takes its colour and its words
+ * from this one check, so the two can never disagree.
+ */
+export function isOnAir(radio) {
+  return radio.pttState === "granted" && radio.talk.state !== "idle";
+}
+
 /** Seconds left before an on-air talk stops itself, or null when not on air. */
 export function useTalkSecondsLeft() {
   const radio = useLiveRadioSession();
-  const onAir = radio.talk.state !== "idle" && radio.pttState === "granted";
+  const onAir = isOnAir(radio);
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!onAir) return undefined;
@@ -20,7 +29,7 @@ export function useTalkSecondsLeft() {
 /** What the talk button should say right now. */
 export function talkLabel(radio, secondsLeft, { compact = false } = {}) {
   const { state } = radio.talk;
-  if (radio.pttState === "granted" && state !== "idle") {
+  if (isOnAir(radio)) {
     const left = secondsLeft != null ? ` · ${secondsLeft}s` : "";
     if (compact) return `On air${left}`;
     return state === "latched" ? `On air · tap to stop${left}` : `On air · release to stop${left}`;

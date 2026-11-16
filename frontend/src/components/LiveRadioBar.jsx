@@ -6,7 +6,7 @@ import { getRadioChannels, listDevices, subscribeAlerts } from "../lib/api";
 import { useLiveRadioSession } from "../lib/live-radio-session";
 import { useFollow } from "../lib/follow-session";
 import { useIsNarrow } from "../lib/use-is-narrow";
-import { TalkButton, talkLabel, useTalkSecondsLeft } from "./TalkButton";
+import { TalkButton, isOnAir, talkLabel, useTalkSecondsLeft } from "./TalkButton";
 
 function useRadioChannels() {
   const channelsQuery = useQuery({
@@ -186,7 +186,7 @@ export function LiveRadioBar() {
   const reconnecting = radio.callState === "reconnecting";
   const connected = radio.callState === "connected";
   const canTalk = radio.talk.canTalk && (listening || inCall);
-  const talking = radio.pttState === "granted";
+  const talking = isOnAir(radio);
   // Someone else holds the channel. Cutting in is the dispatcher's priority.
   const otherTalking = Boolean(radio.speaker) && !talking;
 

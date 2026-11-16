@@ -21,6 +21,7 @@ import { OperationsMap, devicePopup, dronePopup, incidentPopup, sosPopup } from 
 import { FloatingRadioCard } from "../components/RadioConsole";
 import { TrackingStrip } from "../components/TrackingStrip";
 import { TrackGrid } from "../components/TrackGrid";
+import { useIsNarrow } from "../lib/use-is-narrow";
 import { RadioFleetPanel } from "../components/RadioFleetPanel";
 import { IncidentPeriod } from "../components/IncidentPeriod";
 import { MapKey } from "../components/MapKey";
@@ -316,6 +317,7 @@ export function OperationsRoute() {
   });
   const trails = trailsQuery.data?.tracks || NO_TRAILS;
   const [trackView, setTrackView] = useState("split");
+  const narrow = useIsNarrow();
   const [tileSize, setTileSize] = usePersistentChoice(
     "momas_ops_tile_size",
     DEFAULT_TILE_SIZE,
@@ -547,10 +549,13 @@ export function OperationsRoute() {
   useEffect(() => {
     if (gridActive && !wasGridRef.current) {
       const positions = tracked.map((item) => fixFromLocation(latestLocationsRef.current.get(item.deviceId))).filter(Boolean);
-      setTrackView(fitsTogether(positions, window.innerWidth - 440, window.innerHeight - 120) ? "together" : "split");
+      // The space the tiles get: the whole width on a phone, less the radio
+      // list and the feed on a desktop.
+      const width = narrow ? window.innerWidth - 16 : window.innerWidth - 440;
+      setTrackView(fitsTogether(positions, width, window.innerHeight - 120) ? "together" : "split");
     }
     wasGridRef.current = gridActive;
-  }, [gridActive, tracked]);
+  }, [gridActive, tracked, narrow]);
   const activeAlerts = useMemo(
     () =>
       allAlerts
@@ -919,12 +924,18 @@ export function OperationsRoute() {
           avoidKey={`${activeAlerts.length}|${sosAlarm.ringing.length}|${sosAlarm.soundState}`}
           // Clear of the fleet list on the left (so radios can still be added)
           // and of the intelligence feed and its handle on the right.
-          style={{
-            top: "calc(var(--ops-chrome) + 0.75rem)",
-            bottom: "0.75rem",
-            left: visibleLayers.devices ? "calc(4rem + 280px + 0.75rem)" : "0.75rem",
-            right: panelOpen ? "calc(380px + 2.5rem)" : "2.5rem",
-          }}
+          // On a phone the radio list is hidden while tiles are up (radios are
+          // added from the end of the tile list), so the tiles take the width.
+          style={
+            narrow
+              ? { top: "calc(var(--ops-chrome) + 0.5rem)", bottom: "0.5rem", left: "0.5rem", right: "0.5rem" }
+              : {
+                  top: "calc(var(--ops-chrome) + 0.75rem)",
+                  bottom: "0.75rem",
+                  left: visibleLayers.devices ? "calc(4rem + 280px + 0.75rem)" : "0.75rem",
+                  right: panelOpen ? "calc(380px + 2.5rem)" : "2.5rem",
+                }
+          }
           tracked={tracked}
           devices={devices}
           sosRadioIds={sosRadioIds}
@@ -999,7 +1010,7 @@ export function OperationsRoute() {
         </section>
       ) : null}
 
-      {visibleLayers.devices ? (
+      {visibleLayers.devices && !(narrow && gridActive) ? (
         <RadioFleetPanel
           devices={mapDevices}
           kind={hasBothKinds ? deviceKind : null}
@@ -1015,7 +1026,7 @@ export function OperationsRoute() {
           onToggle={() => setFleetOpen((value) => !value)}
           header={hasOsint ? <LiveMonitoring stats={stats} total={incidents.length} /> : null}
         />
-      ) : hasOsint ? (
+      ) : hasOsint && !visibleLayers.devices ? (
         <section className="glass-panel absolute left-16 top-[calc(var(--ops-chrome)+0.75rem)] z-[1000] rounded-md px-3 py-2">
           <LiveMonitoring stats={stats} total={incidents.length} />
         </section>
@@ -1042,7 +1053,7 @@ export function OperationsRoute() {
       {hasOsint ? <aside
         className={`glass-panel absolute right-0 top-[var(--ops-chrome)] z-[1000] flex h-[calc(100vh-var(--ops-chrome))] w-[380px] max-w-[calc(100vw-32px)] flex-col border-r-0 transition-transform ${
           panelOpen ? "translate-x-0" : "translate-x-full"
-        }`}
+        } ${narrow && gridActive ? "hidden" : ""}`}
       >
         <div className="border-b border-white/10 p-3.5">
           <div className="mb-2 flex items-center justify-between">
@@ -1158,7 +1169,9 @@ export function OperationsRoute() {
         />
       ) : null}
 
-      {hasOsint ? <button
+      {/* On a phone the tiles take the full width while tracking, and the
+          feed and its handle would sit on top of them. */}
+      {hasOsint && !(narrow && gridActive) ? <button
         className={`glass-panel absolute top-1/2 z-[1001] flex h-12 w-7 -translate-y-1/2 items-center justify-center rounded-l-md text-ops-red transition-[right] ${
           panelOpen ? "right-[380px]" : "right-0"
         }`}

@@ -18,8 +18,7 @@ export function LoginRoute() {
       queryClient.clear();
       setAuthToken(token);
       setActiveOrganizationId(isPlatformStaff(user) ? null : user.memberships?.[0]?.organization_id || null);
-      const orgRole = user.active_membership?.role || user.memberships?.[0]?.role;
-      navigate({ to: user.must_change_password ? "/change-password" : isPlatformStaff(user) ? "/admin/organizations" : ["org_owner", "org_admin", "unit_admin", "admin"].includes(orgRole) ? "/org/admin" : "/" });
+      navigate({ to: user.must_change_password ? "/change-password" : "/" });
     },
   });
 

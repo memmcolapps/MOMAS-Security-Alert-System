@@ -271,7 +271,11 @@ export class PocstarsBridgeClient extends EventEmitter {
         uid: Number(message.uid || 0),
         speaking: Boolean(message.speaking),
       });
-    } else if (message.type === "ptt.state") {
+    } else if (message.type === "ptt.state" && message.state !== "requesting") {
+      // "requesting" is the bridge saying it is asking the network. Passing it
+      // on as "not talking" made the gateway tell the browser "idle" in the
+      // middle of the first tap, which reset the talk button while the
+      // microphone was then granted: red, live, but labelled "Tap to talk".
       this.speaking = message.state === "granted";
       this.emit("mic", {
         speaking: this.speaking,

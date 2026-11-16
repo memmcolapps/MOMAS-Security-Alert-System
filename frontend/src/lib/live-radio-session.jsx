@@ -459,6 +459,13 @@ export function LiveRadioProvider({ children, mayTalk = true }) {
     }
   }, [pttState]);
 
+  // A microphone granted with nobody pressing talk would leave the console
+  // live behind a button that says "Talk". Let it go. After a tap off,
+  // heldRef is already false and the stop is already on its way.
+  useEffect(() => {
+    if (pttState === "granted" && talkState === "idle" && heldRef.current) stopPttRef.current();
+  }, [pttState, talkState]);
+
   // When someone else on the channel stops talking, the squelch closes with
   // the same "kssshh" a handset makes.
   const lastSpeakerRef = useRef(null);
