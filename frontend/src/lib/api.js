@@ -1,6 +1,7 @@
 import { config } from "./app-config";
 import { noteServerReached, noteServerUnreachable } from "./connection";
 import { clearOfflineCache } from "./offline-cache";
+import { deviceInfo, secondsSinceInput, signInLocation } from "./device";
 import { createSharedEventSource } from "./shared-event-source";
 
 const TOKEN_KEY = "momas_auth_token";
@@ -18,6 +19,25 @@ export function setAuthToken(token) {
   }
 }
 
+function userOfToken(token) {
+  try {
+    return token ? JSON.parse(window.atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).sub ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
+// Another tab signed out, or signed in as someone else: this tab must not keep
+// showing (or saving) the previous person's data. A renewed token for the same
+// person changes nothing.
+window.addEventListener("storage", (event) => {
+  if (event.key !== TOKEN_KEY) return;
+  const before = userOfToken(event.oldValue);
+  const after = userOfToken(event.newValue);
+  if (before === after) return;
+  window.location.assign(after ? "/" : "/login");
+});
+
 export function getActiveOrganizationId() {
   return localStorage.getItem(ORG_KEY);
 }
@@ -33,7 +53,7 @@ async function request(path, options = {}) {
     response = await fetch(`${config.apiBase}${path}`, {
       headers: {
         "Content-Type": "application/json",
-        ...(getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {}),
+        ...(getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}`, "X-Last-Input": String(secondsSinceInput()) } : {}),
         ...(getActiveOrganizationId() ? { "X-Organization-Id": getActiveOrganizationId() } : {}),
         ...options.headers,
       },
@@ -65,9 +85,15 @@ async function request(path, options = {}) {
   }
   if (!response.ok) {
     if (response.status === 401) {
+      const wasSignedIn = Boolean(getAuthToken());
       setAuthToken(null);
       clearOfflineCache();
+      // Signed out from elsewhere (a lost phone, an admin, a time limit):
+      // reload onto the sign-in page so nothing already on screen stays there.
+      if (wasSignedIn && window.location.pathname !== "/login") window.location.assign("/login");
     }
+    if (response.status === 423) emitSessionEvent("locked");
+    if (response.status === 403 && body?.error === "pin_required") emitSessionEvent("pin_required");
     // `message` is the operator-facing sentence; `error` is the machine code.
     // Prefer the sentence so raw codes never reach the screen.
     const error = new Error(body?.message || body?.error || response.statusText);
@@ -89,7 +115,7 @@ async function renewSession() {
   if (!getAuthToken()) return;
   lastRenewAt = Date.now();
   try {
-    const result = await request("/api/auth/refresh", { method: "POST" });
+    const result = await request("/api/auth/refresh", { method: "POST", body: JSON.stringify({ device: deviceInfo() }) });
     // Only if nobody signed out or in while the request was out.
     if (result?.token && getAuthToken()) setAuthToken(result.token);
   } catch {
@@ -114,11 +140,113 @@ export function getSystemHealth() {
   return request("/api/health");
 }
 
-export function login(payload) {
+// The lock screen and PIN setup listen here for the server saying this
+// session is locked or needs a PIN.
+const sessionListeners = new Set();
+
+function emitSessionEvent(type) {
+  for (const listener of sessionListeners) listener(type);
+}
+
+export function onSessionEvent(listener) {
+  sessionListeners.add(listener);
+  return () => sessionListeners.delete(listener);
+}
+
+export async function login({ email, password }) {
+  // The device and where it is go with the password: the server checks the
+  // device is allowed and notes the place, to spot an unusual one.
+  const location = await signInLocation().catch(() => null);
   return request("/api/auth/login", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ email, password, device: deviceInfo(), location }),
   });
+}
+
+/** Ends this sign-in on the server too, so it leaves the device list at once. */
+export async function signOut() {
+  const token = getAuthToken();
+  if (token) {
+    await fetch(`${config.apiBase}/api/auth/logout`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      signal: window.AbortSignal.timeout(3000),
+    }).catch(() => {});
+  }
+  setAuthToken(null);
+  clearOfflineCache();
+}
+
+// ── My devices, PIN and panic secrets ──────────────────────────────────────
+
+export function getMySessions() {
+  return request("/api/auth/sessions");
+}
+
+export function endMySession(sessionId) {
+  return request(`/api/auth/sessions/${encodeURIComponent(sessionId)}/end`, { method: "POST" });
+}
+
+export function reportDeviceLost(deviceId) {
+  return request(`/api/auth/devices/${encodeURIComponent(deviceId)}/lost`, { method: "POST" });
+}
+
+export function setAppPin({ password, pin }) {
+  return request("/api/auth/pin", { method: "POST", body: JSON.stringify({ password, pin }) });
+}
+
+export function setPanicSecrets(payload) {
+  return request("/api/auth/panic", { method: "POST", body: JSON.stringify(payload) });
+}
+
+export function unlockApp(pin) {
+  return request("/api/auth/unlock", { method: "POST", body: JSON.stringify({ pin }) });
+}
+
+// ── Sign-in rules and people's devices, for admins ─────────────────────────
+
+export function getOrgSecurity(orgId) {
+  return request(orgPath("/api/org/security", orgId));
+}
+
+export function saveOrgSecurity(policy, orgId) {
+  return request(orgPath("/api/org/security", orgId), { method: "PUT", body: JSON.stringify(policy) });
+}
+
+export function getPlatformSecurity() {
+  return request("/api/platform/staff/security");
+}
+
+export function savePlatformSecurity(policy) {
+  return request("/api/platform/staff/security", { method: "PUT", body: JSON.stringify(policy) });
+}
+
+// One person's devices, reached through their organization or, for platform
+// staff, through the staff console. `scope` is { orgId } or { staff: true }.
+function personPath(scope, userId, rest) {
+  return scope.staff
+    ? `/api/platform/staff/${userId}${rest}`
+    : orgPath(`/api/org/users/${userId}${rest}`, scope.orgId);
+}
+
+export function getPersonSecurity(scope, userId) {
+  return request(personPath(scope, userId, "/security"));
+}
+
+export function endPersonSession(scope, userId, sessionId) {
+  return request(personPath(scope, userId, `/sessions/${encodeURIComponent(sessionId)}/end`), { method: "POST" });
+}
+
+export function signPersonOutEverywhere(scope, userId) {
+  return request(personPath(scope, userId, "/sign-out-everywhere"), { method: "POST" });
+}
+
+export function decidePersonDevice(scope, userId, deviceId, decision) {
+  return request(personPath(scope, userId, `/devices/${deviceId}/${decision}`), { method: "POST" });
+}
+
+export function setPersonPhone(scope, userId, allowed) {
+  return request(personPath(scope, userId, "/phone"), { method: "PUT", body: JSON.stringify({ allowed }) });
 }
 
 export function getMe() {

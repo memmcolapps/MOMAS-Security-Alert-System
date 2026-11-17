@@ -13,6 +13,7 @@ import { actionMessage, describeSyncFailure } from "../pocstars/messages";
 import { ensureDeviceAccess, formUrlencoded, isPlatformAdmin, jsonError, orgScope, statusFromAxios } from "./pocstars-helpers";
 import positionsRouter from "./pocstars-positions";
 import recordingsRouter from "./pocstars-recordings";
+import { closeWhenSessionEnds } from "../security/sessions";
 
 type SseClient = {
   write: (chunk: string) => Promise<void>;
@@ -37,7 +38,7 @@ let lastPocstarsErr: string | null = null;
 let sosPollRunning = false;
 let sosReconcileRunning = false;
 
-function sseResponse(signal: AbortSignal, scope: any) {
+function sseResponse(signal: AbortSignal, sessionId: string | null | undefined, scope: any) {
   const stream = new TransformStream<Uint8Array>();
   const writer = stream.writable.getWriter();
   const client: SseClient = {
@@ -52,8 +53,10 @@ function sseResponse(signal: AbortSignal, scope: any) {
     void client.write(":heartbeat\n\n").catch(() => {});
   }, 25_000);
 
+  const stopWatching = closeWhenSessionEnds(sessionId, () => cleanup());
   const cleanup = () => {
     clearInterval(heartbeat);
+    stopWatching();
     sseClients.delete(client);
     void client.close().catch(() => {});
   };
@@ -668,7 +671,7 @@ router.delete("/devices/:device_id", async (c) => {
   }
 });
 
-router.get("/sos/events", (c) => sseResponse(c.req.raw.signal, orgScope(c)));
+router.get("/sos/events", (c) => sseResponse(c.req.raw.signal, (c as any).get("user")?.session_id, orgScope(c)));
 
 router.get("/sos/seen-ids", async (c) => {
   try {

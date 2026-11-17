@@ -10,6 +10,7 @@ import { scrapeNewsAPI } from "../scrapers/newsapi";
 import { scrapeReliefWeb } from "../scrapers/reliefweb";
 import { scrapeAll } from "../scrapers/rss";
 import { scrapeTelegram } from "../scrapers/telegram";
+import { closeWhenSessionEnds } from "../security/sessions";
 
 type SseClient = {
   write: (chunk: string) => Promise<void>;
@@ -62,7 +63,7 @@ async function incidentReportMarkdown(incident: any) {
   ].filter(Boolean).join("\n");
 }
 
-function sseResponse(signal: AbortSignal, clients: Set<SseClient>, sees: SseClient["sees"]) {
+function sseResponse(signal: AbortSignal, sessionId: string | null | undefined, clients: Set<SseClient>, sees: SseClient["sees"]) {
   const stream = new TransformStream<Uint8Array>();
   const writer = stream.writable.getWriter();
   const client: SseClient = {
@@ -77,8 +78,10 @@ function sseResponse(signal: AbortSignal, clients: Set<SseClient>, sees: SseClie
     void client.write(":heartbeat\n\n").catch(() => {});
   }, 25_000);
 
+  const stopWatching = closeWhenSessionEnds(sessionId, () => cleanup());
   const cleanup = () => {
     clearInterval(heartbeat);
+    stopWatching();
     clients.delete(client);
     void client.close().catch(() => {});
   };
@@ -158,7 +161,7 @@ async function runManualScrape(daysBack: number) {
 router.get("/events", async (c) => {
   const scope = await scopeForUser((c as any).get("user"));
   const states = new Set((scope.allowedStates || []).filter(Boolean));
-  return sseResponse(c.req.raw.signal, sseClients, (row) => scope.allStates || states.has(row?.state));
+  return sseResponse(c.req.raw.signal, (c as any).get("user")?.session_id, sseClients, (row) => scope.allStates || states.has(row?.state));
 });
 
 router.get("/", async (c) => {

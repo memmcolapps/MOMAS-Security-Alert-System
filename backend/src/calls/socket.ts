@@ -104,14 +104,14 @@ export function callsWebSocket(c: Context): WSEvents {
       });
       callHub.connect(conn);
       // A socket outlives the sign-in check that opened it, so a disabled
-      // account is cut off here within a minute.
+      // account or an ended session (a lost phone) is cut off here within 15 s.
       accountCheck = setInterval(async () => {
-        if (await isUserStillActive(identity.userId).catch(() => true)) return;
+        if (await isUserStillActive(identity.userId, user?.session_id).catch(() => true)) return;
         stop();
         try {
           ws.close(4003, "account_disabled");
         } catch {}
-      }, 60_000);
+      }, 15_000);
     },
     onMessage: (event) => {
       if (!conn || typeof event.data !== "string" || event.data.length > MAX_MESSAGE_BYTES) return;

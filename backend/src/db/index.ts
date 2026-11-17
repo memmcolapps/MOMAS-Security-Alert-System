@@ -890,6 +890,69 @@ async function init() {
     console.warn("[DB] Geofence rule migration note:", err.message);
   }
 
+  // Sign-in security for lost or captured phones (security/*.ts).
+  //   user_devices: each browser a person signs in from, keyed by a random id
+  //     the browser keeps (stored hashed). An admin approves or blocks them.
+  //   user_sessions: each sign-in, so one can be ended from anywhere.
+  //   security_policy: the platform's rules (platform_settings) and each
+  //     organization's own, which may only be stricter.
+  //   operational_alerts gains person alarms (panic sign-in, lost phone,
+  //   unusual place); a platform staff member has no organization.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_devices (
+        id              BIGSERIAL PRIMARY KEY,
+        user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        device_key_hash TEXT NOT NULL,
+        label           TEXT,
+        is_phone        BOOLEAN NOT NULL DEFAULT false,
+        status          TEXT NOT NULL DEFAULT 'approved' CHECK (status IN ('pending', 'approved', 'blocked')),
+        first_seen_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_seen_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        decided_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        decided_at      TIMESTAMPTZ,
+        UNIQUE (user_id, device_key_hash)
+      );
+      CREATE TABLE IF NOT EXISTS user_sessions (
+        id             TEXT PRIMARY KEY,
+        user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        device_id      BIGINT REFERENCES user_devices(id) ON DELETE SET NULL,
+        label          TEXT,
+        is_phone       BOOLEAN NOT NULL DEFAULT false,
+        ip             TEXT,
+        lat            DOUBLE PRECISION,
+        lon            DOUBLE PRECISION,
+        duress         BOOLEAN NOT NULL DEFAULT false,
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_seen_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_active_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        locked_at      TIMESTAMPTZ,
+        pin_failures   INTEGER NOT NULL DEFAULT 0,
+        ended_at       TIMESTAMPTZ,
+        end_reason     TEXT,
+        ended_by       INTEGER REFERENCES users(id) ON DELETE SET NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id, ended_at);
+      CREATE TABLE IF NOT EXISTS platform_settings (
+        key        TEXT PRIMARY KEY,
+        value      JSONB NOT NULL,
+        updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      ALTER TABLE organizations ADD COLUMN IF NOT EXISTS security_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_allowed BOOLEAN NOT NULL DEFAULT true;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS app_pin_hash TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS duress_password_hash TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS duress_pin_hash TEXT;
+      ALTER TABLE operational_alerts ALTER COLUMN organization_id DROP NOT NULL;
+      ALTER TABLE operational_alerts DROP CONSTRAINT IF EXISTS operational_alerts_asset_type_check;
+      ALTER TABLE operational_alerts ADD CONSTRAINT operational_alerts_asset_type_check
+        CHECK (asset_type IN ('radio', 'drone', 'user'));
+    `);
+  } catch (err) {
+    console.warn("[DB] Sign-in security migration note:", err.message);
+  }
+
   console.log("[DB] PostgreSQL schema ready");
 
   await bootstrapPlatformAdmin();
@@ -4784,7 +4847,13 @@ async function getUserByEmail(email) {
 }
 
 async function getUserById(id) {
-  const { rows } = await pool.query("SELECT id, email, name, platform_role, must_change_password, status, created_at, sessions_valid_after FROM users WHERE id = $1", [id]);
+  const { rows } = await pool.query(
+    `SELECT id, email, name, platform_role, must_change_password, status, created_at, sessions_valid_after,
+            phone_allowed, app_pin_hash IS NOT NULL AS has_app_pin, duress_password_hash IS NOT NULL AS has_panic_password,
+            duress_pin_hash IS NOT NULL AS has_panic_pin
+       FROM users WHERE id = $1`,
+    [id],
+  );
   return rows[0] ?? null;
 }
 
@@ -5170,8 +5239,15 @@ async function updateUserPassword(userId, password) {
 // membership: the tenancy line runs between the two, and getMembershipsForUser
 // is what every scope check reads.
 
+// Signed-in devices and devices waiting for approval, shown beside each person
+// so an admin can see at a glance whose phone to sign out or approve.
+const USER_SECURITY_COLUMNS = `
+  phone_allowed,
+  (SELECT COUNT(*)::int FROM user_sessions s WHERE s.user_id = users.id AND s.ended_at IS NULL) AS open_sessions,
+  (SELECT COUNT(*)::int FROM user_devices d WHERE d.user_id = users.id AND d.status = 'pending') AS pending_devices`;
+
 const PLATFORM_STAFF_COLUMNS =
-  "id, email, name, platform_role, must_change_password, status, created_at, updated_at";
+  `id, email, name, platform_role, must_change_password, status, created_at, updated_at, ${USER_SECURITY_COLUMNS}`;
 
 async function listPlatformStaff() {
   const { rows } = await pool.query(
@@ -5359,7 +5435,8 @@ async function listOrganizationUsers(organizationId) {
   const { rows } = await pool.query(
     `SELECT u.id, u.email, u.name, u.platform_role, u.status, u.created_at,
             m.role, m.unit_id, m.scope_level,
-            ou.name AS unit_name, ou.type AS unit_type
+            ou.name AS unit_name, ou.type AS unit_type,
+            ${USER_SECURITY_COLUMNS.replaceAll("users.id", "u.id").replace("phone_allowed", "u.phone_allowed")}
        FROM organization_memberships m
        JOIN users u ON u.id = m.user_id
        LEFT JOIN organization_units ou ON ou.id = m.unit_id

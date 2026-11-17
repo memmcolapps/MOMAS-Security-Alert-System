@@ -1,9 +1,8 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, Building2, ChevronDown, FileSearch, History, LogOut, Map, MapPinned, Menu, Plane, Radio, ShieldAlert, ShieldCheck, Siren, UsersRound } from "lucide-react";
+import { Activity, Building2, ChevronDown, FileSearch, History, KeyRound, LogOut, Map, MapPinned, Menu, Plane, Radio, ShieldAlert, ShieldCheck, Siren, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { getActiveOrganizationId, getMe, getPlatformStats, getServerStatus, setActiveOrganizationId, setAuthToken } from "../lib/api";
-import { clearOfflineCache } from "../lib/offline-cache";
+import { getActiveOrganizationId, getMe, getPlatformStats, getServerStatus, setActiveOrganizationId, signOut } from "../lib/api";
 import { PLATFORM_ROLE_LABELS, isPlatformOwner, isPlatformStaff } from "../lib/platform-roles";
 import { MODULES, hasRadioNetwork, moduleSet } from "../lib/modules";
 import { ListenControl } from "./LiveRadioBar";
@@ -62,9 +61,8 @@ export function AppHeader() {
     ...(!isAdmin && canManageOrg ? [{ to: "/org/admin", icon: UsersRound, label: "Admin", active: isActive("/org/admin") }] : []),
   ];
 
-  function logout() {
-    setAuthToken(null);
-    clearOfflineCache();
+  async function logout() {
+    await signOut();
     queryClient.clear();
     navigate({ to: "/login" });
   }
@@ -210,8 +208,17 @@ export function AppHeader() {
                   ))}
                 </div>
               ) : null}
+              <div className="mt-1">
+                <MenuLink
+                  to="/account/security"
+                  icon={KeyRound}
+                  label="My devices & PIN"
+                  active={isActive("/account/security")}
+                  onNavigate={() => setMenuOpen(false)}
+                />
+              </div>
               <button
-                className="mt-1 inline-flex w-full items-center gap-2 rounded px-2 py-2.5 text-[13px] text-neutral-300 hover:bg-white/10 md:py-1.5 md:text-[11px]"
+                className="inline-flex w-full items-center gap-2 rounded px-2 py-2.5 text-[13px] text-neutral-300 hover:bg-white/10 md:py-1.5 md:text-[11px]"
                 onClick={logout}
               >
                 <LogOut size={13} /> Sign out

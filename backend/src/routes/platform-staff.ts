@@ -19,6 +19,9 @@ import {
   requirePlatform,
 } from "../auth";
 import * as db from "../db";
+import { setPhoneAllowed } from "../security/credentials";
+import { getPlatformPolicy, mergePolicies, setPlatformPolicy } from "../security/policy";
+import { endOtherSessions, endSession, listDevices, listPendingDevices, listSessions, setDeviceStatus } from "../security/sessions";
 
 const router = new Hono();
 router.use("*", requirePlatform("admin"));
@@ -85,6 +88,106 @@ router.post("/", async (c) => {
     const next = clientError(error);
     return c.json(next.body, next.status);
   }
+});
+
+// ── Sign-in security ────────────────────────────────────────────────────────
+// The platform's rules for phones and new devices - the loosest any
+// organization may have - and platform staff members' signed-in devices.
+// Registered before the "/:id" routes so "/security" is not taken for an id.
+
+router.get("/security", async (c) => {
+  const [policy, pending] = await Promise.all([getPlatformPolicy(), listPendingDevices({ platformStaff: true })]);
+  return c.json({ policy: mergePolicies(policy), pending });
+});
+
+router.put("/security", async (c) => {
+  const actor = (c as any).get("user");
+  try {
+    const policy = await setPlatformPolicy(await c.req.json().catch(() => ({})), actor.id);
+    await db.createAuditLog({
+      organization_id: null,
+      actor_user_id: actor.id,
+      action: "platform.security.rules.update",
+      target_type: "platform",
+      target_id: null,
+      metadata: policy,
+    });
+    return c.json({ policy: mergePolicies(policy) });
+  } catch (error) {
+    return c.json(jsonError(error), 400);
+  }
+});
+
+async function managedStaff(c: any) {
+  const actor = c.get("user");
+  const userId = Number(c.req.param("id"));
+  if (!Number.isInteger(userId)) return { error: c.json({ error: "Invalid person." }, 400) };
+  if (userId === Number(actor.id)) {
+    return { error: c.json({ error: "Manage your own devices on your Security page." }, 400) };
+  }
+  const user = await db.getUserById(userId);
+  if (!user || user.platform_role === "none") return { error: c.json({ error: "That person is not platform staff." }, 404) };
+  return { userId, user };
+}
+
+async function staffAudit(c: any, userId: number, action: string, metadata: Record<string, unknown> = {}) {
+  await db.createAuditLog({
+    organization_id: null,
+    actor_user_id: c.get("user")?.id ?? null,
+    action: `platform.security.${action}`,
+    target_type: "user",
+    target_id: userId,
+    metadata,
+  });
+}
+
+router.get("/:id/security", async (c) => {
+  const staff = await managedStaff(c);
+  if (staff.error) return staff.error;
+  const [sessions, devices] = await Promise.all([listSessions(staff.userId), listDevices(staff.userId)]);
+  return c.json({ sessions, devices, phone_allowed: staff.user.phone_allowed !== false });
+});
+
+router.post("/:id/sessions/:session_id/end", async (c) => {
+  const staff = await managedStaff(c);
+  if (staff.error) return staff.error;
+  const ended = await endSession(staff.userId, c.req.param("session_id"), "signed out by an admin", (c as any).get("user").id);
+  if (!ended) return c.json({ error: "That sign-in has already ended." }, 404);
+  await staffAudit(c, staff.userId, "session.end");
+  return c.json({ ok: true });
+});
+
+router.post("/:id/sign-out-everywhere", async (c) => {
+  const staff = await managedStaff(c);
+  if (staff.error) return staff.error;
+  const ended = await endOtherSessions(staff.userId, null, "signed out by an admin", (c as any).get("user").id);
+  await staffAudit(c, staff.userId, "session.end_all", { ended });
+  return c.json({ ok: true, ended });
+});
+
+router.post("/:id/devices/:device_id/:decision", async (c) => {
+  const staff = await managedStaff(c);
+  if (staff.error) return staff.error;
+  const decision = c.req.param("decision");
+  const deviceId = Number(c.req.param("device_id"));
+  if (!["approve", "block"].includes(decision) || !Number.isInteger(deviceId)) return c.json({ error: "Unknown action." }, 400);
+  const device = await setDeviceStatus(staff.userId, deviceId, decision === "approve" ? "approved" : "blocked", (c as any).get("user").id);
+  if (!device) return c.json({ error: "That device was not found." }, 404);
+  await staffAudit(c, staff.userId, `device.${decision}`, { device: device.label });
+  return c.json({ device });
+});
+
+router.put("/:id/phone", async (c) => {
+  const staff = await managedStaff(c);
+  if (staff.error) return staff.error;
+  const allowed = Boolean((await c.req.json().catch(() => ({}))).allowed);
+  await setPhoneAllowed(staff.userId, allowed);
+  if (!allowed) {
+    const phones = (await listSessions(staff.userId)).filter((session: any) => session.is_phone);
+    for (const session of phones) await endSession(staff.userId, session.id, "phone sign-in turned off", (c as any).get("user").id);
+  }
+  await staffAudit(c, staff.userId, allowed ? "phone.allow" : "phone.block");
+  return c.json({ ok: true, allowed });
 });
 
 router.put("/:id", async (c) => {

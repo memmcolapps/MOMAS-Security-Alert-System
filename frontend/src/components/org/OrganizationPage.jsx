@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, ChevronRight, ClipboardList, CreditCard, Radio, RadioTower, Shield, UsersRound, Workflow } from "lucide-react";
+import { Building2, ChevronRight, ClipboardList, CreditCard, KeyRound, Radio, RadioTower, Shield, UsersRound, Workflow } from "lucide-react";
 import { useMemo } from "react";
 import { getMe, getOrgAdmin, getOrganizationLicences, listOrgChannels } from "../../lib/api";
 import { isPlatformOperator, isPlatformStaff } from "../../lib/platform-roles";
@@ -9,6 +9,7 @@ import { LicencesTab } from "./LicencesTab";
 import { ActivityTab, PeopleTab, UnitsTab } from "./OrgSections";
 import { PlatformTab } from "./PlatformTab";
 import { RadiosTab } from "./RadiosTab";
+import { SecurityTab } from "./SecurityTab";
 
 const MANAGER_ROLES = ["org_owner", "org_admin", "admin"];
 
@@ -58,6 +59,7 @@ export function OrganizationPage({ orgId = null, tab = "radios", basePath }) {
     { id: "channels", label: "Channels", icon: RadioTower, count: liveChannels.length },
     { id: "units", label: "Units", icon: Workflow, count: units.length },
     { id: "people", label: "People", icon: UsersRound, count: users.length },
+    { id: "security", label: "Security", icon: KeyRound, count: users.reduce((sum, person) => sum + Number(person.pending_devices || 0), 0) || undefined },
     { id: "activity", label: "Activity", icon: ClipboardList },
     ...(platform && orgId ? [
       { id: "licences", label: "Licences", icon: CreditCard },
@@ -140,6 +142,7 @@ export function OrganizationPage({ orgId = null, tab = "radios", basePath }) {
       {current === "channels" ? <ChannelsTab ctx={ctx} channels={channels} devices={devices} units={units} loading={loading || channelsQuery.isLoading} /> : null}
       {current === "units" ? <UnitsTab ctx={ctx} units={units} loading={loading} /> : null}
       {current === "people" ? <PeopleTab ctx={ctx} users={users} units={units} loading={loading} /> : null}
+      {current === "security" ? <SecurityTab ctx={ctx} /> : null}
       {current === "activity" ? <ActivityTab audit={audit} loading={loading} /> : null}
       {current === "licences" ? <LicencesTab orgId={orgId} /> : null}
       {current === "platform" ? <PlatformTab orgId={orgId} devices={devices} /> : null}

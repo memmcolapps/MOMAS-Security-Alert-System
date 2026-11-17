@@ -1,5 +1,5 @@
 import L from "leaflet";
-import { LEVELS, LEVEL_STYLES, geofenceDistance, geofenceTitle, isGeofenceAlarm, levelOf } from "../lib/alarm-levels";
+import { LEVELS, LEVEL_STYLES, geofenceDistance, geofenceTitle, isGeofenceAlarm, isPersonAlarm, levelOf } from "../lib/alarm-levels";
 import { addZoneName, hideZoneNamesWhenFar, zoneColour } from "../lib/zone-colours";
 import "leaflet.heat";
 import "leaflet.markercluster";
@@ -74,9 +74,12 @@ export function sosPopup(alert) {
   return `
     <div>
       <div style="font-size:13px;font-weight:700;color:${isGeofence ? LEVEL_STYLES[levelOf(alert)].dot : "#ff4444"};margin-bottom:5px">${isGeofence ? geofenceTitle(alert) : "SOS Alarm"}</div>
-      <div style="font-size:11px;color:#ccc"><strong>Device:</strong> ${escapeHtml(alert.asset_name || alert.dev_name || alert.device_name || `Device ${alert.device_id}`)}</div>
+      ${isPersonAlarm(alert)
+        ? `<div style="font-size:11px;color:#ccc"><strong>Person:</strong> ${escapeHtml(alert.asset_name || "—")}</div>
+           <div style="font-size:11px;color:#ccc"><strong>Device:</strong> ${escapeHtml(alert.metadata?.device || "—")}</div>`
+        : `<div style="font-size:11px;color:#ccc"><strong>Device:</strong> ${escapeHtml(alert.asset_name || alert.dev_name || alert.device_name || `Device ${alert.device_id}`)}</div>
       <div style="font-size:11px;color:#ccc"><strong>UID:</strong> ${escapeHtml(alert.device_id || "—")}</div>
-      ${isGeofence ? `<div style="font-size:11px;color:#ccc"><strong>Zone:</strong> ${escapeHtml(alert.geofence_name || "—")}</div>` : ""}
+      ${isGeofence ? `<div style="font-size:11px;color:#ccc"><strong>Zone:</strong> ${escapeHtml(alert.geofence_name || "—")}</div>` : ""}`}
       <div style="font-size:11px;color:#ccc"><strong>When:</strong> ${escapeHtml(alert.triggered_at ? new Date(alert.triggered_at).toLocaleString() : "—")}</div>
       <div style="font-size:11px;color:#ccc"><strong>Location:</strong> ${
         Number.isFinite(Number(alert.map_lat)) && Number.isFinite(Number(alert.map_lon))

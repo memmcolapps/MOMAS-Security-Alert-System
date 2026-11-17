@@ -13,6 +13,7 @@ import {
 } from "@tanstack/react-router";
 import { createRoot } from "react-dom/client";
 import { AppHeader } from "./components/AppHeader";
+import { AppLock } from "./components/AppLock";
 import { ConnectionBanner } from "./components/ConnectionBanner";
 import { FollowBar } from "./components/FollowBar";
 import { LiveRadioBar } from "./components/LiveRadioBar";
@@ -23,7 +24,8 @@ import { CallsProvider } from "./lib/console-calls";
 import { CallOverlays, CallStrip } from "./components/calls/CallOverlays";
 import { getActiveOrganizationId, getAuthToken, getMe, keepSessionFresh } from "./lib/api";
 import { noteRestoredAt } from "./lib/connection";
-import { persistQueryCache, restoreQueryCache } from "./lib/offline-cache";
+import { clearOfflineCache, persistQueryCache, restoreQueryCache } from "./lib/offline-cache";
+import { isPhone, trackInput } from "./lib/device";
 import { MODULES, hasRadioNetwork, moduleSet } from "./lib/modules";
 import { PLATFORM_RANK, platformRank } from "./lib/platform-roles";
 import { registerServiceWorker } from "./lib/service-worker";
@@ -48,6 +50,7 @@ const queryClient = new QueryClient({
 });
 
 keepSessionFresh();
+trackInput();
 
 const currentSession = () => ({ token: getAuthToken(), organizationId: getActiveOrganizationId() });
 
@@ -105,6 +108,7 @@ function RootLayout() {
           {showHeader && showRadio ? <FollowBar /> : null}
           {showHeader && showRadio ? <SosAlarmBanner /> : null}
           {showHeader ? <CallOverlays /> : null}
+          <AppLock enabled={showHeader && Boolean(session.token)} />
         </SosAlarmProvider>
       </FollowProvider>
       </CallsProvider>
@@ -265,6 +269,13 @@ const osintRoute = createRoute({
   component: page("OsintRoute"),
 });
 
+const accountSecurityRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/account/security",
+  beforeLoad: requireSession,
+  component: page("AccountSecurityRoute"),
+});
+
 const changePasswordRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/change-password",
@@ -338,6 +349,7 @@ const routeTree = rootRoute.addChildren([
   osintRoute,
   loginRoute,
   changePasswordRoute,
+  accountSecurityRoute,
   adminOrganizationsRoute,
   adminOrganizationDetailRoute,
   adminRadioNetworkRoute,
@@ -351,9 +363,14 @@ const router = createRouter({
   defaultPreload: "intent",
 });
 
-restoreQueryCache(queryClient, currentSession()).then((savedAt) => {
+// A phone is the device most likely to be lost, so it keeps no copy of the
+// console's data between visits; a computer keeps one to open instantly.
+const keepsOfflineCopy = !isPhone();
+if (!keepsOfflineCopy) clearOfflineCache();
+
+restoreQueryCache(queryClient, keepsOfflineCopy ? currentSession() : { token: null }).then((savedAt) => {
   noteRestoredAt(savedAt);
-  persistQueryCache(queryClient, currentSession);
+  if (keepsOfflineCopy) persistQueryCache(queryClient, currentSession);
   createRoot(document.getElementById("root")).render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />

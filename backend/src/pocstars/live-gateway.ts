@@ -808,16 +808,16 @@ export function liveRadioWebSocket(c: Context): WSEvents {
         configured: liveRadioConfigured(),
       });
       // A socket outlives the sign-in check that opened it, so a disabled
-      // account is cut off here within a minute.
+      // account or an ended session (a lost phone) is cut off here within 15 s.
       accountCheck = setInterval(async () => {
-        if (await isUserStillActive(Number(user?.id)).catch(() => true)) return;
+        if (await isUserStillActive(Number(user?.id), user?.session_id).catch(() => true)) return;
         stopAccountCheck();
         if (session) await cleanup(session, "account_disabled");
         session = null;
         try {
           ws.close(4003, "account_disabled");
         } catch {}
-      }, 60_000);
+      }, 15_000);
     },
     onMessage: async (event, ws) => {
       if (typeof event.data !== "string") {

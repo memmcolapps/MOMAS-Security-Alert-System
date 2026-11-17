@@ -7,6 +7,7 @@ import { bus } from "../events";
 import { runWatchlistMatch, sourceText } from "../osint/matcher";
 import { groupIntoEvents } from "../osint/review-queue";
 import { persistIncident } from "../scrapers/ingest";
+import { closeWhenSessionEnds } from "../security/sessions";
 
 const router = new Hono();
 
@@ -128,8 +129,10 @@ router.get("/events", (c) => {
     void client.write(":heartbeat\n\n").catch(() => {});
   }, 25_000);
 
+  const stopWatching = closeWhenSessionEnds(user?.session_id, () => cleanup());
   const cleanup = () => {
     clearInterval(heartbeat);
+    stopWatching();
     alertClients.delete(client);
     void client.close().catch(() => {});
   };

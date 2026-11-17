@@ -11,6 +11,10 @@ import {
 } from "../auth";
 import * as db from "../db";
 import { provisionOnNetwork } from "../pocstars/live-gateway";
+import { setPhoneAllowed } from "../security/credentials";
+import { raisePersonAlarm } from "../security/person-alarms";
+import { getOrgPolicy, getPlatformPolicy, mergePolicies, setOrgPolicy } from "../security/policy";
+import { endOtherSessions, endSession, listDevices, listPendingDevices, listSessions, setDeviceStatus } from "../security/sessions";
 
 const router = new Hono();
 
@@ -524,6 +528,156 @@ router.post("/devices/:device_id/unit", async (c) => {
     metadata: { unit_id: unitId },
   });
   return c.json({ device });
+});
+
+// ── Sign-in security ────────────────────────────────────────────────────────
+// The organization's own rules for phones and new devices (they can only be
+// stricter than the platform's), devices waiting for approval, and each
+// member's signed-in devices, so a lost phone can be signed out from here.
+
+router.get("/security", async (c) => {
+  const organizationId = organizationIdFor(c);
+  if (!organizationId) return c.json({ error: "Select an organization first." }, 400);
+  const [own, platform, pending] = await Promise.all([
+    getOrgPolicy(organizationId),
+    getPlatformPolicy(),
+    listPendingDevices({ organizationId }),
+  ]);
+  // A unit admin approves devices for their own unit's people only.
+  const scopedUnitId = unitScoped(c);
+  const visiblePending = scopedUnitId ? pending.filter((device: any) => Number(device.unit_id) === scopedUnitId) : pending;
+  return c.json({
+    policy: own,
+    platform: mergePolicies(platform),
+    effective: mergePolicies(platform, own),
+    pending: visiblePending,
+    can_edit: isPlatformAdmin(c) || canManageOrganization(membership(c)),
+  });
+});
+
+router.put("/security", async (c) => {
+  const organizationId = organizationIdFor(c);
+  if (!organizationId) return c.json({ error: "Select an organization first." }, 400);
+  if (!isPlatformAdmin(c) && !canManageOrganization(membership(c))) {
+    return c.json({ error: "Only the organization's owner or admins can change these rules." }, 403);
+  }
+  try {
+    const policy = await setOrgPolicy(organizationId, await c.req.json().catch(() => ({})));
+    await db.createAuditLog({
+      organization_id: organizationId,
+      actor_user_id: actor(c),
+      action: "security.rules.update",
+      target_type: "organization",
+      target_id: organizationId,
+      metadata: policy,
+    });
+    return c.json({ policy, effective: mergePolicies(await getPlatformPolicy(), policy) });
+  } catch (error) {
+    return c.json(jsonError(error), 400);
+  }
+});
+
+/**
+ * The member, when the caller may look after their sign-ins: same rules as
+ * changing their role (only people below you, in your unit), and nobody
+ * manages their own devices from here - that is on their own Security page.
+ */
+async function managedMember(c: any) {
+  const organizationId = organizationIdFor(c);
+  const userId = Number(c.req.param("user_id"));
+  if (!Number.isInteger(userId)) return { error: c.json({ error: "Invalid person." }, 400) };
+  const existing = (await db.getMembershipsForUser(userId)).find(
+    (row: any) => Number(row.organization_id) === Number(organizationId),
+  );
+  if (!existing) return { error: c.json({ error: "That person is not a member of this organization." }, 404) };
+  if (!isPlatformAdmin(c)) {
+    const refusal = orgMemberChangeError({ actor: membership(c), actorUserId: actor(c), targetUserId: userId, target: existing });
+    if (refusal) return { error: c.json({ error: refusal.replace("change or remove your own access", "manage your own devices here") }, 403) };
+  }
+  return { organizationId, userId, membership: existing };
+}
+
+async function securityAudit(c: any, organizationId: number, userId: number, action: string, metadata: Record<string, unknown> = {}) {
+  await db.createAuditLog({
+    organization_id: organizationId,
+    actor_user_id: actor(c),
+    action: `security.${action}`,
+    target_type: "user",
+    target_id: userId,
+    metadata,
+  });
+}
+
+router.get("/users/:user_id/security", async (c) => {
+  const member = await managedMember(c);
+  if (member.error) return member.error;
+  const [sessions, devices, user] = await Promise.all([
+    listSessions(member.userId),
+    listDevices(member.userId),
+    db.getUserById(member.userId),
+  ]);
+  return c.json({ sessions, devices, phone_allowed: user?.phone_allowed !== false });
+});
+
+router.post("/users/:user_id/sessions/:session_id/end", async (c) => {
+  const member = await managedMember(c);
+  if (member.error) return member.error;
+  const ended = await endSession(member.userId, c.req.param("session_id"), "signed out by an admin", actor(c));
+  if (!ended) return c.json({ error: "That sign-in has already ended." }, 404);
+  await securityAudit(c, member.organizationId!, member.userId, "session.end");
+  return c.json({ ok: true });
+});
+
+router.post("/users/:user_id/sign-out-everywhere", async (c) => {
+  const member = await managedMember(c);
+  if (member.error) return member.error;
+  const ended = await endOtherSessions(member.userId, null, "signed out by an admin", actor(c));
+  await securityAudit(c, member.organizationId!, member.userId, "session.end_all", { ended });
+  return c.json({ ok: true, ended });
+});
+
+router.post("/users/:user_id/devices/:device_id/:decision", async (c) => {
+  const member = await managedMember(c);
+  if (member.error) return member.error;
+  const decision = c.req.param("decision");
+  const deviceId = Number(c.req.param("device_id"));
+  if (!["approve", "block", "lost"].includes(decision) || !Number.isInteger(deviceId)) {
+    return c.json({ error: "Unknown action." }, 400);
+  }
+  const device = await setDeviceStatus(member.userId, deviceId, decision === "approve" ? "approved" : "blocked", actor(c));
+  if (!device) return c.json({ error: "That device was not found." }, 404);
+  if (decision === "lost") {
+    const user = await db.getUserById(member.userId);
+    const last = (await db.pool.query(
+      "SELECT lat, lon FROM user_sessions WHERE device_id = $1 AND lat IS NOT NULL ORDER BY created_at DESC LIMIT 1",
+      [deviceId],
+    )).rows[0];
+    await raisePersonAlarm({
+      type: "device_lost",
+      user,
+      memberships: [member.membership],
+      lat: last?.lat,
+      lon: last?.lon,
+      detail: { device: device.label, reported_by: (c as any).get("user")?.email },
+    }).catch((error) => console.error("[Security] lost-device alarm failed:", error));
+  }
+  await securityAudit(c, member.organizationId!, member.userId, `device.${decision}`, { device: device.label });
+  return c.json({ device });
+});
+
+router.put("/users/:user_id/phone", async (c) => {
+  const member = await managedMember(c);
+  if (member.error) return member.error;
+  const body = await c.req.json().catch(() => ({}));
+  const allowed = Boolean(body.allowed);
+  await setPhoneAllowed(member.userId, allowed);
+  // Taking a phone away also ends the phone sign-ins already open.
+  if (!allowed) {
+    const phones = (await listSessions(member.userId)).filter((session: any) => session.is_phone);
+    for (const session of phones) await endSession(member.userId, session.id, "phone sign-in turned off", actor(c));
+  }
+  await securityAudit(c, member.organizationId!, member.userId, allowed ? "phone.allow" : "phone.block");
+  return c.json({ ok: true, allowed });
 });
 
 router.get("/audit", async (c) => {

@@ -5,6 +5,7 @@ import * as db from "../db";
 import { bus } from "../events";
 import { allowsDeviceType } from "../modules";
 import * as store from "../geofencing/store";
+import { closeWhenSessionEnds } from "../security/sessions";
 
 type Client = {
   write: (chunk: string) => Promise<void>;
@@ -39,7 +40,9 @@ function normalizeGeofence(alert: any) {
     ...alert,
     source: "geofence",
     alert_key: `geofence:${alert.id}`,
-    alert_type: "geofence_breach",
+    // Zone alarms, and alarms about a person: a panic sign-in, a lost phone,
+    // a sign-in from an unusual place.
+    alert_type: alert.alert_type || "geofence_breach",
     device_id: String(alert.asset_id),
     device_name: alert.asset_name,
     dev_name: alert.asset_name,
@@ -120,8 +123,10 @@ router.get("/events", (c) => {
   clients.add(client);
   void client.write(":ok\n\n");
   const heartbeat = setInterval(() => void client.write(":heartbeat\n\n").catch(() => {}), 25_000);
+  const stopWatching = closeWhenSessionEnds(user?.session_id, () => cleanup());
   const cleanup = () => {
     clearInterval(heartbeat);
+    stopWatching();
     clients.delete(client);
     void client.close().catch(() => {});
   };

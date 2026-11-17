@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   Siren,
   Undo2,
+  UserRound,
   UserRoundCheck,
   Volume2,
   X,
@@ -33,7 +34,7 @@ import {
   startAlarmResponse,
   subscribeAlerts,
 } from "../lib/api";
-import { geofenceDistance, geofenceTitle, isGeofenceAlarm, LEVEL_STYLES, levelOf } from "../lib/alarm-levels";
+import { geofenceDistance, geofenceTitle, isGeofenceAlarm, isPersonAlarm, LEVEL_STYLES, levelOf, personAlarmAdvice } from "../lib/alarm-levels";
 import { isPlatformStaff } from "../lib/platform-roles";
 
 const FILTERS = [
@@ -75,6 +76,7 @@ const LIFECYCLE = {
 };
 
 const ALARM_KINDS = {
+  person: { label: "Sign-in", icon: UserRound, className: "text-red-300" },
   geofence: { label: "Geofence", icon: MapPin, className: "text-sky-300" },
   radio: { label: "Radio SOS", icon: RadioTower, className: "text-red-300" },
 };
@@ -88,13 +90,14 @@ function lifecycle(alert) {
 }
 
 function alarmKind(alert) {
+  if (isPersonAlarm(alert)) return ALARM_KINDS.person;
   return alert?.source === "geofence" ? ALARM_KINDS.geofence : ALARM_KINDS.radio;
 }
 
 /** A platform reference the operator can quote, with no vendor identifier in it. */
 function alarmReference(alert) {
   if (!alert) return "—";
-  const prefix = alert.source === "geofence" ? "GEO" : "RAD";
+  const prefix = isPersonAlarm(alert) ? "PER" : alert.source === "geofence" ? "GEO" : "RAD";
   return `${prefix}-${String(alert.id ?? "").padStart(5, "0")}`;
 }
 
@@ -773,10 +776,25 @@ export function AlarmsRoute() {
               </div>
             ) : null}
 
+            {personAlarmAdvice(selected) ? (
+              <p className={`mt-4 rounded-lg border px-3 py-2 text-[11px] ${LEVEL_STYLES[levelOf(selected)].chip}`}>{personAlarmAdvice(selected)}</p>
+            ) : null}
+
             <section className="mt-5 grid grid-cols-2 gap-2">
-              <Detail label="Device" value={selected.device_id} />
-              <Detail label={selected.source === "geofence" ? "Zone" : "Operator"} value={selected.geofence_name || selected.dev_operator || selected.device_name} />
-              {selected.source === "geofence" ? (
+              {isPersonAlarm(selected) ? (
+                <>
+                  <Detail label="Person" value={selected.asset_name} />
+                  <Detail label="Device" value={selected.metadata?.device || "—"} />
+                </>
+              ) : (
+                <>
+                  <Detail label="Device" value={selected.device_id} />
+                  <Detail label={selected.source === "geofence" ? "Zone" : "Operator"} value={selected.geofence_name || selected.dev_operator || selected.device_name} />
+                </>
+              )}
+              {isPersonAlarm(selected) ? (
+                <Detail label="Level" value={`${LEVEL_STYLES[levelOf(selected)].label} · ${geofenceTitle(selected).toLowerCase()}`} />
+              ) : selected.source === "geofence" ? (
                 <Detail
                   label="Level"
                   value={`${LEVEL_STYLES[levelOf(selected)].label} · ${geofenceTitle(selected).toLowerCase()} · ${geofenceDistance(selected)}`}
@@ -790,7 +808,7 @@ export function AlarmsRoute() {
 
             <section className="mt-3 rounded-lg border border-white/10 bg-white/[0.025] p-3">
               <div className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-2 text-[10px] font-bold text-neutral-400"><MapPin size={13} /> {selected.source === "geofence" ? "Alarm location" : "Where the SOS was pressed"}</span>
+                <span className="flex items-center gap-2 text-[10px] font-bold text-neutral-400"><MapPin size={13} /> {isPersonAlarm(selected) ? geofenceDistance(selected) : selected.source === "geofence" ? "Alarm location" : "Where the SOS was pressed"}</span>
                 {/* The map carries open alarms only, so a resolved one has nothing to focus.
                     A radio SOS opens tracking instead: the person may still be moving. */}
                 {Number(selected.status) < 2 && selected.source !== "geofence" && selected.device_id ? (

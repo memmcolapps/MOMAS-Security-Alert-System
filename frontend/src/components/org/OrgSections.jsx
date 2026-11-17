@@ -1,7 +1,8 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, UserPlus, X } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Plus, Smartphone, Trash2, UserPlus, X } from "lucide-react";
 import { useState } from "react";
-import { addOrgAdminUser, createOrgUnit, deleteOrgUnit, removeOrgAdminUser } from "../../lib/api";
+import { addOrgAdminUser, createOrgUnit, deleteOrgUnit, getOrgSecurity, removeOrgAdminUser } from "../../lib/api";
+import { PersonDevicesPanel } from "../security/PersonDevicesPanel";
 import { NIGERIAN_STATES, ORG_ROLES, orgRoleLabel } from "../../lib/domain";
 import { Empty, Field, List, SkeletonRows, formatDateTime, plural, unitOptionLabel } from "./shared";
 
@@ -132,6 +133,14 @@ const emptyPerson = { email: "", name: "", password: "", role: "operator", unit_
 export function PeopleTab({ ctx, users, units, loading }) {
   const refresh = useOrgRefresh(ctx);
   const [adding, setAdding] = useState(false);
+  const [devicesOf, setDevicesOf] = useState(null);
+  const securityQuery = useQuery({
+    queryKey: ["org-security", ctx.orgId ?? "mine"],
+    queryFn: () => getOrgSecurity(ctx.orgId),
+    enabled: ctx.canManage,
+    staleTime: 60_000,
+  });
+  const phoneMode = securityQuery.data?.effective?.phone_sign_in;
   const [form, setForm] = useState(emptyPerson);
   const addMutation = useMutation({
     mutationFn: () => addOrgAdminUser({
@@ -209,6 +218,25 @@ export function PeopleTab({ ctx, users, units, loading }) {
               <p className="text-[11px] text-neutral-500">{user.email} · {orgRoleLabel(user.role)} · {user.unit_name || "Whole organization"}</p>
             </div>
             {ctx.canManage ? (
+              <div className="ml-auto flex flex-wrap items-center gap-2">
+                {Number(user.pending_devices) ? (
+                  <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[10px] font-bold text-amber-300">
+                    {plural(Number(user.pending_devices), "device")} waiting
+                  </span>
+                ) : null}
+                {phoneMode === "chosen" && user.phone_allowed === false ? (
+                  <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] text-neutral-400">No phone</span>
+                ) : null}
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-md border border-white/10 px-2 py-1 text-[10px] text-neutral-300 hover:border-white/25 hover:text-neutral-100"
+                  onClick={() => setDevicesOf(user)}
+                >
+                  <Smartphone size={11} /> Devices{Number(user.open_sessions) ? ` · ${user.open_sessions}` : ""}
+                </button>
+              </div>
+            ) : null}
+            {ctx.canManage ? (
               <button
                 type="button"
                 className="inline-flex items-center gap-1 rounded-md border border-red-500/20 px-2 py-1 text-[10px] text-red-400/80 hover:border-ops-red hover:text-ops-red"
@@ -224,6 +252,15 @@ export function PeopleTab({ ctx, users, units, loading }) {
         {!loading && !users.length ? <Empty>No people yet.</Empty> : null}
         {removeMutation.error ? <p className="px-4 py-2 text-[11px] text-ops-red">{removeMutation.error.message}</p> : null}
       </List>
+      {devicesOf ? (
+        <PersonDevicesPanel
+          scope={{ orgId: ctx.orgId }}
+          person={devicesOf}
+          phoneMode={phoneMode}
+          onClose={() => setDevicesOf(null)}
+          onChanged={refresh}
+        />
+      ) : null}
     </section>
   );
 }

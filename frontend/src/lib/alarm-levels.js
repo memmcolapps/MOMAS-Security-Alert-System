@@ -32,8 +32,46 @@ export function isNearMiss(alert) {
   return alert?.trigger === "enter" && Number(alert?.distance_outside_m) < 0;
 }
 
+// Alarms about a person rather than a radio, raised by sign-in security.
+// They ride the zone-alarm path (source "geofence"), so each function below
+// answers for them first.
+export const PERSON_ALARMS = {
+  duress: {
+    title: "Panic sign-in",
+    action: "signed in with their panic password",
+    where: "Where the phone was",
+    advice: "Silent alarm. The phone shows a normal-looking screen with nothing on it. Do not call or message that phone; follow your duress procedure.",
+  },
+  device_lost: {
+    title: "Phone reported lost",
+    action: "reported their phone lost",
+    where: "Where it last signed in",
+    advice: "The phone has been signed out and blocked. It cannot sign in again until an admin unblocks it.",
+  },
+  unusual_sign_in: {
+    title: "Sign-in from an unusual place",
+    action: "signed in from an unusual place",
+    where: "Where the sign-in came from",
+    advice: "More than 50 km from anywhere this person has signed in before. Check it was them; if not, sign the device out from their organization's People page.",
+  },
+};
+
+export function isPersonAlarm(alert) {
+  return alert?.asset_type === "user";
+}
+
+function personAlarm(alert) {
+  return PERSON_ALARMS[alert?.alert_type] || { title: "Sign-in alarm", action: "raised a sign-in alarm", where: "Location", advice: "" };
+}
+
+/** What to do about a person alarm, or "" for any other alarm. */
+export function personAlarmAdvice(alert) {
+  return isPersonAlarm(alert) ? personAlarm(alert).advice : "";
+}
+
 /** "120 m outside", "40 m inside", "300 m from the edge": where the radio was when it alarmed. */
 export function geofenceDistance(alert) {
+  if (isPersonAlarm(alert)) return personAlarm(alert).where;
   const metres = Math.round(Math.abs(Number(alert?.distance_outside_m) || 0));
   if (alert?.trigger !== "enter") return `${metres} m outside`;
   return isNearMiss(alert) ? `${metres} m from the edge` : `${metres} m inside`;
@@ -41,6 +79,7 @@ export function geofenceDistance(alert) {
 
 /** Short heading for a zone alarm. */
 export function geofenceTitle(alert) {
+  if (isPersonAlarm(alert)) return personAlarm(alert).title;
   if (alert?.trigger !== "enter") return "Left zone";
   return isNearMiss(alert) ? "Near no-go zone" : "Entered zone";
 }
@@ -56,6 +95,7 @@ export function levelOf(alert) {
 
 /** "left Kaduna base" / "entered Airport", without the asset name. */
 export function geofenceAction(alert) {
+  if (isPersonAlarm(alert)) return personAlarm(alert).action;
   const zone = alert?.geofence_name || "the zone";
   if (alert?.trigger === "enter") return isNearMiss(alert) ? `is near ${zone}` : `entered ${zone}`;
   return `left ${zone}`;

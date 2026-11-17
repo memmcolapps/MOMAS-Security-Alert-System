@@ -1,10 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Plus, ShieldCheck, Trash2, X } from "lucide-react";
+import { KeyRound, Plus, ShieldCheck, Smartphone, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
+import { Link } from "@tanstack/react-router";
+import { PendingDevices } from "../components/security/PendingDevices";
+import { PersonDevicesPanel } from "../components/security/PersonDevicesPanel";
+import { SecurityRulesForm } from "../components/security/SecurityRulesForm";
 import {
   createPlatformStaff,
+  decidePersonDevice,
+  getPlatformSecurity,
   getPlatformStaff,
   removePlatformStaff,
+  savePlatformSecurity,
   updatePlatformStaffRole,
 } from "../lib/api";
 
@@ -32,6 +39,7 @@ export function PlatformStaffRoute() {
   const [confirmRemove, setConfirmRemove] = useState(null);
 
   const staffQuery = useQuery({ queryKey: ["platform-staff"], queryFn: getPlatformStaff });
+  const [devicesOf, setDevicesOf] = useState(null);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["platform-staff"] });
   const onError = (mutationError) => setError(mutationError?.message || "That did not work.");
@@ -218,6 +226,19 @@ export function PlatformStaffRoute() {
                     </td>
                     <td className="px-4 py-3 text-right">
                       {isMe ? (
+                        <Link to="/account/security" className="mr-3 inline-flex items-center gap-1 text-[11px] text-neutral-400 hover:text-neutral-100">
+                          <Smartphone size={12} /> My devices
+                        </Link>
+                      ) : (
+                        <button
+                          className="mr-3 inline-flex items-center gap-1 text-[11px] text-neutral-400 hover:text-neutral-100"
+                          onClick={() => setDevicesOf(person)}
+                        >
+                          <Smartphone size={12} /> Devices{Number(person.open_sessions) ? ` · ${person.open_sessions}` : ""}
+                          {Number(person.pending_devices) ? <span className="text-amber-300"> · {person.pending_devices} waiting</span> : null}
+                        </button>
+                      )}
+                      {isMe ? (
                         <span className="text-[10px] text-neutral-600">This is you</span>
                       ) : lastOwner ? (
                         <span className="text-[10px] text-neutral-600">Last owner</span>
@@ -261,6 +282,17 @@ export function PlatformStaffRoute() {
         )}
       </section>
 
+      <PlatformSecurity />
+
+      {devicesOf ? (
+        <PersonDevicesPanel
+          scope={{ staff: true }}
+          person={devicesOf}
+          onClose={() => setDevicesOf(null)}
+          onChanged={() => queryClient.invalidateQueries({ queryKey: ["platform-staff"] })}
+        />
+      ) : null}
+
       {/* Platform-level audit rows carry no organization, so they appear in no
           company's audit panel. This is the only place they are readable. */}
       <section className="mt-7">
@@ -291,6 +323,13 @@ export function PlatformStaffRoute() {
 // as a sentence, because this panel is the record somebody consults when asking
 // who changed what.
 const AUDIT_LABELS = {
+  "platform.security.rules.update": "Changed the platform's sign-in rules",
+  "platform.security.session.end": "Signed out a platform user's device",
+  "platform.security.session.end_all": "Signed out a platform user everywhere",
+  "platform.security.device.approve": "Approved a platform user's device",
+  "platform.security.device.block": "Blocked a platform user's device",
+  "platform.security.phone.allow": "Allowed a platform user on phones",
+  "platform.security.phone.block": "Stopped a platform user using phones",
   "platform.staff.create": "Added a platform user",
   "platform.staff.role": "Changed a platform role",
   "platform.staff.remove": "Removed a platform user",
@@ -316,5 +355,55 @@ function Field({ label, children }) {
       <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-neutral-500">{label}</span>
       {children}
     </label>
+  );
+}
+
+// The platform's sign-in rules: the loosest any organization may have, and
+// the only ones platform staff follow. Plus staff devices waiting for approval.
+function PlatformSecurity() {
+  const queryClient = useQueryClient();
+  const query = useQuery({ queryKey: ["platform-security"], queryFn: getPlatformSecurity });
+  const save = useMutation({
+    mutationFn: savePlatformSecurity,
+    onSuccess: (result) => queryClient.setQueryData(["platform-security"], (current) => ({ ...current, policy: result.policy })),
+  });
+  const decide = useMutation({
+    mutationFn: ({ device, decision }) => decidePersonDevice({ staff: true }, device.user_id, device.id, decision),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["platform-security"] });
+      queryClient.invalidateQueries({ queryKey: ["platform-staff"] });
+    },
+  });
+  const pending = query.data?.pending || [];
+
+  return (
+    <section className="mt-7 grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      <div className="rounded-lg border border-white/10 bg-white/[0.02] p-5">
+        <h2 className="text-sm font-bold text-neutral-100">Sign-in rules for everyone</h2>
+        <p className="mb-4 mt-1 text-[12px] text-neutral-500">
+          The loosest rules any company may have; each company can make its own stricter on its Security tab. Platform
+          staff follow these. Platform owners do not need device approval, so the platform can never be locked out.
+        </p>
+        {query.isLoading ? (
+          <div className="space-y-3">{[0, 1, 2].map((row) => <div key={row} className="h-10 animate-pulse rounded bg-white/[0.05]" />)}</div>
+        ) : query.error ? (
+          <p className="text-xs text-ops-red">{query.error.message}</p>
+        ) : (
+          <SecurityRulesForm
+            policy={query.data.policy}
+            canEdit
+            onSave={(policy) => save.mutate(policy)}
+            saving={save.isPending}
+            saved={save.isSuccess}
+            error={save.error?.message}
+          />
+        )}
+      </div>
+      <div className="rounded-lg border border-white/10 bg-white/[0.02] p-5">
+        <h2 className="mb-2 text-sm font-bold text-neutral-100">Staff devices waiting{pending.length ? ` · ${pending.length}` : ""}</h2>
+        <PendingDevices devices={pending} busy={decide.isPending} onDecide={(device, decision) => decide.mutate({ device, decision })} />
+        {decide.error ? <p className="mt-2 text-[11px] text-ops-red">{decide.error.message}</p> : null}
+      </div>
+    </section>
   );
 }

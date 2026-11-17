@@ -4,6 +4,7 @@ import { bus } from "../events";
 import { fetchLastLocations } from "../pocstars/locations";
 import { recordedLocations } from "../pocstars/position-recorder";
 import { ensureDeviceAccess, isPlatformAdmin, orgScope, statusFromAxios } from "./pocstars-helpers";
+import { closeWhenSessionEnds } from "../security/sessions";
 
 // Radio positions: the latest fix per radio, the live point stream, trails,
 // replay and coverage. Mounted inside routes/pocstars.ts, which applies
@@ -142,8 +143,12 @@ router.get("/positions/stream", async (c) => {
     void writer.close().catch(() => {});
   }
   bus.on("radio-points", onPoints);
+  const stopWatching = closeWhenSessionEnds((c as any).get("user")?.session_id, () => cleanup());
   void write(":ok\n\n");
-  c.req.raw.signal.addEventListener("abort", cleanup, { once: true });
+  c.req.raw.signal.addEventListener("abort", () => {
+    stopWatching();
+    cleanup();
+  }, { once: true });
   return new Response(stream.readable, {
     headers: {
       "Content-Type": "text/event-stream",
