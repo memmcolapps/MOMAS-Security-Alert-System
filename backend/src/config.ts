@@ -95,6 +95,11 @@ const envSchema = z.object({
   AUTH_JWT_SECRET: z
     .string({ error: "AUTH_JWT_SECRET is not set. Generate one with: openssl rand -hex 48" })
     .min(16, "AUTH_JWT_SECRET must be at least 16 characters. Generate one with: openssl rand -hex 48"),
+  // The key AUTH_JWT_SECRET replaced. Sign-ins made with it keep working, and
+  // are moved onto the new key when the console renews them, so a key change
+  // signs nobody out. Remove it a week after the change; by then every session
+  // signed with it has run out.
+  AUTH_JWT_SECRET_PREVIOUS: z.string().default(""),
   EPAIL_ADMIN_EMAIL: z.string().email().optional(),
   EPAIL_ADMIN_PASSWORD: z.string().min(8).optional(),
   environment: z.enum(["local", "production"]).default("production"),

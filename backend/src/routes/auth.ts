@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { requireAuth, signToken } from "../auth";
+import { requireAuth, SESSION_MAX_SECONDS, sessionStartedAt, signToken } from "../auth";
 import * as db from "../db";
 import { loginGuard } from "../login-guard";
 import { clientIp, count, securityEvent } from "../metrics";
@@ -54,6 +54,19 @@ router.post("/login", async (c) => {
     platform_role: user.platform_role,
   });
   return c.json({ token, user: safeUser });
+});
+
+// The console calls this while it is open, to swap its session for a fresh
+// 12-hour one. The sign-in time carries over, so renewing never stretches a
+// session past 7 days from the password being typed.
+router.post("/refresh", requireAuth, async (c) => {
+  const user = (c as any).get("user");
+  const startedAt = sessionStartedAt(c);
+  if (!startedAt || Math.floor(Date.now() / 1000) - startedAt >= SESSION_MAX_SECONDS) {
+    return c.json({ error: "Please sign in again." }, 401);
+  }
+  const token = signToken({ sub: user.id, email: user.email, platform_role: user.platform_role, auth_time: startedAt });
+  return c.json({ token });
 });
 
 router.get("/me", requireAuth, async (c) => {

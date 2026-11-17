@@ -21,7 +21,7 @@ import { FollowProvider } from "./lib/follow-session";
 import { LiveRadioProvider } from "./lib/live-radio-session";
 import { CallsProvider } from "./lib/console-calls";
 import { CallOverlays, CallStrip } from "./components/calls/CallOverlays";
-import { getActiveOrganizationId, getAuthToken, getMe } from "./lib/api";
+import { getActiveOrganizationId, getAuthToken, getMe, keepSessionFresh } from "./lib/api";
 import { noteRestoredAt } from "./lib/connection";
 import { persistQueryCache, restoreQueryCache } from "./lib/offline-cache";
 import { MODULES, hasRadioNetwork, moduleSet } from "./lib/modules";
@@ -46,6 +46,8 @@ const queryClient = new QueryClient({
     mutations: { networkMode: "always" },
   },
 });
+
+keepSessionFresh();
 
 const currentSession = () => ({ token: getAuthToken(), organizationId: getActiveOrganizationId() });
 

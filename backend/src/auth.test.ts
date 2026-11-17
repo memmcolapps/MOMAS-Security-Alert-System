@@ -15,8 +15,12 @@ mock.module("./db", () => ({
   getMembershipsForUser: async () => [],
 }));
 
+const { env } = await import("./config");
 const {
   signToken,
+  verifyToken,
+  SESSION_TTL_SECONDS,
+  SESSION_MAX_SECONDS,
   platformRank,
   isPlatformStaff,
   isPlatformOperator,
@@ -187,6 +191,43 @@ describe("requirePlatform", () => {
       });
       expect(reached).toBe(false);
       expect(result().status).toBe(401);
+    }
+  });
+});
+
+describe("session keys and length", () => {
+  const now = () => Math.floor(Date.now() / 1000);
+
+  test("a sign-in lasts 12 hours", () => {
+    const payload = verifyToken(signToken({ sub: 1, email: "a@example.test", platform_role: "none" }))!;
+    expect(payload.exp - payload.iat!).toBe(SESSION_TTL_SECONDS);
+    expect(SESSION_TTL_SECONDS).toBe(12 * 60 * 60);
+  });
+
+  test("renewing never stretches a session past 7 days from sign-in", () => {
+    const signedIn = now() - SESSION_MAX_SECONDS + 60;
+    const renewed = verifyToken(signToken({ sub: 1, email: "a@example.test", platform_role: "none", auth_time: signedIn }))!;
+    expect(renewed.auth_time).toBe(signedIn);
+    expect(renewed.exp).toBe(signedIn + SESSION_MAX_SECONDS);
+    const tooOld = signToken({ sub: 1, email: "a@example.test", platform_role: "none", auth_time: now() - SESSION_MAX_SECONDS - 1 });
+    expect(verifyToken(tooOld)).toBeNull();
+  });
+
+  test("after a key change, old sign-ins still work and unknown keys do not", () => {
+    const original = { current: env.AUTH_JWT_SECRET, previous: env.AUTH_JWT_SECRET_PREVIOUS };
+    try {
+      const oldToken = signToken({ sub: 1, email: "a@example.test", platform_role: "none" });
+      env.AUTH_JWT_SECRET = "a-brand-new-key-that-is-long-enough-000";
+      env.AUTH_JWT_SECRET_PREVIOUS = "";
+      expect(verifyToken(oldToken)).toBeNull();
+      env.AUTH_JWT_SECRET_PREVIOUS = original.current;
+      expect(verifyToken(oldToken)?.sub).toBe(1);
+      const newToken = signToken({ sub: 2, email: "b@example.test", platform_role: "none" });
+      env.AUTH_JWT_SECRET_PREVIOUS = "";
+      expect(verifyToken(newToken)?.sub).toBe(2);
+    } finally {
+      env.AUTH_JWT_SECRET = original.current;
+      env.AUTH_JWT_SECRET_PREVIOUS = original.previous;
     }
   });
 });

@@ -79,6 +79,37 @@ async function request(path, options = {}) {
   return body;
 }
 
+// A sign-in lasts 12 hours. While the console is open it swaps its session for
+// a fresh one every half hour, so nobody is signed out mid-shift; a copied
+// token dies within 12 hours of the console that held it closing.
+const SESSION_RENEW_MS = 30 * 60 * 1000;
+let lastRenewAt = Date.now();
+
+async function renewSession() {
+  if (!getAuthToken()) return;
+  lastRenewAt = Date.now();
+  try {
+    const result = await request("/api/auth/refresh", { method: "POST" });
+    // Only if nobody signed out or in while the request was out.
+    if (result?.token && getAuthToken()) setAuthToken(result.token);
+  } catch {
+    // Offline: try again on the next tick. A 401 has already signed us out.
+  }
+}
+
+export function keepSessionFresh() {
+  const timer = window.setInterval(renewSession, SESSION_RENEW_MS);
+  // A laptop waking from sleep renews at once rather than waiting for the timer.
+  const onVisible = () => {
+    if (window.document.visibilityState === "visible" && Date.now() - lastRenewAt > SESSION_RENEW_MS) renewSession();
+  };
+  window.document.addEventListener("visibilitychange", onVisible);
+  return () => {
+    window.clearInterval(timer);
+    window.document.removeEventListener("visibilitychange", onVisible);
+  };
+}
+
 export function getSystemHealth() {
   return request("/api/health");
 }

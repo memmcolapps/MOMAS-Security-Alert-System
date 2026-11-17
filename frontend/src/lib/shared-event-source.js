@@ -5,7 +5,8 @@
 //
 // The connection opens with the first subscriber and closes with the last.
 // If the stream's URL has changed by the time someone subscribes (a new
-// sign-in or organisation), it is reopened on the new URL for everyone.
+// sign-in or organisation), or when the connection drops (a renewed
+// session), it is reopened on the new URL for everyone.
 
 export function createSharedEventSource({ getUrl, events, makeSource = (url) => new window.EventSource(url) }) {
   const subscribers = new Set();
@@ -47,6 +48,14 @@ export function createSharedEventSource({ getUrl, events, makeSource = (url) => 
       if (source !== current) return;
       connected = false;
       each("onError", event);
+      // The browser retries on the URL it opened with, whose session may have
+      // been renewed (and the old one run out) since. Reconnect on the
+      // current one instead.
+      const nextUrl = getUrl();
+      if (subscribers.size && nextUrl !== url) {
+        current.close();
+        open(nextUrl);
+      }
     });
     for (const name of events) {
       current.addEventListener(name, (event) => {

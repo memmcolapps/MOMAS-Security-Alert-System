@@ -46,20 +46,34 @@ export function useRadioTracks(enabled = true) {
         .then((result) => !cancelled && ingest(result.points, false))
         .catch(() => {});
 
-    const source = new window.EventSource(radioPointsStreamUrl());
-    source.onopen = () => {
-      setLive(true);
-      backfill();
+    let source = null;
+    const connect = () => {
+      const url = radioPointsStreamUrl();
+      const current = new window.EventSource(url);
+      source = current;
+      current.onopen = () => {
+        setLive(true);
+        backfill();
+      };
+      // The browser retries on its own; until it gets back, the page polls
+      // fast. It retries on the URL it opened with, so if the session has been
+      // renewed since, reconnect with the new one.
+      current.onerror = () => {
+        setLive(false);
+        if (!cancelled && radioPointsStreamUrl() !== url) {
+          current.close();
+          connect();
+        }
+      };
+      current.addEventListener("points", (event) => {
+        try {
+          ingest(JSON.parse(event.data), true);
+        } catch {
+          // A malformed batch is skipped; the next one carries on.
+        }
+      });
     };
-    // The browser retries on its own; until it gets back, the page polls fast.
-    source.onerror = () => setLive(false);
-    source.addEventListener("points", (event) => {
-      try {
-        ingest(JSON.parse(event.data), true);
-      } catch {
-        // A malformed batch is skipped; the next one carries on.
-      }
-    });
+    connect();
     const sweep = window.setInterval(() => {
       const cutoff = Date.now() - FORGET_MS;
       for (const [uid, track] of tracks) {
@@ -70,7 +84,7 @@ export function useRadioTracks(enabled = true) {
 
     return () => {
       cancelled = true;
-      source.close();
+      source?.close();
       window.clearInterval(sweep);
       tracks.clear();
       setLive(false);

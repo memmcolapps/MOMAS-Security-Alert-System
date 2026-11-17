@@ -10,7 +10,17 @@ type TokenPayload = {
   platform_role: string;
   exp: number;
   iat?: number;
+  // When the person typed their password. Renewing a session keeps it, so a
+  // session can be renewed for at most SESSION_MAX_SECONDS after sign-in.
+  auth_time?: number;
 };
+
+// A session lasts 12 hours. The console renews it while it is open, so a
+// dispatcher is not signed out mid-shift, but a copied token stops working
+// within 12 hours of the console that held it closing. No session outlives
+// 7 days from the password being typed.
+const SESSION_TTL_SECONDS = 12 * 60 * 60;
+const SESSION_MAX_SECONDS = 7 * 24 * 60 * 60;
 
 const base64url = (value: Buffer | string) =>
   Buffer.from(value)
@@ -19,21 +29,35 @@ const base64url = (value: Buffer | string) =>
     .replace(/\+/g, "-")
     .replace(/\//g, "_");
 
-function signToken(payload: Omit<TokenPayload, "exp" | "iat">, ttlSeconds = 7 * 24 * 60 * 60) {
+const sign = (data: string, secret: string) =>
+  base64url(crypto.createHmac("sha256", secret).update(data).digest());
+
+function signToken(payload: Omit<TokenPayload, "exp" | "iat">, ttlSeconds = SESSION_TTL_SECONDS) {
   const header = { alg: "HS256", typ: "JWT" };
   const issuedAt = Math.floor(Date.now() / 1000);
+  const authTime = payload.auth_time ?? issuedAt;
   const body: TokenPayload = {
     ...payload,
+    auth_time: authTime,
     iat: issuedAt,
-    exp: issuedAt + ttlSeconds,
+    // Never past the hard cap, however often the session is renewed.
+    exp: Math.min(issuedAt + ttlSeconds, authTime + SESSION_MAX_SECONDS),
   };
   const encodedHeader = base64url(JSON.stringify(header));
   const encodedBody = base64url(JSON.stringify(body));
-  const signature = crypto
-    .createHmac("sha256", env.AUTH_JWT_SECRET)
-    .update(`${encodedHeader}.${encodedBody}`)
-    .digest();
-  return `${encodedHeader}.${encodedBody}.${base64url(signature)}`;
+  return `${encodedHeader}.${encodedBody}.${sign(`${encodedHeader}.${encodedBody}`, env.AUTH_JWT_SECRET)}`;
+}
+
+function signedByUs(data: string, signature: string) {
+  const given = Buffer.from(signature);
+  return [env.AUTH_JWT_SECRET, env.AUTH_JWT_SECRET_PREVIOUS]
+    .filter(Boolean)
+    .some((secret) => {
+      const expected = Buffer.from(sign(data, secret));
+      // timingSafeEqual throws on a length mismatch, which used to turn a
+      // malformed token into a 500 instead of a refusal.
+      return given.length === expected.length && crypto.timingSafeEqual(given, expected);
+    });
 }
 
 // "expired" is an ordinary session running out. "invalid" is a token this
@@ -44,18 +68,7 @@ function checkToken(token: string): TokenCheck {
   const invalid = { payload: null, reason: "invalid" } as const;
   const [encodedHeader, encodedBody, signature] = token.split(".");
   if (!encodedHeader || !encodedBody || !signature) return invalid;
-  const expected = Buffer.from(
-    base64url(
-      crypto
-        .createHmac("sha256", env.AUTH_JWT_SECRET)
-        .update(`${encodedHeader}.${encodedBody}`)
-        .digest(),
-    ),
-  );
-  const given = Buffer.from(signature);
-  // timingSafeEqual throws on a length mismatch, which used to turn a
-  // malformed token into a 500 instead of a refusal.
-  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return invalid;
+  if (!signedByUs(`${encodedHeader}.${encodedBody}`, signature)) return invalid;
   let payload: TokenPayload;
   try {
     payload = JSON.parse(Buffer.from(encodedBody, "base64url").toString("utf8"));
@@ -68,6 +81,14 @@ function checkToken(token: string): TokenCheck {
 
 function verifyToken(token: string): TokenPayload | null {
   return checkToken(token).payload;
+}
+
+/** When the caller's session began (their sign-in), from the bearer token. */
+function sessionStartedAt(c: Context) {
+  const auth = c.req.header("authorization") || "";
+  const payload = auth.startsWith("Bearer ") ? verifyToken(auth.slice(7)) : null;
+  if (!payload) return null;
+  return payload.auth_time ?? payload.iat ?? null;
 }
 
 // Every authenticated request used to spend two or three sequential database
@@ -441,6 +462,9 @@ async function requireOrgManager(c: Context, next: Next) {
 export {
   signToken,
   verifyToken,
+  sessionStartedAt,
+  SESSION_TTL_SECONDS,
+  SESSION_MAX_SECONDS,
   requireAuth,
   requirePlatform,
   requirePlatformAdmin,

@@ -4,9 +4,11 @@
 // kept (alarms, alarm events, scrape logs) and so reach back months. The rest
 // come from counters added with this page (metrics.ts) and start at zero on
 // the day it was deployed; `counting_since` tells the page which is which.
+import { SESSION_MAX_SECONDS, SESSION_TTL_SECONDS } from "./auth";
 import { getClassifierHealth } from "./classifier";
 import { env } from "./config";
 import { pool } from "./db";
+import { EMAIL_LIMIT } from "./login-guard";
 import { flushMetrics } from "./metrics";
 import { heartbeatPushStatus } from "./pocstars/heartbeat-push";
 import { positionPushStatus } from "./pocstars/position-push";
@@ -69,6 +71,7 @@ function linkLine(
 
 function postureChecks(users: any) {
   const secretLength = env.AUTH_JWT_SECRET.length;
+  const previousSecret = Boolean(env.AUTH_JWT_SECRET_PREVIOUS);
   const bridgeOn = Boolean(env.POCSTARS_BRIDGE_URL);
   const plainRadioLinks = [env.POCSTARS_SOS_BASE, env.POCSTARS_LOC_BASE].some((url) => url.startsWith("http://"));
   const owners = Number(users.owners || 0);
@@ -78,23 +81,25 @@ function postureChecks(users: any) {
     {
       id: "login_limit",
       label: "Limit on sign-in attempts",
-      state: "bad",
-      detail: "There is none. Someone can keep guessing a password for as long as they like.",
+      state: "ok",
+      detail: `After ${EMAIL_LIMIT} wrong passwords in 15 minutes, that email is paused for 15 minutes.`,
     },
     {
       id: "secret",
       label: "Session signing key",
-      state: secretLength >= 32 ? "ok" : "warn",
+      state: secretLength >= 32 && !previousSecret ? "ok" : "warn",
       detail:
-        secretLength >= 32
-          ? `${secretLength} characters.`
-          : `${secretLength} characters. 32 or more is the usual minimum.`,
+        secretLength < 32
+          ? `${secretLength} characters. 32 or more is the usual minimum.`
+          : previousSecret
+            ? `${secretLength} characters. The old key still works so nobody was signed out. Remove AUTH_JWT_SECRET_PREVIOUS a week after the change.`
+            : `${secretLength} characters.`,
     },
     {
       id: "session_length",
       label: "Session length",
-      state: "warn",
-      detail: "A sign-in lasts 7 days. A stolen session can only be cut short by disabling the account.",
+      state: "ok",
+      detail: `A sign-in lasts ${SESSION_TTL_SECONDS / 3600} hours after the console is closed, and never more than ${SESSION_MAX_SECONDS / 86400} days. Changing a password ends every other session.`,
     },
     {
       id: "temp_passwords",

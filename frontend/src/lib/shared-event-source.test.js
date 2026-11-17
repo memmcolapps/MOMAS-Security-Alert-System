@@ -78,3 +78,23 @@ test("a listener that throws does not stop the others", () => {
   made[0].emit("alert_new", "x");
   assert.equal(heard, true);
 });
+
+test("after the session is renewed, a dropped feed reconnects with the new token", () => {
+  // The browser would retry on the old URL, whose token may have run out,
+  // and the alarm feed would stay down.
+  const { made, makeSource } = fakeSources();
+  let url = "/a?access_token=old";
+  const stream = createSharedEventSource({ getUrl: () => url, events: ["alert_new"], makeSource });
+  const heard = [];
+  stream.subscribe({ onEvent: (_, e) => heard.push(e.data) });
+  made[0].emit("error");
+  assert.equal(made.length, 1, "same token: leave the retry to the browser");
+
+  url = "/a?access_token=new";
+  made[0].emit("error");
+  assert.equal(made.length, 2);
+  assert.equal(made[0].closed, true);
+  assert.equal(made[1].url, "/a?access_token=new");
+  made[1].emit("alert_new", "x");
+  assert.deepEqual(heard, ["x"]);
+});
