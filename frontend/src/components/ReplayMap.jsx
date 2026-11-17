@@ -66,7 +66,7 @@ export function ReplayMap({ fleet, time: t, focusId, trailMode, hiddenIds, showS
     // clear of the side panel needs room past the border, and a clamp would
     // shove Lagos under the panel.
     const map = L.map(nodeRef.current, { zoomControl: false, maxZoom: 21 }).setView(NIGERIA_CENTER, 6);
-    satelliteLayer(L).addTo(map);
+    satelliteLayer(L, {}, { photoDate: "bottomright" }).addTo(map);
     L.tileLayer(IMAGERY_ROAD_TILES.url, IMAGERY_ROAD_TILES.options).addTo(map);
     L.tileLayer(IMAGERY_LABEL_TILES.url, IMAGERY_LABEL_TILES.options).addTo(map);
     L.control.zoom({ position: "topright" }).addTo(map);

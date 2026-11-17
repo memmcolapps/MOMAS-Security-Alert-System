@@ -18,6 +18,8 @@
  * different pane - keep their full colour.
  */
 
+import { PHOTO_DATE_MIN_ZOOM, fetchPhotoDate, formatPhotoDate } from "./imagery-date";
+
 const ESRI_IMAGERY = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer";
 const ESRI_CANVAS = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas";
 const ESRI_REFERENCE = "https://services.arcgisonline.com/arcgis/rest/services/Reference";
@@ -51,7 +53,61 @@ export const DARK_TILES = {
 const SATELLITE_URL = `${ESRI_IMAGERY}/tile/{z}/{y}/{x}?blankTile=false`;
 const SATELLITE_ATTRIBUTION = "Tiles &copy; Esri";
 
-export function satelliteLayer(L, extraOptions = {}) {
+/**
+ * A small label on the map saying when the photo at its centre was taken.
+ * It stays hidden when zoomed out past the point where photos have a date.
+ */
+function photoDateLabel(L, map, position) {
+  const control = L.control({ position });
+  let box = null;
+  control.onAdd = () => {
+    box = L.DomUtil.create("div", "glass-panel rounded-md px-2 py-0.5 text-[11px] text-neutral-200");
+    box.title = "When the satellite photo at the centre of the map was taken";
+    box.style.display = "none";
+    return box;
+  };
+  let timer = null;
+  let asked = 0;
+  const show = (date) => {
+    if (!box) return;
+    box.textContent = date ? `Photo taken ${formatPhotoDate(date)}` : "";
+    box.style.display = date ? "" : "none";
+  };
+  const update = () => {
+    window.clearTimeout(timer);
+    if (map.getZoom() < PHOTO_DATE_MIN_ZOOM) return show(null);
+    timer = window.setTimeout(async () => {
+      const ask = ++asked;
+      const centre = map.getCenter();
+      let date = null;
+      try {
+        date = await fetchPhotoDate(centre.lat, centre.lng, map.getZoom());
+      } catch {
+        // Esri unreachable: say nothing rather than a wrong date.
+      }
+      if (ask === asked) show(date);
+    }, 400);
+  };
+  return {
+    add() {
+      control.addTo(map);
+      map.on("moveend", update);
+      update();
+    },
+    remove() {
+      window.clearTimeout(timer);
+      map.off("moveend", update);
+      control.remove();
+      box = null;
+    },
+  };
+}
+
+/**
+ * `photoDate` is the corner for the photo-date label, or false for none (the
+ * small tracking tiles have no room for it).
+ */
+export function satelliteLayer(L, extraOptions = {}, { photoDate = "bottomleft" } = {}) {
   const base = L.tileLayer(SATELLITE_URL, {
     maxZoom: 21,
     maxNativeZoom: 18,
@@ -73,6 +129,18 @@ export function satelliteLayer(L, extraOptions = {}) {
     base.bringToBack();
     return group;
   };
+  if (photoDate) {
+    let label = null;
+    group.on("add", () => {
+      if (label || !group._map) return;
+      label = photoDateLabel(L, group._map, photoDate);
+      label.add();
+    });
+    group.on("remove", () => {
+      label?.remove();
+      label = null;
+    });
+  }
   return group;
 }
 
